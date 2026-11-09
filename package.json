@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build:wasm": "bash scripts/build-wasm.sh",
-    "build": "npm run build:wasm && tsc --noEmit && vite build",
+    "build:wasm": "node scripts/build-rust-frontend.mjs --simulation",
+    "build:rust-frontend": "node scripts/build-rust-frontend.mjs",
+    "build": "npm run build:wasm && npm run build:rust-frontend && tsc --noEmit && vite build",
     "check": "tsc --noEmit",
     "test:rust": "bash scripts/rust.sh test --workspace",
     "preview": "vite preview --host 127.0.0.1",

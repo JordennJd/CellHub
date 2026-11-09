@@ -1,5 +1,11 @@
 # CellHub
 
+Rust/WebGPU frontend: the main page now runs `crates/frontend` (egui/wgpu).
+The React baseline is available at `/legacy.html`. Run `npm run build` to build
+both WASM modules and web entries; Cargo and matching wasm-bindgen 0.2.130 are
+required. See [migration and benchmark instructions](docs/rust-frontend.md).
+The older architecture notes below describe the React baseline.
+
 Локальная веб-песочница искусственной жизни: React/TypeScript управляет интерфейсом, PixiJS рисует субстрат, Rust nightly + hecs ECS исполняет симуляцию в Web Worker через WebAssembly.
 
 ## Запуск
