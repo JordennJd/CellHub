@@ -47,3 +47,16 @@ test("deleting an archetype remaps incoming references and permits cycles", () =
   assert.equal(g.length, 3);
   assert.deepEqual(parseGenome(serializeGenome(removed)), removed);
 });
+
+test("stress populations stay within the world without clamping or duplicate positions", async () => {
+  const { initialPopulation, POPULATION_LIMIT, WORLD } = await import("../frontend/model.ts");
+  for (const count of [1, 60, 5000, POPULATION_LIMIT]) {
+    const points = initialPopulation(count);
+    assert.equal(points.length, count);
+    assert.equal(new Set(points.map(({x,y}) => `${x}/${y}`)).size, count);
+    assert(points.every(({x,y,mode}) => x > 12 && x < WORLD - 12 && y > 12 && y < WORLD - 12 && mode >= 0 && mode < 6));
+  }
+  assert.equal(initialPopulation(POPULATION_LIMIT + 1).length, POPULATION_LIMIT);
+  assert.equal(initialPopulation(2.9).length, 2);
+  for (const count of [0, -1, NaN, Infinity]) assert.deepEqual(initialPopulation(count), []);
+});

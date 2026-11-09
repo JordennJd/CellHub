@@ -14,6 +14,8 @@ import {
   inflate,
   TYPES,
   STRIDE,
+  POPULATION_LIMIT,
+  initialPopulation,
   type Mode,
   type Frame,
   type Command,
@@ -46,7 +48,14 @@ function App() {
     });
     worker.current = w;
     w.onmessage = ({ data }) => {
-      if (data.type === "ready") setReady(true);
+      if (data.type === "ready") {
+        setReady(true);
+        const q = new URLSearchParams(location.search);
+        const population = initialPopulation(Number(q.get("count")));
+        if(q.has("paused")) { w.postMessage({type:"speed",value:0}); setSpeed(0); }
+        const g=flatten(defaultGenome());
+        for (const cell of population) w.postMessage({ type: "spawn", ...cell, genome: g });
+      }
       if (data.type === "frame") setFrame(data);
       if (data.type === "error") setError(data.message);
       if (data.type === "genome" && data.id === selection.current) {
@@ -337,7 +346,7 @@ function App() {
               <span>ПОПУЛЯЦИЯ</span>
               <b>
                 {stats?.[1] || 0}
-                <small> / 5 000</small>
+                <small> / {POPULATION_LIMIT.toLocaleString("ru-RU")}</small>
               </b>
             </div>
             <button

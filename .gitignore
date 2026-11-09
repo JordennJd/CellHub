@@ -8,4 +8,6 @@
 /dist/
 /target/
 /frontend/wasm/
+/frontend/rust-wasm/
+/rust-smoke.png
 /work/

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Проверяет форматирование Rust-файлов перед коммитом.
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+# Хук нужен только если в коммит попали Rust-файлы.
+if ! git diff --cached --name-only --diff-filter=ACMR -- '*.rs' | grep -q .; then
+  exit 0
+fi
+
+if ! bash "$repo_root/scripts/rust.sh" fmt --all -- --check; then
+  echo "✗ Rust-файлы не отформатированы. Выполните: just fmt (или cargo fmt --all)" >&2
+  exit 1
+fi

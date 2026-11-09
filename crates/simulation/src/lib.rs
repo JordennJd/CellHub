@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 pub const SIZE: f32 = 3072.;
 const GRID: usize = 48;
 const STEP: f32 = 1. / 30.;
-const LIMIT: usize = 5000;
+const LIMIT: usize = 20_000;
 const MAX_MODES: usize = 40;
 const MODE_STRIDE: usize = 12;
 #[derive(Clone, Copy, Debug)]
@@ -184,7 +184,7 @@ impl Simulation {
             return Err(JsError::new("Invalid spawn archetype"));
         }
         if self.world.len() as usize >= LIMIT {
-            return Err(JsError::new("Population limit: 5000"));
+            return Err(JsError::new(&format!("Population limit: {LIMIT}")));
         }
         let id = self.next_id;
         self.next_id += 1;

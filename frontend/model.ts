@@ -1,4 +1,5 @@
 export const WORLD = 3072;
+export const POPULATION_LIMIT = 20_000;
 export const STRIDE = 10;
 export const MAX_MODES = 40;
 export const MODE_STRIDE = 12;
@@ -126,6 +127,19 @@ export function parseGenome(text: string): Mode[] {
       keepAdhesionA: legacy ? false : m.keepAdhesionA, keepAdhesionB: legacy ? false : m.keepAdhesionB };
   });
 }
+// Distribute stress-test cells over the entire world, including at the maximum count.
+export function initialPopulation(count: number): { x: number; y: number; mode: number }[] {
+  const size = Number.isFinite(count) ? Math.min(POPULATION_LIMIT, Math.max(0, Math.floor(count))) : 0;
+  if (size === 0) return [];
+  const columns = Math.ceil(Math.sqrt(size));
+  const rows = Math.ceil(size / columns);
+  return Array.from({ length: size }, (_, i) => ({
+    x: 20 + (i % columns + 0.5) * (WORLD - 40) / columns,
+    y: 20 + (Math.floor(i / columns) + 0.5) * (WORLD - 40) / rows,
+    mode: i % TYPES.length,
+  }));
+}
+
 export type Command =
   | { type: "spawn"; x: number; y: number; mode: number; genome: Float32Array }
   | { type: "edit"; id: number; mode: number; genome: Float32Array }

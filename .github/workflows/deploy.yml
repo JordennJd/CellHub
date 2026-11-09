@@ -1,0 +1,81 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cellhub-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Ручной запуск тоже не должен деплоить произвольную ветку.
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-09
+          targets: wasm32-unknown-unknown
+
+      - name: Кэшировать Rust target и cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+          cache-all-crates: true
+          cache-on-failure: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Кэшировать wasm-bindgen-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen
+          key: wasm-bindgen-cli-0.2.130-${{ runner.os }}
+
+      - name: Установить wasm-bindgen-cli 0.2.130
+        run: |
+          if ! command -v wasm-bindgen >/dev/null || ! wasm-bindgen --version | grep -qx 'wasm-bindgen 0.2.130'; then
+            cargo install wasm-bindgen-cli --version 0.2.130 --locked
+          fi
+
+      - run: npm ci
+
+      - name: Собрать production-сборку
+        run: npm run build
+
+      - name: Настроить SSH
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Задеплоить dist/
+        env:
+          HOST: ${{ vars.DEPLOY_HOST }}
+          PORT: ${{ vars.DEPLOY_PORT }}
+          USER: ${{ vars.DEPLOY_USER }}
+        run: |
+          test -n "$HOST"
+          test -n "$PORT"
+          test -n "$USER"
+          rsync -az --delete --delay-updates --chmod=D755,F644 \
+            -e "ssh -p $PORT -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" \
+            dist/ "$USER@$HOST:/var/lib/cellhub/"
