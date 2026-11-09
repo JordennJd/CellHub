@@ -1,12 +1,13 @@
 use hecs::{Entity, World};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use wasm_bindgen::prelude::*;
 
 pub const SIZE: f32 = 3072.;
 const GRID: usize = 48;
 const STEP: f32 = 1. / 30.;
 const LIMIT: usize = 5000;
-const MODES: usize = 8;
+const MAX_MODES: usize = 40;
+const MODE_STRIDE: usize = 12;
 #[derive(Clone, Copy, Debug)]
 struct Mode {
     kind: u8,
@@ -17,6 +18,10 @@ struct Mode {
     speed: f32,
     angle: f32,
     lifespan: f32,
+    can_divide: bool,
+    bind_children: bool,
+    keep_a: bool,
+    keep_b: bool,
 }
 impl Default for Mode {
     fn default() -> Self {
@@ -29,11 +34,15 @@ impl Default for Mode {
             speed: 12.,
             angle: 0.8,
             lifespan: 240.,
+            can_divide: true,
+            bind_children: false,
+            keep_a: false,
+            keep_b: false,
         }
     }
 }
 #[derive(Clone)]
-struct Genome([Mode; MODES]);
+struct Genome(Vec<Mode>);
 #[derive(Clone, Copy)]
 struct Position {
     x: f32,
@@ -87,20 +96,45 @@ fn map() -> Vec<Tile> {
         .collect()
 }
 fn decode(values: &[f32]) -> Result<Genome, JsError> {
-    if values.len() != MODES * 8 || values.iter().any(|v| !v.is_finite()) {
-        return Err(JsError::new("Genome must contain 64 finite numbers"));
+    // v1 used exactly eight modes of eight numbers. v2 uses 1–40 modes of twelve.
+    let legacy = values.len() == 64;
+    let stride = if legacy { 8 } else { MODE_STRIDE };
+    let count = values.len() / stride;
+    if count == 0
+        || count > MAX_MODES
+        || values.len() % stride != 0
+        || values.iter().any(|v| !v.is_finite())
+    {
+        return Err(JsError::new(
+            "Genome must contain 1–40 archetypes of 12 finite numbers (or 64 legacy numbers)",
+        ));
     }
-    let mut modes = [Mode::default(); MODES];
-    for (m, v) in modes.iter_mut().zip(values.chunks_exact(8)) {
+    let mut modes = vec![Mode::default(); count];
+    for (m, v) in modes.iter_mut().zip(values.chunks_exact(stride)) {
+        if v[0].fract() != 0.
+            || !(0. ..=5.).contains(&v[0])
+            || [v[2], v[3]]
+                .iter()
+                .any(|n| n.fract() != 0. || *n < 0. || *n >= count as f32)
+            || (!legacy && v[8..].iter().any(|n| *n != 0. && *n != 1.))
+        {
+            return Err(JsError::new(
+                "Invalid archetype type, child reference or adhesion flag",
+            ));
+        }
         *m = Mode {
             kind: v[0].clamp(0., 5.) as u8,
             threshold: v[1].clamp(1., 8.),
-            child_a: (v[2] as usize).min(7),
-            child_b: (v[3] as usize).min(7),
+            child_a: v[2] as usize,
+            child_b: v[3] as usize,
             ratio: v[4].clamp(0.2, 0.8),
             speed: v[5].clamp(0., 60.),
             angle: v[6].clamp(-3.14, 3.14),
             lifespan: v[7].clamp(20., 1000.),
+            can_divide: legacy || v[8] == 1.,
+            bind_children: !legacy && v[9] == 1.,
+            keep_a: !legacy && v[10] == 1.,
+            keep_b: !legacy && v[11] == 1.,
         };
     }
     Ok(Genome(modes))
@@ -117,6 +151,8 @@ pub struct Simulation {
     deaths: u32,
     infections: u32,
     frame: Vec<f32>,
+    // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
+    bonds: BTreeSet<(u32, u32)>,
 }
 #[wasm_bindgen]
 impl Simulation {
@@ -133,16 +169,20 @@ impl Simulation {
             deaths: 0,
             infections: 0,
             frame: Vec::new(),
+            bonds: BTreeSet::new(),
         }
     }
     pub fn reset(&mut self) {
         *self = Self::new(self.seed);
     }
     pub fn spawn(&mut self, x: f32, y: f32, mode: usize, values: &[f32]) -> Result<u32, JsError> {
-        if !x.is_finite() || !y.is_finite() || mode >= MODES {
+        if !x.is_finite() || !y.is_finite() {
             return Err(JsError::new("Invalid spawn"));
         }
         let genome = decode(values)?;
+        if mode >= genome.0.len() {
+            return Err(JsError::new("Invalid spawn archetype"));
+        }
         if self.world.len() as usize >= LIMIT {
             return Err(JsError::new("Population limit: 5000"));
         }
@@ -171,7 +211,7 @@ impl Simulation {
     }
     pub fn edit(&mut self, id: u32, mode: usize, values: &[f32]) -> Result<(), JsError> {
         let genome = decode(values)?;
-        if mode >= MODES {
+        if mode >= genome.0.len() {
             return Err(JsError::new("Invalid mode"));
         }
         for (_, (cell, g)) in self.world.query_mut::<(&mut Cell, &mut Genome)>() {
@@ -199,6 +239,10 @@ impl Simulation {
                             m.speed,
                             m.angle,
                             m.lifespan,
+                            m.can_divide as u8 as f32,
+                            m.bind_children as u8 as f32,
+                            m.keep_a as u8 as f32,
+                            m.keep_b as u8 as f32,
                         ]
                     })
                     .collect();
@@ -252,6 +296,9 @@ impl Simulation {
             .flat_map(|t| [t.light, t.radiation, t.food, t.biome])
             .collect()
     }
+    pub fn links(&self) -> Vec<u32> {
+        self.bonds.iter().flat_map(|&(a, b)| [a, b]).collect()
+    }
     pub fn stats(&self) -> Vec<f32> {
         vec![
             self.tick as f32,
@@ -286,11 +333,14 @@ impl Simulation {
         let population = self.world.len() as usize;
         let mut dead = Vec::new();
         let mut children = Vec::new();
+        let mut inheritors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        let mut new_bonds = Vec::new();
+        let bonded: HashSet<_> = self.bonds.iter().flat_map(|&(a, b)| [a, b]).collect();
         let mut buckets: BTreeMap<(i32, i32), Vec<(Entity, Position, u8)>> = BTreeMap::new();
         for &(_, e) in &entities {
             let noise = self.random();
             let mutation_roll = self.random();
-            let mutation_gene = (self.random() * MODES as f32) as usize;
+            let mutation_gene = self.random();
             let (p, c, g) = self
                 .world
                 .query_one_mut::<(&mut Position, &mut Cell, &mut Genome)>(e)
@@ -308,25 +358,50 @@ impl Simulation {
             };
             c.mass += gain - STEP * (if m.kind == 4 { 0.014 } else { 0.025 } + m.speed * 0.0003);
             if mutation_roll < t.radiation * STEP * 0.035 {
-                let target = &mut g.0[mutation_gene.min(7)];
+                let index = ((mutation_gene * g.0.len() as f32) as usize).min(g.0.len() - 1);
+                let target = &mut g.0[index];
                 target.kind = (target.kind + 1) % 6;
                 target.threshold = (target.threshold + (noise - 0.5) * 0.8).clamp(1., 8.);
                 c.mutations += 1;
             }
             c.mass -= t.radiation * STEP * 0.015;
-            p.angle += (noise - 0.5) * 0.35;
-            let speed = if m.kind == 2 { m.speed } else { m.speed * 0.15 };
+            // A bonded flagellum supplies directed propulsion to the organism.
+            // Passive members have drag, but no independent random locomotion.
+            let linked = bonded.contains(&c.id);
+            if !linked {
+                p.angle += (noise - 0.5) * 0.35;
+            }
+            let speed = if m.kind == 2 {
+                m.speed
+            } else if linked {
+                0.
+            } else {
+                m.speed * 0.15
+            };
             p.x = (p.x + p.angle.cos() * speed * STEP).clamp(12., SIZE - 12.);
             p.y = (p.y + p.angle.sin() * speed * STEP).clamp(12., SIZE - 12.);
             if c.mass < 0.18 || c.age > m.lifespan {
                 dead.push(e);
                 continue;
             }
-            if c.mass >= m.threshold && population + children.len() / 2 < LIMIT {
+            if m.can_divide && c.mass >= m.threshold && population + children.len() / 2 < LIMIT {
                 // parent is replaced by two daughters
                 let total = c.mass;
                 let mut a = c.clone();
                 let mut b = c.clone();
+                a.id = self.next_id;
+                b.id = self.next_id + 1;
+                self.next_id += 2;
+                let successors = inheritors.entry(c.id).or_default();
+                if m.keep_a {
+                    successors.push(a.id);
+                }
+                if m.keep_b {
+                    successors.push(b.id);
+                }
+                if m.bind_children {
+                    new_bonds.push((a.id, b.id));
+                }
                 a.mass = total * m.ratio;
                 b.mass = total * (1. - m.ratio);
                 a.mode = m.child_a;
@@ -336,7 +411,7 @@ impl Simulation {
                 a.generation += 1;
                 b.generation += 1;
                 let angle = p.angle + m.angle;
-                let distance = 12.;
+                let distance = (radius(a.mass) + radius(b.mass) + 2.) / 2.;
                 let pa = Position {
                     x: (p.x + angle.cos() * distance).clamp(12., SIZE - 12.),
                     y: (p.y + angle.sin() * distance).clamp(12., SIZE - 12.),
@@ -425,6 +500,8 @@ impl Simulation {
                 .query_one_mut::<(&mut Cell, &mut Genome)>(entity)
                 .unwrap();
             *target = genome;
+            // Infection can replace a long genome with a shorter one.
+            cell.mode = cell.mode.min(target.0.len() - 1);
             cell.mutations += 1;
             cell.cooldown = 3.;
         }
@@ -433,17 +510,259 @@ impl Simulation {
         for e in dead {
             self.world.despawn(e).unwrap();
         }
-        for (p, mut c, g) in children {
-            c.id = self.next_id;
-            self.next_id += 1;
+        for (p, c, g) in children {
             self.world.spawn((p, c, g));
             self.births += 1;
         }
+        let living: HashSet<_> = self
+            .world
+            .query::<&Cell>()
+            .iter()
+            .map(|(_, c)| c.id)
+            .collect();
+        let mut bonds = BTreeSet::new();
+        // Replace both endpoints together, including neighbors dividing on the same tick.
+        for &(a, b) in &self.bonds {
+            let old_a = vec![a];
+            let old_b = vec![b];
+            for &next_a in inheritors.get(&a).unwrap_or(&old_a) {
+                for &next_b in inheritors.get(&b).unwrap_or(&old_b) {
+                    if next_a != next_b && living.contains(&next_a) && living.contains(&next_b) {
+                        bonds.insert((next_a.min(next_b), next_a.max(next_b)));
+                    }
+                }
+            }
+        }
+        bonds.extend(new_bonds);
+        self.bonds = bonds;
+        self.solve_bonds();
     }
+
+    fn solve_bonds(&mut self) {
+        if self.bonds.is_empty() {
+            return;
+        }
+        let mut bodies: Vec<_> = self
+            .world
+            .query::<(&Position, &Cell)>()
+            .iter()
+            .map(|(e, (p, c))| (e, c.id, *p, c.mass))
+            .collect();
+        bodies.sort_by_key(|b| b.1);
+        let indices: BTreeMap<_, _> = bodies.iter().enumerate().map(|(i, b)| (b.1, i)).collect();
+        let edges: Vec<_> = self
+            .bonds
+            .iter()
+            .map(|(a, b)| (indices[a], indices[b]))
+            .collect();
+        // Position constraints distribute propulsion according to mass. Re-evaluate
+        // rest length as cells grow; the two cells remain distinct, touching bodies.
+        for _ in 0..12 {
+            for &(a, b) in &edges {
+                let (left, right) = bodies.split_at_mut(b);
+                let (_, _, pa, ma) = &mut left[a];
+                let (_, _, pb, mb) = &mut right[0];
+                let dx = pb.x - pa.x;
+                let dy = pb.y - pa.y;
+                let distance = dx.hypot(dy);
+                let (nx, ny) = if distance > 0.0001 {
+                    (dx / distance, dy / distance)
+                } else {
+                    (1., 0.)
+                };
+                let error = distance - (radius(*ma) + radius(*mb) + 2.);
+                let share_a = *mb / (*ma + *mb);
+                let share_b = 1. - share_a;
+                pa.x = (pa.x + nx * error * share_a).clamp(12., SIZE - 12.);
+                pa.y = (pa.y + ny * error * share_a).clamp(12., SIZE - 12.);
+                pb.x = (pb.x - nx * error * share_b).clamp(12., SIZE - 12.);
+                pb.y = (pb.y - ny * error * share_b).clamp(12., SIZE - 12.);
+            }
+        }
+        for (entity, _, position, _) in bodies {
+            *self.world.get::<&mut Position>(entity).unwrap() = position;
+        }
+    }
+}
+
+fn radius(mass: f32) -> f32 {
+    5. + mass.sqrt() * 5.
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn modern_genes(count: usize) -> Vec<f32> {
+        (0..count)
+            .flat_map(|i| {
+                [
+                    0., 8., i as f32, i as f32, 0.5, 0., 0., 1000., 1., 0., 0., 0.,
+                ]
+            })
+            .collect()
+    }
+    fn entity(s: &Simulation, id: u32) -> Entity {
+        s.world
+            .query::<&Cell>()
+            .iter()
+            .find(|(_, c)| c.id == id)
+            .unwrap()
+            .0
+    }
+    fn quiet_world() -> Simulation {
+        let mut s = Simulation::new(42);
+        for tile in &mut s.tiles {
+            tile.radiation = 0.;
+        }
+        s
+    }
+    #[test]
+    fn all_three_adhesion_flags_are_independent() {
+        for bits in 0..8 {
+            let mut s = quiet_world();
+            let mut g = modern_genes(1);
+            g[1] = 1.;
+            g[9] = (bits & 1 != 0) as u8 as f32;
+            g[10] = (bits & 2 != 0) as u8 as f32;
+            g[11] = (bits & 4 != 0) as u8 as f32;
+            let parent = s.spawn(500., 500., 0, &g).unwrap();
+            let neighbor = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
+            s.bonds.insert((parent, neighbor));
+            s.advance(1);
+            let mut expected = BTreeSet::new();
+            if bits & 1 != 0 {
+                expected.insert((3, 4));
+            }
+            if bits & 2 != 0 {
+                expected.insert((neighbor, 3));
+            }
+            if bits & 4 != 0 {
+                expected.insert((neighbor, 4));
+            }
+            assert_eq!(s.bonds, expected, "flags={bits}");
+            assert_eq!(s.world.len(), 3);
+        }
+    }
+    #[test]
+    fn adjacent_parents_can_divide_on_the_same_tick() {
+        let mut s = quiet_world();
+        let mut g = modern_genes(1);
+        g[1] = 1.;
+        g[10] = 1.;
+        let a = s.spawn(500., 500., 0, &g).unwrap();
+        let b = s.spawn(522., 500., 0, &g).unwrap();
+        s.bonds.insert((a, b));
+        s.advance(1);
+        assert_eq!(s.links(), vec![3, 5]);
+        assert_eq!(s.world.len(), 4);
+    }
+    #[test]
+    fn organism_keeps_flagellum_and_releases_photo_offspring() {
+        let mut s = quiet_world();
+        let mut g = modern_genes(3);
+        g[1] = 1.;
+        g[2] = 1.;
+        g[3] = 2.;
+        g[9] = 1.;
+        g[12] = 2.;
+        g[12 + 8] = 0.;
+        g[24] = 1.;
+        g[24 + 1] = 2.4;
+        g[24 + 2] = 2.;
+        g[24 + 3] = 0.;
+        g[24 + 10] = 1.;
+        s.spawn(500., 500., 0, &g).unwrap();
+        s.advance(1);
+        assert_eq!(s.links(), vec![2, 3]);
+        let flagellum = entity(&s, 2);
+        let phagocyte = entity(&s, 3);
+        s.world.get::<&mut Cell>(flagellum).unwrap().mass = 10.;
+        s.world.get::<&mut Cell>(phagocyte).unwrap().mass = 3.;
+        s.advance(1);
+        assert_eq!(s.links(), vec![2, 4]);
+        assert_eq!(s.cell_mode(2), 1); // non-dividing flagellum survives above its threshold
+        assert_eq!(s.cell_mode(4), 2); // continuing phagocyte inherits the bond
+        assert_eq!(s.cell_mode(5), 0); // detached photo offspring
+        assert_eq!(s.world.len(), 3);
+        assert_eq!(s.deaths, 0);
+    }
+    #[test]
+    fn flagellum_pulls_a_passive_cell_and_bonds_survive_growth() {
+        let mut s = quiet_world();
+        let mut g = modern_genes(1);
+        g[8] = 0.;
+        let passive = s.spawn(522., 500., 0, &g).unwrap();
+        g[0] = 2.;
+        g[5] = 30.;
+        let flagellum = s.spawn(500., 500., 0, &g).unwrap();
+        let flag_entity = entity(&s, flagellum);
+        s.world.get::<&mut Position>(flag_entity).unwrap().angle = 0.;
+        s.bonds.insert((passive, flagellum));
+        s.advance(30);
+        let rows = s.snapshot();
+        assert!(rows[1] > 527., "passive cell must be pulled by propulsion");
+        let distance = (rows[1] - rows[11]).hypot(rows[2] - rows[12]);
+        assert!((distance - rows[3] - rows[13] - 2.).abs() < 0.01);
+        assert_eq!(s.links(), vec![passive, flagellum]);
+    }
+    #[test]
+    fn death_and_reset_remove_bonds() {
+        let mut s = quiet_world();
+        let a = s.spawn(500., 500., 0, &modern_genes(1)).unwrap();
+        let b = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
+        s.bonds.insert((a, b));
+        let e = entity(&s, a);
+        s.world.get::<&mut Cell>(e).unwrap().age = 1001.;
+        s.advance(1);
+        assert!(s.links().is_empty());
+        assert_eq!(s.world.len(), 1);
+        let c = s.spawn(544., 500., 0, &modern_genes(1)).unwrap();
+        s.bonds.insert((b, c));
+        s.reset();
+        assert!(s.links().is_empty());
+    }
+    #[test]
+    fn forty_archetypes_and_shorter_infection_are_supported() {
+        let mut s = quiet_world();
+        let g = modern_genes(40);
+        let recipient = s.spawn(500., 500., 39, &g).unwrap();
+        assert_eq!(s.genome(recipient).len(), 40 * MODE_STRIDE);
+        let mut donor = modern_genes(1);
+        donor[0] = 3.;
+        s.spawn(505., 500., 0, &donor).unwrap();
+        s.advance(2);
+        assert_eq!(s.genome(recipient).len(), MODE_STRIDE);
+        assert_eq!(s.cell_mode(recipient), 0);
+    }
+    #[test]
+    fn bonded_chain_at_boundary_is_finite_and_deterministic() {
+        let run = || {
+            let mut s = quiet_world();
+            let mut g = modern_genes(1);
+            g[8] = 0.;
+            g[0] = 2.;
+            g[5] = 60.;
+            let mut previous = None;
+            for i in 0..24 {
+                let id = s.spawn(12. + 22. * i as f32, 12., 0, &g).unwrap();
+                if let Some(prev) = previous {
+                    s.bonds.insert((prev, id));
+                }
+                previous = Some(id);
+            }
+            for _ in 0..3 {
+                s.advance(120);
+            }
+            let snapshot = s.snapshot();
+            assert!(snapshot.iter().all(|v| v.is_finite()));
+            assert_eq!(s.bonds.len(), 23);
+            for row in snapshot.chunks_exact(10) {
+                assert!((12. ..=SIZE - 12.).contains(&row[1]));
+                assert!((12. ..=SIZE - 12.).contains(&row[2]));
+            }
+            (snapshot, s.links())
+        };
+        assert_eq!(run(), run());
+    }
     fn genes() -> Vec<f32> {
         [0., 2.4, 0., 0., 0.5, 12., 0.8, 240.].repeat(8)
     }

@@ -46,9 +46,10 @@ export function WorldView(props: Props) {
       const scene = new Container(),
         terrain = new Graphics(),
         dots = new Graphics(),
+        links = new Graphics(),
         cells = new Graphics(),
         labels = new Container();
-      scene.addChild(terrain, dots, labels, cells);
+      scene.addChild(terrain, dots, labels, links, cells);
       app.stage.addChild(scene);
       const camera = { x: WORLD / 2, y: WORLD / 2, zoom: 0.55 };
       reset.current = () => {
@@ -199,6 +200,17 @@ export function WorldView(props: Props) {
             .stroke({ color: 0x7b9889, width: 2 });
           oldLayer = p.layer;
           oldFrame = f;
+        }
+        links.clear();
+        const positions = new Map<number, number>();
+        for (let i = 0; i < f.cells.length; i += STRIDE) positions.set(f.cells[i], i);
+        for (let i = 0; i < f.links.length; i += 2) {
+          const a = positions.get(f.links[i]), b = positions.get(f.links[i + 1]);
+          if (a === undefined || b === undefined) continue;
+          const selected = f.links[i] === p.selected || f.links[i + 1] === p.selected;
+          links.moveTo(f.cells[a + 1], f.cells[a + 2])
+            .lineTo(f.cells[b + 1], f.cells[b + 2])
+            .stroke({ color: selected ? 0xe4f5c5 : 0xadc89d, width: selected ? 3 : 2, alpha: 0.8 });
         }
         cells.clear();
         for (let i = 0; i < f.cells.length; i += STRIDE) {

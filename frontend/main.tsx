@@ -3,6 +3,13 @@ import { createRoot } from "react-dom/client";
 import { WorldView, type ViewState } from "./WorldView";
 import {
   defaultGenome,
+  multicellularGenome,
+  newMode,
+  removeMode,
+  serializeGenome,
+  parseGenome,
+  MAX_MODES,
+  type NumericModeKey,
   flatten,
   inflate,
   TYPES,
@@ -68,7 +75,7 @@ function App() {
         break;
       }
   }
-  function update(key: keyof Mode, value: number) {
+  function update<K extends keyof Mode>(key: K, value: Mode[K]) {
     setGenome((g) =>
       g.map((m, i) => (i === mode ? { ...m, [key]: value } : m)),
     );
@@ -91,7 +98,7 @@ function App() {
   }
   function save() {
     try {
-      localStorage.setItem("cellhub.genome.v1", JSON.stringify(genome));
+      localStorage.setItem("cellhub.genome.v2", serializeGenome(genome));
       setNotice("Геном сохранён в этом браузере.");
     } catch {
       setError("Браузер не разрешил сохранить геном в локальном хранилище.");
@@ -99,51 +106,32 @@ function App() {
   }
   function load() {
     try {
-      const raw = JSON.parse(
-        localStorage.getItem("cellhub.genome.v1") || "null",
-      );
-      const keys = [
-        "kind",
-        "threshold",
-        "childA",
-        "childB",
-        "ratio",
-        "speed",
-        "angle",
-        "lifespan",
-      ];
-      if (
-        !Array.isArray(raw) ||
-        raw.length !== 8 ||
-        raw.some((m) =>
-          keys.some((k) => typeof m[k] !== "number" || !Number.isFinite(m[k])),
-        )
-      )
-        throw new Error();
-      const valid = raw.every(
-        (m) =>
-          Number.isInteger(m.kind) &&
-          m.kind >= 0 &&
-          m.kind < 6 &&
-          [m.childA, m.childB].every(
-            (v: number) => Number.isInteger(v) && v >= 0 && v < 8,
-          ) &&
-          m.threshold >= 1 &&
-          m.threshold <= 8 &&
-          m.ratio >= 0.2 &&
-          m.ratio <= 0.8 &&
-          m.speed >= 0 &&
-          m.speed <= 60 &&
-          Math.abs(m.angle) <= 3.14 &&
-          m.lifespan >= 20 &&
-          m.lifespan <= 1000,
-      );
-      if (!valid) throw new Error();
-      setGenome(raw);
+      const saved = localStorage.getItem("cellhub.genome.v2") ?? localStorage.getItem("cellhub.genome.v1");
+      if (!saved) throw new Error();
+      setGenome(parseGenome(saved));
+      setMode(0);
       setNotice("Сохранённый геном загружен.");
     } catch {
       setError("Сохранённого совместимого генома нет.");
     }
+  }
+  function addArchetype(copy = false) {
+    if (genome.length >= MAX_MODES) return;
+    const index = genome.length;
+    const archetype = copy ? { ...m,
+      childA: m.childA === mode ? index : m.childA,
+      childB: m.childB === mode ? index : m.childB,
+    } : newMode(index);
+    setGenome([...genome, archetype]);
+    setMode(index);
+  }
+  function organismExample() {
+    setGenome(multicellularGenome());
+    setMode(0);
+    setTool("place");
+    selection.current = null;
+    setSelected(null);
+    setNotice("Пример загружен: поместите M1 на светлом участке субстрата.");
   }
   function demo() {
     send({ type: "reset" });
@@ -163,7 +151,7 @@ function App() {
   }
   const range = (
     label: string,
-    key: keyof Mode,
+    key: NumericModeKey,
     min: number,
     max: number,
     step: number,
@@ -388,13 +376,13 @@ function App() {
           {tab === "genome" ? (
             <div className="editor-content">
               <div className="section-label">
-                РЕЖИМ КЛЕТКИ <span>{mode + 1} / 8</span>
+                АРХЕТИП КЛЕТКИ <span>{mode + 1} / {genome.length}</span>
               </div>
               <div className="modes">
                 {genome.map((g, i) => (
                   <button
                     key={i}
-                    aria-label={`Режим ${i + 1}`}
+                    aria-label={`Архетип M${i + 1}`}
                     aria-pressed={i === mode}
                     className={mode === i ? "active" : ""}
                     onClick={() => setMode(i)}
@@ -404,10 +392,21 @@ function App() {
                         background: "#" + TYPES[g.kind].color.toString(16),
                       }}
                     />
-                    {i + 1}
+                    M{i + 1}
                   </button>
                 ))}
               </div>
+              <div className="archetype-actions">
+                <button disabled={genome.length >= MAX_MODES} onClick={() => addArchetype()}>＋ Архетип</button>
+                <button disabled={genome.length >= MAX_MODES} onClick={() => addArchetype(true)}>Копия</button>
+                <button disabled={genome.length === 1} title="Ссылки на удалённый архетип перейдут к следующему, а для последнего — к предыдущему"
+                  onClick={() => {
+                    setGenome(removeMode(genome, mode));
+                    setMode(Math.min(mode, genome.length - 2));
+                    setNotice("Архетип удалён; ссылки на него перенаправлены к соседнему.");
+                  }}>Удалить</button>
+              </div>
+              <button className="organism-example" onClick={organismExample}>Пример: многоклеточный организм</button>
               <div className="cell-card">
                 <div
                   className="cell-preview"
@@ -443,10 +442,17 @@ function App() {
               <div className="section-label line">
                 ЖИЗНЕННЫЙ ЦИКЛ <span>↗</span>
               </div>
+              <label className="toggle">
+                <input type="checkbox" checked={m.canDivide} onChange={(e) => update("canDivide", e.target.checked)} />
+                <span>Разрешить деление</span>
+              </label>
+              {!m.canDivide && <p className="editor-note">Архетип не размножается. Клетка продолжает питаться, двигаться и стареть.</p>}
+              <fieldset className="division-settings" disabled={!m.canDivide}>
               {range("Масса для деления", "threshold", 1, 8, 0.1, " нг")}
               <div className="children">
                 {(["childA", "childB"] as const).map((key, i) => (
-                  <label key={key}>
+                  <div className="child-settings" key={key}>
+                  <label>
                     Дочерняя клетка {i ? "B" : "A"}
                     <select
                       value={m[key]}
@@ -459,8 +465,19 @@ function App() {
                       ))}
                     </select>
                   </label>
+                  <label className="toggle">
+                    <input type="checkbox" checked={i ? m.keepAdhesionB : m.keepAdhesionA}
+                      onChange={(e) => update(i ? "keepAdhesionB" : "keepAdhesionA", e.target.checked)} />
+                    <span>{i ? "B" : "A"} наследует связи родителя</span>
+                  </label>
+                  </div>
                 ))}
               </div>
+              <label className="toggle">
+                <input type="checkbox" checked={m.bindChildren} onChange={(e) => update("bindChildren", e.target.checked)} />
+                <span>Связать A и B после деления</span>
+              </label>
+              <p className="editor-note">Каждый потомок наследует все прежние связи родителя, если включён его переключатель. Новая связь A–B задаётся отдельно.</p>
               {range(
                 "Распределение массы",
                 "ratio",
@@ -483,14 +500,19 @@ function App() {
                 "°",
                 (v) => `${Math.round((v * 180) / Math.PI)}`,
               )}
-              {range("Скорость движения", "speed", 0, 60, 1, " ед/с")}
+              </fieldset>
+              {range(m.kind === 2 ? "Скорость жгутика" : "Скорость свободной клетки", "speed", 0, 60, 1, " ед/с")}
+              {m.kind === 2 && <p className="editor-note">Жгутик тянет за собой связанные клетки организма.</p>}
               {range("Продолжительность жизни", "lifespan", 20, 1000, 10, " с")}
               <div className="lineage">
                 <span>M{mode + 1}</span>
                 <i>→</i>
-                <span>M{m.childA + 1}</span>
-                <span>M{m.childB + 1}</span>
-                <small>Потомки наследуют весь геном</small>
+                {m.canDivide ? <>
+                  <span>M{m.childA + 1}</span>
+                  <i>{m.bindChildren ? "⟷" : "+"}</i>
+                  <span>M{m.childB + 1}</span>
+                  <small>{m.bindChildren ? "Связанные потомки" : "Без новой связи A–B"} · наследуют весь геном</small>
+                </> : <span>Без деления</span>}
               </div>
               {selected !== null && (
                 <button
@@ -514,7 +536,7 @@ function App() {
                 <button onClick={load}>↑ Загрузить</button>
                 <button
                   title="Вернуть стандартный геном редактора"
-                  onClick={() => setGenome(defaultGenome())}
+                  onClick={() => { setGenome(defaultGenome()); setMode(0); }}
                 >
                   ↺
                 </button>
@@ -532,6 +554,7 @@ function App() {
                   ["Рождений", stats?.[2] || 0],
                   ["Погибло", stats?.[3] || 0],
                   ["Заражений", stats?.[4] || 0],
+                  ["Связей", (frame?.links.length || 0) / 2],
                 ].map(([k, v]) => (
                   <div key={k}>
                     <span>{k}</span>
@@ -550,6 +573,7 @@ function App() {
                     ["Возраст", `${cell[6].toFixed(1)} с`],
                     ["Поколение", cell[7]],
                     ["Изменения генома", cell[8]],
+                    ["Связей", frame?.links.filter((id) => id === selected).length || 0],
                   ].map(([k, v]) => (
                     <div key={k}>
                       <dt>{k}</dt>
@@ -594,7 +618,7 @@ function App() {
           </span>
         </span>
         <span>
-          SEED 73421 <span className="separator">/</span> 6 ТИПОВ · 8 РЕЖИМОВ
+          SEED 73421 <span className="separator">/</span> {TYPES.length} ТИПОВ · {genome.length} АРХЕТИПОВ
         </span>
       </div>
       {(error || notice) && (

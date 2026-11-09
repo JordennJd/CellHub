@@ -8,10 +8,12 @@ let debt = 0;
 let last = performance.now();
 function frame() {
   const cells = sim.snapshot(),
+    links = sim.links(),
     terrain = sim.terrain(),
     stats = sim.stats();
-  ctx.postMessage({ type: "frame", cells, terrain, stats }, [
+  ctx.postMessage({ type: "frame", cells, links, terrain, stats }, [
     cells.buffer,
+    links.buffer,
     terrain.buffer,
     stats.buffer,
   ]);

@@ -11,7 +11,8 @@
     "test:rust": "bash scripts/rust.sh test --workspace",
     "preview": "vite preview --host 127.0.0.1",
     "test:wasm": "npm run build:wasm && node --test scripts/simulation.test.mjs",
-    "test": "npm run test:rust && npm run test:wasm"
+    "test:model": "node --experimental-strip-types --test scripts/model.test.mjs",
+    "test": "npm run test:rust && npm run test:model && npm run test:wasm"
   },
   "dependencies": {
     "pixi.js": "^8.16.0",
