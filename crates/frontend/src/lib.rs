@@ -1,69 +1,471 @@
-//! Rust owns only canvas rendering; React owns UI and the Worker owns simulation.
+//! Direct WebGPU renderer: three draws (terrain, label atlas, instanced cells).
+//! React owns UI/input; the simulation remains in its Worker.
 #![cfg(target_arch = "wasm32")]
-use std::{cell::RefCell, rc::Rc};
-use eframe::egui::{self, Align2, Color32, FontId, Rect, Stroke, Vec2};
+
+use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
-const WORLD:f32=3072.;
-const COLORS:[u32;6]=[0xa4db71,0xf1bf72,0x71cbd4,0xc997ed,0xb3c3d0,0xf08373];
-fn rgb(v:u32)->Color32 {Color32::from_rgb((v>>16) as u8,(v>>8) as u8,v as u8)}
-fn alpha(v:u32,a:f32)->Color32 {Color32::from_rgba_unmultiplied((v>>16) as u8,(v>>8) as u8,v as u8,(a.clamp(0.,1.)*255.).round() as u8)}
-struct Scene {cells:Vec<f32>,terrain:Vec<f32>,x:f32,y:f32,zoom:f32,layer:u32,selected:i32}
-impl Default for Scene {fn default()->Self {Self {cells:vec![],terrain:vec![],x:WORLD/2.,y:WORLD/2.,zoom:1.,layer:0,selected:-1}}}
-struct CanvasApp(Rc<RefCell<Scene>>);
-impl eframe::App for CanvasApp {
- fn update(&mut self,ctx:&egui::Context,_:&mut eframe::Frame) {
-  let s=self.0.borrow();
-  egui::CentralPanel::default().frame(egui::Frame::NONE.fill(rgb(0x091411))).show(ctx,|ui| {
-   let rect=ui.max_rect();let p=ui.painter();let z=s.zoom;
-   let project=|x:f32,y:f32|rect.center()+Vec2::new((x-s.x)*z,(y-s.y)*z);
-   for (i,t) in s.terrain.chunks_exact(4).take(48*48).enumerate() {
-    let x=(i%48) as f32*64.;let y=(i/48) as f32*64.;
-    let tile=Rect::from_min_size(project(x,y),Vec2::splat(64.*z));
-    if !tile.intersects(rect) {continue;}
-    let color=match s.layer {1=>alpha(0xe7cf7d,0.08+t[0]*0.72),2=>alpha(0xd28ce9,0.08+t[1]*0.72),3=>alpha(0x75d5bd,0.08+t[2]*0.72),_=>rgb([0x253e2b,0x233c38,0x152d39,0x3c2940][(t[3] as usize).min(3)])};
-    p.rect_filled(tile,0.,color);
-    if t[2]>0.15 {p.circle_filled(project(x+17.+((i/48)%3) as f32*9.,y+27.+(i%48%3) as f32*7.),1.8*z,alpha(0xa5cf9b,t[2]*0.5));}
-   }
-   let corners=[project(0.,0.),project(WORLD,0.),project(WORLD,WORLD),project(0.,WORLD)];
-   for i in 0..4 {p.line_segment([corners[i],corners[(i+1)%4]],Stroke::new(2.*z,rgb(0x7b9889)));}
-   for (name,x,y) in [("СОЛНЕЧНОЕ МЕЛКОВОДЬЕ",470.,650.),("ПИТАТЕЛЬНЫЙ ПОЯС",1750.,1550.),("ТЁМНЫЕ ГЛУБИНЫ",1250.,2600.),("РАДИАЦИОННЫЙ КАРМАН",2330.,680.)] {
-    let spaced=name.chars().map(|c|c.to_string()).collect::<Vec<_>>().join("\u{2009}");
-    p.text(project(x,y),Align2::LEFT_TOP,spaced,FontId::monospace(20.*z),alpha(0xa4bbae,0.5));
-   }
-   for c in s.cells.chunks_exact(10) {
-    let pos=project(c[1],c[2]);let r=c[3]*z;
-    if !rect.expand((c[3]*2.+7.)*z).contains(pos) {continue;}
-    let color=COLORS.get(c[4] as usize).copied().unwrap_or(0xffffff);
-    p.circle_filled(pos,r+3.*z,alpha(color,0.08));
-    p.circle_filled(pos,r,alpha(color,0.22));p.circle_stroke(pos,r,Stroke::new(1.4*z,rgb(color)));
-    p.circle_filled(pos+Vec2::angled(c[9])*r*0.2,r*0.29,alpha(color,0.9));
-    if c[4]==2. {p.line_segment([pos-Vec2::angled(c[9])*r,pos-Vec2::angled(c[9])*r*2.],Stroke::new(z,rgb(color)));}
-    if c[8]>0. {p.circle_filled(pos+Vec2::new(r*0.55,-r*0.55),2.*z,Color32::WHITE);}
-    if c[0] as i32==s.selected {p.circle_stroke(pos,r+7.*z,Stroke::new(1.5*z,Color32::WHITE));}
-   }
-  });
- }
+use wgpu::util::DeviceExt;
+
+const TERRAIN_BYTES: u64 = 48 * 48 * 16;
+const CELL_STRIDE: u64 = 40;
+const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2];
+
+fn error(e: impl std::fmt::Display) -> JsValue {
+    JsValue::from_str(&e.to_string())
 }
+fn buffer(
+    device: &wgpu::Device,
+    label: &str,
+    size: u64,
+    usage: wgpu::BufferUsages,
+) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+fn pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    vertex: &str,
+    fragment: &str,
+    instanced: bool,
+) -> wgpu::RenderPipeline {
+    let buffers = [wgpu::VertexBufferLayout {
+        array_stride: CELL_STRIDE,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &ATTRIBUTES,
+    }];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(fragment),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some(vertex),
+            compilation_options: Default::default(),
+            buffers: if instanced { &buffers } else { &[] },
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: Default::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
 #[wasm_bindgen]
-pub struct WorldRenderer {scene:Rc<RefCell<Scene>>,runner:eframe::WebRunner,ctx:egui::Context}
+pub struct WorldRenderer {
+    canvas: web_sys::HtmlCanvasElement,
+    surface: wgpu::Surface<'static>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    config: wgpu::SurfaceConfiguration,
+    terrain_pipeline: wgpu::RenderPipeline,
+    cell_pipeline: wgpu::RenderPipeline,
+    label_pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    uniform: wgpu::Buffer,
+    terrain: wgpu::Buffer,
+    cells: wgpu::Buffer,
+    capacity: u64,
+    count: u32,
+    atlas: wgpu::Texture,
+    view: [f32; 8],
+    dirty: bool,
+    destroyed: bool,
+    gpu_error: Arc<Mutex<Option<String>>>,
+}
+
 #[wasm_bindgen]
 impl WorldRenderer {
- pub async fn create(canvas:web_sys::HtmlCanvasElement)->Result<WorldRenderer,JsValue> {
-  let scene=Rc::new(RefCell::new(Scene::default()));let runner=eframe::WebRunner::new();
-  let context=Rc::new(RefCell::new(None));let output=context.clone();let shared=scene.clone();
-  let options=eframe::WebOptions {should_propagate_event:Box::new(|_|true),..Default::default()};
-  runner.start(canvas,options,Box::new(move|cc| {*output.borrow_mut()=Some(cc.egui_ctx.clone());Ok(Box::new(CanvasApp(shared)))})).await?;
-  let ctx=context.borrow_mut().take().ok_or_else(||JsValue::from_str("Renderer context unavailable"))?;
-  Ok(Self {scene,runner,ctx})
- }
- pub fn set_frame(&self,cells:&[f32],terrain:&[f32])->Result<(),JsValue> {
-  if cells.len()%10!=0 || terrain.len()!=48*48*4 || cells.iter().chain(terrain).any(|v|!v.is_finite()) {return Err(JsValue::from_str("Invalid render snapshot"));}
-  let mut s=self.scene.borrow_mut();s.cells.clear();s.cells.extend_from_slice(cells);s.terrain.clear();s.terrain.extend_from_slice(terrain);
-  self.ctx.request_repaint();Ok(())
- }
- pub fn set_view(&self,x:f32,y:f32,zoom:f32,layer:u32,selected:i32) {
-  let mut s=self.scene.borrow_mut();if x.is_finite() && y.is_finite() && zoom.is_finite() && zoom>0. {s.x=x;s.y=y;s.zoom=zoom;s.layer=layer;s.selected=selected;}
-  self.ctx.request_repaint();
- }
- pub fn destroy(&self) {self.runner.destroy();}
+    pub async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WorldRenderer, JsValue> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+        });
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
+            .map_err(error)?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&surface),
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok_or_else(|| error("WebGPU adapter unavailable"))?;
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("CellHub"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: Default::default(),
+                },
+                None,
+            )
+            .await
+            .map_err(error)?;
+        let gpu_error = Arc::new(Mutex::new(None));
+        let reported = gpu_error.clone();
+        device.on_uncaptured_error(Box::new(move |e| {
+            *reported.lock().unwrap() = Some(e.to_string());
+        }));
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let mut config = surface
+            .get_default_config(&adapter, 1, 1)
+            .ok_or_else(|| error("No compatible WebGPU surface format"))?;
+        // Match CSS/Pixi color values without an extra sRGB framebuffer conversion.
+        config.format = surface
+            .get_capabilities(&adapter)
+            .formats
+            .into_iter()
+            .find(|f| !f.is_srgb())
+            .unwrap_or(config.format);
+        canvas.set_width(1);
+        canvas.set_height(1);
+        surface.configure(&device, &config);
+        let view = [1., 1., 1536., 1536., 1., 0., -1., 0.];
+        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("camera"),
+            contents: bytemuck::cast_slice(&view),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let terrain = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("terrain"),
+            contents: &vec![0u8; TERRAIN_BYTES as usize],
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("static map label atlas"),
+            size: wgpu::Extent3d {
+                width: 512,
+                height: 128,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let atlas_view = atlas.create_view(&Default::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("scene bindings"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scene"),
+            layout: &bindings,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: terrain.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("scene layout"),
+            bind_group_layouts: &[&bindings],
+            push_constant_ranges: &[],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("CellHub WGSL"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+        });
+        let terrain_pipeline = pipeline(
+            &device,
+            &layout,
+            &shader,
+            config.format,
+            "terrain_vs",
+            "terrain_fs",
+            false,
+        );
+        let cell_pipeline = pipeline(
+            &device,
+            &layout,
+            &shader,
+            config.format,
+            "cell_vs",
+            "cell_fs",
+            true,
+        );
+        let label_pipeline = pipeline(
+            &device,
+            &layout,
+            &shader,
+            config.format,
+            "label_vs",
+            "label_fs",
+            false,
+        );
+        let capacity = 1024 * CELL_STRIDE;
+        let cells = buffer(
+            &device,
+            "cell instances",
+            capacity,
+            wgpu::BufferUsages::VERTEX,
+        );
+        if let Some(e) = device.pop_error_scope().await {
+            return Err(error(e));
+        }
+        Ok(Self {
+            canvas,
+            surface,
+            device,
+            queue,
+            config,
+            terrain_pipeline,
+            cell_pipeline,
+            label_pipeline,
+            bind_group,
+            uniform,
+            terrain,
+            cells,
+            capacity,
+            count: 0,
+            atlas,
+            view,
+            dirty: true,
+            destroyed: false,
+            gpu_error,
+        })
+    }
+    pub fn set_frame(&mut self, cells: &[f32], terrain: &[f32]) -> Result<(), JsValue> {
+        if self.destroyed {
+            return Err(error("Renderer destroyed"));
+        }
+        if cells.len() % 10 != 0
+            || terrain.len() != 48 * 48 * 4
+            || cells.iter().chain(terrain).any(|v| !v.is_finite())
+        {
+            return Err(error("Invalid render snapshot"));
+        }
+        let bytes: &[u8] = bytemuck::cast_slice(cells);
+        if bytes.len() as u64 > self.capacity {
+            let capacity = (bytes.len() as u64).next_power_of_two();
+            if capacity > self.device.limits().max_buffer_size {
+                return Err(error("Cell buffer exceeds adapter limit"));
+            }
+            self.cells.destroy();
+            self.cells = buffer(
+                &self.device,
+                "cell instances",
+                capacity,
+                wgpu::BufferUsages::VERTEX,
+            );
+            self.capacity = capacity;
+        }
+        if !bytes.is_empty() {
+            self.queue.write_buffer(&self.cells, 0, bytes);
+        }
+        self.queue
+            .write_buffer(&self.terrain, 0, bytemuck::cast_slice(terrain));
+        self.count = (cells.len() / 10) as u32;
+        self.dirty = true;
+        Ok(())
+    }
+    /// Static text rasterized once into an atlas, then placed/drawn by the GPU.
+    pub fn set_labels(&mut self, rgba: &[u8]) -> Result<(), JsValue> {
+        if self.destroyed || rgba.len() != 512 * 128 * 4 {
+            return Err(error("Invalid label atlas"));
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.atlas,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(512 * 4),
+                rows_per_image: Some(128),
+            },
+            wgpu::Extent3d {
+                width: 512,
+                height: 128,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.dirty = true;
+        Ok(())
+    }
+    pub fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
+        if x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0. {
+            self.view[2..7].copy_from_slice(&[x, y, zoom, layer as f32, selected as f32]);
+            self.dirty = true;
+        }
+    }
+    pub fn render(&mut self) -> Result<(), JsValue> {
+        if self.destroyed {
+            return Ok(());
+        }
+        if let Some(e) = self.gpu_error.lock().unwrap().as_ref() {
+            return Err(error(e));
+        }
+        let width = self.canvas.client_width();
+        let height = self.canvas.client_height();
+        if width <= 0 || height <= 0 {
+            return Ok(());
+        }
+        let dpr = web_sys::window()
+            .map(|w| w.device_pixel_ratio())
+            .unwrap_or(1.)
+            .clamp(1., 2.);
+        let max = self.device.limits().max_texture_dimension_2d;
+        let pw = ((width as f64 * dpr).round() as u32).clamp(1, max);
+        let ph = ((height as f64 * dpr).round() as u32).clamp(1, max);
+        if self.config.width != pw
+            || self.config.height != ph
+            || self.view[0] != width as f32
+            || self.view[1] != height as f32
+        {
+            self.canvas.set_width(pw);
+            self.canvas.set_height(ph);
+            self.config.width = pw;
+            self.config.height = ph;
+            self.surface.configure(&self.device, &self.config);
+            self.view[0] = width as f32;
+            self.view[1] = height as f32;
+            self.dirty = true;
+        }
+        if !self.dirty {
+            return Ok(());
+        }
+        let frame = match self.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(());
+            }
+            Err(wgpu::SurfaceError::Timeout) => return Ok(()),
+            Err(e) => return Err(error(e)),
+        };
+        self.queue
+            .write_buffer(&self.uniform, 0, bytemuck::cast_slice(&self.view));
+        let target = frame.texture.create_view(&Default::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("CellHub frame"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("world"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 9. / 255.,
+                            g: 20. / 255.,
+                            b: 17. / 255.,
+                            a: 1.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_pipeline(&self.terrain_pipeline);
+            pass.draw(0..6, 0..1);
+            pass.set_pipeline(&self.label_pipeline);
+            pass.draw(0..6, 0..4);
+            if self.count > 0 {
+                pass.set_pipeline(&self.cell_pipeline);
+                pass.set_vertex_buffer(0, self.cells.slice(..));
+                pass.draw(0..6, 0..self.count);
+            }
+        }
+        self.queue.submit(Some(encoder.finish()));
+        frame.present();
+        self.dirty = false;
+        Ok(())
+    }
+    pub fn destroy(&mut self) {
+        if !self.destroyed {
+            self.destroyed = true;
+            self.cells.destroy();
+            self.terrain.destroy();
+            self.uniform.destroy();
+            self.atlas.destroy();
+            self.device.destroy();
+        }
+    }
 }
