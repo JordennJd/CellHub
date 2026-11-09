@@ -1,41 +1,22 @@
-# Experimental Rust frontend
+# Гибридный фронтенд
 
-Branch: `feat/rust-webgpu-frontend`.
+Главная страница — исходный React-интерфейс с исходным CSS. Сохранены редактор восьми режимов, шесть типов клеток и их описания, все параметры деления, потомки, распределение масс, угол, движение и срок жизни, сохранение/загрузка/сброс генома, изменение выбранной клетки, наблюдение и статистика, пример на 60 клеток, пауза/шаг/скорости, очистка, выбор/размещение/перемещение, масштаб и центрирование, легенда, слои, сообщения и пустое состояние.
 
-The Rust/egui/wgpu application is at `/` and `/rust.html`. The React/Pixi baseline remains at `/legacy.html` for comparison. Both use the same simulation crate. Rust controls the editor, camera, input, map and cells; JavaScript on the Rust page only loads WASM and reports startup failures. WebGPU requires localhost or HTTPS and a compatible browser.
+Симуляция работает в прежнем Worker. `WorldView.tsx` управляет камерой и событиями указателя, передаёт последний снимок и параметры в `WorldRenderer`. Canvas рисуется в Rust через egui/wgpu/WebGPU: биомы и слои света/радиации/пищи, частицы пищи, граница и подписи карты, ореол/оболочка/ядро клетки, жгутик, маркер мутации и выделение. Невидимые участки и клетки пропускаются. Снимки отправляются Rust только при изменении, перерисовка запрашивается при изменении данных/камеры и resize.
 
-Windows build:
+В Rust нет редактора и второй симуляции. При размонтировании React останавливает renderer и удаляет обработчики. Сохранённые геномы исходного интерфейса доступны через прежний ключ `cellhub.genome.v1`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build-rust-frontend.ps1
-npm run check
-node node_modules/vite/bin/vite.js
-```
+Нужны браузер с WebGPU и localhost или HTTPS. JS-загрузчик и ABI остаются необходимой частью WASM-интеграции. Шрифт и растеризация canvas могут незначительно отличаться от Pixi; React-разметка и CSS сохранены.
 
-Then open `http://localhost:5173/rust.html`. Existing WASM bindings must also be available to build the comparison React entry. After both WASM builds, `node node_modules/vite/bin/vite.js build` includes both pages.
-
-The Rust implementation uses egui geometry and viewport culling, not GPU compute simulation or an instanced cell shader. Simulation currently executes on the browser main thread. Its visual layout differs from the React interface. These are material differences to review before replacing the default application.
-
-Benchmark setup (installed Google Chrome):
+Запуск из корня проекта:
 
 ```powershell
-npm install --no-save --package-lock=false playwright
-node scripts/benchmark-frontends.mjs
+npm run build:wasm
+npm run build:rust-frontend
+npm run dev
 ```
 
-The script starts Vite on port 5188, uses 1440×1000 at device scale 1, creates deterministic populations of 1000/5000 cells, waits five seconds and measures requestAnimationFrame intervals for ten seconds. It compares WebGL, WebGPU and Rust with simulation paused/running. Output contains FPS, p95 interval, GPU identification and errors. This measures frame scheduling, not GPU-only time. Repeat runs on an idle computer; canvas viewport sizes and visual complexity differ, so results describe the applications, not an isolated API speedup. Running populations can change through division/death.
+Production: `npm run build`, затем `npm run preview`.
+WASM-bindgen заново генерирует `frontend/rust-wasm` с экспортом `WorldRenderer`; старые сгенерированные файлы после предыдущей версии нужно пересобрать указанной командой.
 
-Do not infer a speedup from successful compilation. Review browser errors, screenshot and timings before merging.
-
-## Measured results, 2026-11-09
-
-Headless installed Chrome, Intel gen-12lp adapter, 1440×1000, DPR 1. One final run; these are application-level results, not isolated WebGPU/Rust speedups.
-
-| Initial cells | Simulation | React/WebGL FPS | React/WebGPU FPS | Rust/WebGPU FPS |
-| --- | --- | ---: | ---: | ---: |
-| 1000 | paused | 24.36 | 22.19 | 60.00 |
-| 1000 | running | 24.22 | 23.16 | 60.00 |
-| 5000 | paused | 5.65 | 6.06 | 34.89 |
-| 5000 | running | 6.28 | 5.54 | 28.65 |
-
-At 5000 initial cells running, p95 frame interval: WebGL 200 ms, Pixi WebGPU 250 ms, Rust 50 ms. No page errors were reported. Rust startup, a placement click and saving 64 genome values to localStorage passed; screenshot confirmed the rendered world/editor. Full production build, TypeScript checking, eight native simulation tests and two actual WASM tests passed. Running populations may change, and Rust's main-thread simulation and different viewport/layout limit attribution of the improvement.
+По запросу пользователя эта переработка не запускалась и не проверялась сборкой, тестами, браузером или бенчмарком. Результаты прошлой полностью Rust-версии к гибридной архитектуре не относятся; ускорение этой версии не измерено.

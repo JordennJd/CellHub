@@ -38,6 +38,7 @@ build-wasm: _wasm-bindgen
 
 # Запустить dev-сервер Vite (http://127.0.0.1:5173)
 dev: _deps build-wasm
+    npm run build:rust-frontend
     npm run dev
 
 # Production-сборка: WASM + TypeScript + Vite
@@ -46,6 +47,7 @@ build: _deps _wasm-bindgen
 
 # Проверка TypeScript (после сборки WASM)
 check: build-wasm
+    npm run build:rust-frontend
     npm run check
 
 # Все тесты: native Rust + настоящий WASM

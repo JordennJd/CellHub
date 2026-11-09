@@ -1,12 +1,10 @@
 # CellHub
 
-Rust/WebGPU frontend: the main page now runs `crates/frontend` (egui/wgpu).
-The React baseline is available at `/legacy.html`. Run `npm run build` to build
-both WASM modules and web entries; Cargo and matching wasm-bindgen 0.2.130 are
-required. See [migration and benchmark instructions](docs/rust-frontend.md).
-The older architecture notes below describe the React baseline.
+Главная страница использует прежний React-интерфейс и Rust/WebGPU для canvas.
+Редактор, панели и оформление находятся в React; `crates/frontend` рисует только
+мир, а симуляция Rust/hecs работает в Worker. Подробности: [гибридная архитектура](docs/rust-frontend.md).
 
-Локальная веб-песочница искусственной жизни: React/TypeScript управляет интерфейсом, PixiJS рисует субстрат, Rust nightly + hecs ECS исполняет симуляцию в Web Worker через WebAssembly.
+Локальная веб-песочница искусственной жизни: React/TypeScript управляет интерфейсом, Rust/egui/wgpu рисует субстрат через WebGPU, Rust nightly + hecs ECS исполняет симуляцию в Web Worker через WebAssembly.
 
 ## Запуск
 
@@ -16,6 +14,7 @@ The older architecture notes below describe the React baseline.
 npm ci
 cargo install wasm-bindgen-cli --version 0.2.130 --locked
 npm run build:wasm
+npm run build:rust-frontend
 npm run dev
 ```
 
@@ -33,7 +32,7 @@ npm run check       # проверка TypeScript (после сборки WASM)
 npm run preview     # production-версия после npm run build
 ```
 
-`dist/` можно раздавать любым статическим HTTP-сервером с MIME `application/wasm`. Web Worker и WASM не загружаются через `file://`. COOP/COEP не требуются: SharedArrayBuffer пока не используется. WebGL выбран по умолчанию; `?webgpu` запрашивает WebGPU через PixiJS с его автоматическим fallback. Для WebGPU необходим secure context и поддержка браузером. Android поддерживается как адаптивная веб-страница, не APK; на устройстве пока не проверено.
+`dist/` можно раздавать любым статическим HTTP-сервером с MIME `application/wasm`. Web Worker и WASM не загружаются через `file://`. COOP/COEP не требуются: SharedArrayBuffer пока не используется. Canvas рисуется через Rust/wgpu/WebGPU; необходимы secure context и поддержка браузером. Android поддерживается как адаптивная веб-страница, не APK; на устройстве пока не проверено.
 
 ## Как пользоваться
 
@@ -58,7 +57,8 @@ npm run preview     # production-версия после npm run build
 - `crates/simulation/src/lib.rs`: данные ECS, генерация карты, fixed-step системы, WASM API и тесты. Rust не зависит от DOM, React или PixiJS.
 - `frontend/simulation.worker.ts`: очередь команд, загрузка WASM, часы и перенос снимков на главный поток.
 - `frontend/model.ts`: контракт команд и представление генома в UI.
-- `frontend/WorldView.tsx`: PixiJS, камера, hit testing, слои карты. Не рассчитывает биологию.
+- `frontend/WorldView.tsx`: камера, hit testing, передача снимков и параметров в Rust-renderer. Не рассчитывает биологию.
+- `crates/frontend/src/lib.rs`: отрисовка canvas через Rust/egui/wgpu; редактор находится в React.
 - `frontend/main.tsx`: HTML/React-редактор и управление экспериментом.
 - `docs/architecture.md`: ABI, порядок систем, сетевое расширение и ограничения.
 
