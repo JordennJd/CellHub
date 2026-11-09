@@ -5,7 +5,7 @@ use wasm_bindgen::prelude::*;
 pub const SIZE: f32 = 3072.;
 const GRID: usize = 48;
 const STEP: f32 = 1. / 30.;
-const LIMIT: usize = 5000;
+const LIMIT: usize = 20_000;
 const MODES: usize = 8;
 #[derive(Clone, Copy, Debug)]
 struct Mode {
@@ -144,7 +144,7 @@ impl Simulation {
         }
         let genome = decode(values)?;
         if self.world.len() as usize >= LIMIT {
-            return Err(JsError::new("Population limit: 5000"));
+            return Err(JsError::new(&format!("Population limit: {LIMIT}")));
         }
         let id = self.next_id;
         self.next_id += 1;

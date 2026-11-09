@@ -1,4 +1,5 @@
 export const WORLD = 3072;
+export const POPULATION_LIMIT = 20_000;
 export const STRIDE = 10;
 export const TYPES = [
   {

@@ -45,6 +45,15 @@ export function WorldView(props: Props) {
    await(moduleReady??=init().catch(e=>{moduleReady=undefined;throw e;}));if(disposed)return;
    const instance=await WorldRenderer.create(canvas);if(disposed){instance.destroy();instance.free();return;}
    renderer=instance;live.current.onRenderer("Rust WebGPU");
+   // Static map labels are rasterized once; all placement and rendering use WebGPU.
+   const atlas=document.createElement("canvas");atlas.width=512;atlas.height=128;
+   const context=atlas.getContext("2d");
+   if(!context)throw new Error("Не удалось создать текстуру подписей карты");
+   context.font="20px monospace";context.textBaseline="top";context.fillStyle="white";
+   ["СОЛНЕЧНОЕ МЕЛКОВОДЬЕ","ПИТАТЕЛЬНЫЙ ПОЯС","ТЁМНЫЕ ГЛУБИНЫ","РАДИАЦИОННЫЙ КАРМАН"].forEach((name,row)=>{
+    let x=0;for(const char of name){context.fillText(char,x,row*32);x+=context.measureText(char).width+3;}
+   });
+   renderer.set_labels(new Uint8Array(context.getImageData(0,0,512,128).data.buffer));
    let oldFrame:Frame|null=null,oldView="",counter=0;
    const tick=()=>{
     if(disposed||!renderer)return;
@@ -54,6 +63,7 @@ export function WorldView(props: Props) {
      const layer=({biome:0,light:1,radiation:2,food:3} as Record<string,number>)[p.layer]??0;
      const view=`${camera.x}/${camera.y}/${camera.zoom}/${layer}/${p.selected}`;
      if(view!==oldView){renderer.set_view(camera.x,camera.y,camera.zoom,layer,p.selected??-1);oldView=view;}
+     renderer.render();
      if(counter++%15===0)p.onView({...camera});animation=requestAnimationFrame(tick);
     }catch(e){live.current.onError(`Renderer: ${String(e)}`);}
    };tick();

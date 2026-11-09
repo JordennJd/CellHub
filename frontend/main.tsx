@@ -7,6 +7,7 @@ import {
   inflate,
   TYPES,
   STRIDE,
+  POPULATION_LIMIT,
   type Mode,
   type Frame,
   type Command,
@@ -42,7 +43,7 @@ function App() {
       if (data.type === "ready") {
         setReady(true);
         const q = new URLSearchParams(location.search);
-        const count = Math.min(5000, Math.max(0, Number(q.get("count")) || 0));
+        const count = Math.min(POPULATION_LIMIT, Math.max(0, Number(q.get("count")) || 0));
         if(q.has("paused")) { w.postMessage({type:"speed",value:0}); setSpeed(0); }
         const g=flatten(defaultGenome());
         for(let i=0;i<count;i++) w.postMessage({type:"spawn",x:20+(i%71)*42,y:20+Math.floor(i/71)*42,mode:i%6,genome:g});
@@ -356,7 +357,7 @@ function App() {
               <span>ПОПУЛЯЦИЯ</span>
               <b>
                 {stats?.[1] || 0}
-                <small> / 5 000</small>
+                <small> / {POPULATION_LIMIT.toLocaleString("ru-RU")}</small>
               </b>
             </div>
             <button
