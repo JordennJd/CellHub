@@ -28,6 +28,7 @@
             rustToolchain
             pkgs.cargo-nextest
             pkgs.nodejs_24
+            pkgs.just
           ];
 
           # # Optional: helps some editors find the rust source

@@ -15,6 +15,8 @@ npm run dev
 
 Открыть адрес Vite (обычно http://127.0.0.1:5173). На этом компьютере Rust и CLI также установлены локально в `.tools/`; сборочные скрипты используют их, если Cargo отсутствует в PATH. `./start.command` собирает WASM и запускает Vite. Первичная установка зависимостей обязательна.
 
+Если установлен [just](https://github.com/casey/just) (он входит в Nix devShell), те же шаги выполняет `just dev`: при необходимости ставит npm-зависимости, автоматически устанавливает `wasm-bindgen-cli` 0.2.130 в `.tools/wasm-bindgen`, собирает WASM и запускает Vite. Список рецептов — `just --list`.
+
 ```sh
 npm run build       # WASM + TypeScript + production bundle в dist/
 npm test            # 8 native Rust + 2 проверки настоящего WASM
