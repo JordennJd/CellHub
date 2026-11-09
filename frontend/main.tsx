@@ -39,7 +39,14 @@ function App() {
     });
     worker.current = w;
     w.onmessage = ({ data }) => {
-      if (data.type === "ready") setReady(true);
+      if (data.type === "ready") {
+        setReady(true);
+        const q = new URLSearchParams(location.search);
+        const count = Math.min(5000, Math.max(0, Number(q.get("count")) || 0));
+        if(q.has("paused")) { w.postMessage({type:"speed",value:0}); setSpeed(0); }
+        const g=flatten(defaultGenome());
+        for(let i=0;i<count;i++) w.postMessage({type:"spawn",x:20+(i%71)*42,y:20+Math.floor(i/71)*42,mode:i%6,genome:g});
+      }
       if (data.type === "frame") setFrame(data);
       if (data.type === "error") setError(data.message);
       if (data.type === "genome" && data.id === selection.current) {
