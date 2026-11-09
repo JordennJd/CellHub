@@ -4,3 +4,8 @@
 
 .envrc
 .direnv
+/node_modules/
+/dist/
+/target/
+/frontend/wasm/
+/work/

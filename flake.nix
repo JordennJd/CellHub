@@ -16,9 +16,10 @@
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
 
-        # Use the latest nightly toolchain
-        rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
-          extensions = [ "rust-src" "rust-analyzer" ];
+        # Keep this date aligned with rust-toolchain.toml
+        rustToolchain = pkgs.rust-bin.nightly."2026-11-09".default.override {
+          extensions = [ "rust-src" "rust-analyzer" "rustfmt" "clippy" ];
+          targets = [ "wasm32-unknown-unknown" ];
         };
       in
       {
@@ -26,6 +27,7 @@
           buildInputs = [
             rustToolchain
             pkgs.cargo-nextest
+            pkgs.nodejs_24
           ];
 
           # # Optional: helps some editors find the rust source

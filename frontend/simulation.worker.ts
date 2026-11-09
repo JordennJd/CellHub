@@ -1,0 +1,76 @@
+/// <reference lib="webworker" />
+import init, { Simulation } from "./wasm/simulation.js";
+import type { Command } from "./model";
+const ctx = self as unknown as DedicatedWorkerGlobalScope;
+let sim: Simulation;
+let speed = 1;
+let debt = 0;
+let last = performance.now();
+function frame() {
+  const cells = sim.snapshot(),
+    terrain = sim.terrain(),
+    stats = sim.stats();
+  ctx.postMessage({ type: "frame", cells, terrain, stats }, [
+    cells.buffer,
+    terrain.buffer,
+    stats.buffer,
+  ]);
+}
+const pending: Command[] = [];
+ctx.onmessage = ({ data }: MessageEvent<Command>) => {
+  pending.push(data);
+};
+function commands() {
+  for (const c of pending.splice(0)) {
+    try {
+      switch (c.type) {
+        case "spawn":
+          sim.spawn(c.x, c.y, c.mode, c.genome);
+          break;
+        case "edit":
+          sim.edit(c.id, c.mode, c.genome);
+          break;
+        case "inspect":
+          ctx.postMessage({
+            type: "genome",
+            id: c.id,
+            genome: sim.genome(c.id),
+            mode: sim.cell_mode(c.id),
+          });
+          break;
+        case "speed":
+          speed = c.value;
+          debt = 0;
+          break;
+        case "reset":
+          sim.reset();
+          debt = 0;
+          break;
+        case "step":
+          if (speed === 0) sim.advance(1);
+          break;
+      }
+    } catch (e) {
+      ctx.postMessage({ type: "error", message: String(e) });
+    }
+  }
+}
+try {
+  await init();
+  sim = new Simulation(73421);
+  ctx.postMessage({ type: "ready" });
+  setInterval(() => {
+    const now = performance.now();
+    commands();
+    debt += Math.min((now - last) / 1000, 0.25) * speed;
+    last = now;
+    const steps = Math.min(120, Math.floor(debt * 30));
+    if (steps) {
+      sim.advance(steps);
+      debt -= steps / 30;
+    }
+    frame();
+  }, 1000 / 30);
+} catch (e) {
+  ctx.postMessage({ type: "error", message: `WASM: ${String(e)}` });
+}
