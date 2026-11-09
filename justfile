@@ -50,6 +50,14 @@ check: build-wasm
     npm run build:rust-frontend
     npm run check
 
+# Отформатировать Rust-код
+fmt:
+    bash scripts/rust.sh fmt --all
+
+# Установить git-хуки (проверка rustfmt перед коммитом)
+install-hooks:
+    git config core.hooksPath scripts/hooks
+
 # Все тесты: native Rust + настоящий WASM
 test: _deps _wasm-bindgen
     npm test
