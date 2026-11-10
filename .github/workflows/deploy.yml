@@ -25,7 +25,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-11-09
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown,aarch64-unknown-linux-musl
 
       - name: Кэшировать Rust target и cargo registry
         uses: Swatinem/rust-cache@v2
@@ -57,6 +57,9 @@ jobs:
       - name: Собрать production-сборку
         run: npm run build
 
+      - name: Собрать статический aarch64-сервер
+        run: bash scripts/build-server.sh
+
       - name: Настроить SSH
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -67,15 +70,26 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
 
-      - name: Задеплоить dist/
+      - name: Задеплоить dist/ и сервер
+        shell: bash
         env:
           HOST: ${{ vars.DEPLOY_HOST }}
           PORT: ${{ vars.DEPLOY_PORT }}
           USER: ${{ vars.DEPLOY_USER }}
         run: |
+          set -euo pipefail
           test -n "$HOST"
           test -n "$PORT"
           test -n "$USER"
-          rsync -az --delete --delay-updates --chmod=D755,F644 \
-            -e "ssh -p $PORT -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes" \
-            dist/ "$USER@$HOST:/var/lib/cellhub/"
+          ssh_opts=(-p "$PORT" -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes)
+          target="$USER@$HOST"
+          remote_home=$(ssh "${ssh_opts[@]}" "$target" 'printf %s "$HOME"')
+          test -n "$remote_home"
+          ssh "${ssh_opts[@]}" "$target" "mkdir -p '$remote_home/.local/bin'"
+          rsync -az --delete --delay-updates --exclude '.*' --chmod=D755,F644 \
+            -e "ssh ${ssh_opts[*]}" dist/ "$target:$remote_home/"
+          rsync -az --chmod=F755 -e "ssh ${ssh_opts[*]}" \
+            target/deploy/cellhub-server "$target:$remote_home/.local/bin/cellhub-server.new"
+          ssh "${ssh_opts[@]}" "$target" \
+            "bash -s -- '$remote_home' '8081' 'cellhub.service'" \
+            < scripts/deploy-remote.sh

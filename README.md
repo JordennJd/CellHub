@@ -32,7 +32,7 @@ npm run dev
 
 `just install-hooks` включает git-хук, который перед коммитом проверяет форматирование Rust через `cargo fmt --check` и порядок модулей в `crates/` через `just check-order`. Отформатировать код — `just fmt`.
 
-Production-сборка деплоится на тестовый сервер через `just deploy <host> [ssh-port]`. Адрес сервера не хранится в репозитории и передаётся аргументом. Внутри сервера статика раздаётся по HTTP на порту 8081, откуда её забирает внешний reverse-proxy.
+Production-сборка деплоится на VM через `just deploy <host>` (SSH-порт 2223, пользователь `cellhub` по умолчанию). Рецепт собирает `dist/`, статический `aarch64-unknown-linux-musl` бинарник `cellhub-server` и перезапускает system-сервис `cellhub.service` на `0.0.0.0:8081`: статика лежит в `/var/lib/cellhub`, бинарник — в `/var/lib/cellhub/.local/bin/cellhub-server`. Сервер полностью статический, nix-ld и glibc на VM ему не нужны (включённый nix-ld не мешает). Внешний Caddy на основной машине терминирует HTTPS и проксирует весь домен на `10.200.0.7:8081`; WebSocket `/ws` идёт через тот же `reverse_proxy`, отдельный порт для него не нужен. Один раз на VM выполняется `just bootstrap cellhub.obscurative.ru` (root SSH): он ставит systemd-юнит (на shell-VM — runtime drop-in, потому что `/etc/systemd/system` там read-only) и узкое sudo-правило, позволяющее пользователю `cellhub` перезапускать только этот сервис. GitHub Actions выполняет те же шаги.
 
 ```sh
 npm run build       # WASM + TypeScript + production bundle в dist/

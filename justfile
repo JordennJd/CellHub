@@ -70,9 +70,13 @@ test: _deps _wasm-bindgen
 test-server: _deps
     npm run test:server
 
-# Запустить авторитарный сервер (WebSocket + статика dist)
+# Собрать деплой-артефакт: статический aarch64-сервер
+server-build:
+    bash scripts/build-server.sh
+
+# Запустить авторитарный сервер локально (WebSocket + статика dist)
 server: _deps
-    cargo run -p cellhub-server -- --bind 127.0.0.1:8082 --static dist
+    bash scripts/rust.sh run -p cellhub-server -- --bind 127.0.0.1:8082 --static dist
 
 # Только тесты модели на Rust
 test-rust:
@@ -86,75 +90,60 @@ test-wasm: _wasm-bindgen
 preview:
     npm run preview
 
-# Задеплоить production-сборку на тестовый сервер: just deploy <host> [ssh-port] [user]
-deploy host port="2223" user="root" remote_dir="/var/lib/cellhub" serve_port="8081":
+# Один раз установить system-сервис cellhub.service на VM (нужен root SSH):
+# just bootstrap <host> [ssh-port] [user] [identity]
+bootstrap host port="2223" user="root" identity="" serve_port="8081" max_rooms="16" max_players="16":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    ssh_opts=(-o ConnectTimeout=10 -p "{{port}}")
+    if [ -n "{{identity}}" ]; then
+      identity="{{identity}}"
+      identity="${identity/#\~/$HOME}"
+      ssh_opts+=(-i "$identity" -o IdentitiesOnly=yes)
+    fi
+
+    ssh "${ssh_opts[@]}" "{{user}}@{{host}}" \
+      "bash -s -- '/var/lib/cellhub' '{{serve_port}}' '{{max_rooms}}' '{{max_players}}'" \
+      < scripts/bootstrap-system-service.sh
+
+# Задеплоить production-сборку и статический aarch64-сервер на VM:
+# just deploy <host> [ssh-port] [user] [identity]
+# или: CELLHUB_SSH_KEY=~/.ssh/... just deploy <host>
+deploy host port="2223" user="cellhub" identity=env_var_or_default("CELLHUB_SSH_KEY", "") serve_port="8081":
     #!/usr/bin/env bash
     set -euo pipefail
 
     just build
+    bash scripts/build-server.sh
 
     ssh_opts=(-o ConnectTimeout=10 -p "{{port}}")
+    if [ -n "{{identity}}" ]; then
+      identity="{{identity}}"
+      identity="${identity/#\~/$HOME}"
+      ssh_opts+=(-i "$identity" -o IdentitiesOnly=yes)
+    fi
     target="{{user}}@{{host}}"
 
-    echo "▸ rsync → ${target}:{{remote_dir}}/"
-    ssh "${ssh_opts[@]}" "$target" "mkdir -p '{{remote_dir}}'"
-    rsync -a --delete -e "ssh ${ssh_opts[*]}" dist/ "${target}:{{remote_dir}}/"
-
-    echo "▸ запускаю HTTP-сервер на :{{serve_port}}"
-    ssh "${ssh_opts[@]}" "$target" 'bash -s' <<'REMOTE'
-    set -euo pipefail
-    remote_dir="{{remote_dir}}"
-    serve_port="{{serve_port}}"
-
-    test -f "$remote_dir/index.html"
-
-    # Разрешить reverse-proxy основного сервера ходить на этот порт.
-    if iptables -S nixos-fw >/dev/null 2>&1; then
-      if ! iptables -C nixos-fw -p tcp --dport "$serve_port" -j nixos-fw-accept 2>/dev/null; then
-        iptables -I nixos-fw 1 -p tcp --dport "$serve_port" -j nixos-fw-accept
-      fi
-    fi
-
-    # Если в microVM уже объявлен постоянный systemd-сервис — перезапускаем его.
-    # Иначе (например, на чистой microVM) поднимаем временный через systemd-run.
-    if systemctl cat cellhub.service >/dev/null 2>&1; then
-      svc_user=$(systemctl show cellhub.service -p User --value || true)
-      svc_group=$(systemctl show cellhub.service -p Group --value || true)
-      if [ "$(id -u)" -eq 0 ] && [ -n "$svc_user" ] && [ "$svc_user" != root ]; then
-        chown -R "$svc_user:${svc_group:-$svc_user}" "$remote_dir"
-      fi
-      systemctl restart cellhub.service
-    else
-      # На microVM нет caddy в PATH, но бинарник есть в общем /nix/store.
-      caddy_bin=$(ls -d /nix/store/*-caddy-*/bin/caddy 2>/dev/null | sort -V | tail -1 || true)
-      if [ -z "$caddy_bin" ]; then
-        echo "✗ caddy не найден в /nix/store" >&2
-        exit 1
-      fi
-
-      systemctl stop cellhub.service 2>/dev/null || true
-      systemctl reset-failed cellhub.service 2>/dev/null || true
-      systemd-run --unit=cellhub --collect \
-        --property=Restart=on-failure \
-        --property=WorkingDirectory="$remote_dir" \
-        --setenv=HOME=/tmp \
-        "$caddy_bin" file-server --root "$remote_dir" --listen ":$serve_port" >/dev/null
-    fi
-
-    ready=0
-    for _ in {1..20}; do
-      if curl -fsS "http://127.0.0.1:$serve_port/" >/dev/null 2>&1; then
-        ready=1
-        break
-      fi
-      sleep 0.25
-    done
-    if [ "$ready" != 1 ]; then
-      echo "✗ HTTP-сервер не поднялся на :$serve_port" >&2
+    remote_home=$(ssh "${ssh_opts[@]}" "$target" 'printf %s "$HOME"')
+    if [ -z "$remote_home" ]; then
+      echo "✗ не удалось определить HOME на {{host}}" >&2
       exit 1
     fi
+    remote_bin="$remote_home/.local/bin"
+    remote_incoming="$remote_bin/cellhub-server.new"
 
-    echo "✓ CellHub слушает 0.0.0.0:$serve_port"
-    REMOTE
+    echo "▸ rsync dist → ${target}:${remote_home}/"
+    ssh "${ssh_opts[@]}" "$target" "mkdir -p '$remote_bin'"
+    rsync -a --delete --exclude '.*' -e "ssh ${ssh_opts[*]}" dist/ "${target}:${remote_home}/"
 
-    echo "✓ deploy завершён (HTTP :{{serve_port}} внутри microVM)"
+    echo "▸ rsync cellhub-server → ${target}:${remote_incoming}"
+    rsync -a --chmod=F755 -e "ssh ${ssh_opts[*]}" \
+      target/deploy/cellhub-server "${target}:${remote_incoming}"
+
+    echo "▸ установка system-сервиса cellhub.service на 0.0.0.0:{{serve_port}}"
+    ssh "${ssh_opts[@]}" "$target" \
+      "bash -s -- '$remote_home' '{{serve_port}}' 'cellhub.service'" \
+      < scripts/deploy-remote.sh
+
+    echo "✓ deploy завершён: https://{{host}} (сервер :{{serve_port}})"
