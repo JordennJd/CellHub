@@ -495,11 +495,12 @@ def workspace_libs() -> list[Path]:
             text=True,
         ).stdout
     )
+    library_kinds = {"lib", "rlib", "cdylib", "dylib", "staticlib"}
     roots = {
         Path(target["src_path"]).resolve()
         for pkg in meta["packages"]
         for target in pkg["targets"]
-        if "lib" in target["kind"] or "proc-macro" in target["kind"]
+        if library_kinds.intersection(target["kind"]) or "proc-macro" in target["kind"]
     }
     return sorted(roots)
 

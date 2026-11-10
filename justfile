@@ -54,7 +54,11 @@ check: build-wasm
 fmt:
     bash scripts/rust.sh fmt --all
 
-# Установить git-хуки (проверка rustfmt перед коммитом)
+# Проверить порядок модулей в Rust-крейтах
+check-order:
+    python3 scripts/module_order.py crates/*/src/lib.rs
+
+# Установить git-хуки (rustfmt и порядок модулей перед коммитом)
 install-hooks:
     git config core.hooksPath scripts/hooks
 

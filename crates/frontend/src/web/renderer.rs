@@ -1,206 +1,19 @@
-//! Direct wgpu renderer: terrain, labels, instanced bonds and cells.
-//! WebGPU is preferred; the same pipelines and WGSL run on WebGL2 through
-//! wgpu's GL backend when WebGPU is unavailable. React owns UI/input; the
-//! simulation remains in its Worker.
-use crate::scene_data::pack_links;
+//! GPU renderer state: resources, frame upload, painting and teardown.
 
-use std::cell::{Cell, RefCell};
-use std::rc::{Rc, Weak};
+use super::backend::Backend;
+use super::error::error;
+use super::gpu::{ATTRIBUTES, CELL_STRIDE, LINK_ATTRIBUTES, LINK_STRIDE, buffer, pipeline};
+use super::labels::{ATLAS_HEIGHT, ATLAS_WIDTH, rasterize_labels};
+use crate::scene_data::pack_links;
 use std::sync::{Arc, Mutex};
-use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
 const TERRAIN_SIZE: u32 = 48;
 const TERRAIN_STRIDE: u32 = TERRAIN_SIZE * 16;
 const TERRAIN_BYTES: u64 = (TERRAIN_STRIDE * TERRAIN_SIZE) as u64;
-const CELL_STRIDE: u64 = 40;
-const LINK_STRIDE: u64 = 24;
-const ATLAS_WIDTH: u32 = 512;
-const ATLAS_HEIGHT: u32 = 128;
-const LABELS: [&str; 4] = [
-    "СОЛНЕЧНОЕ МЕЛКОВОДЬЕ",
-    "ПИТАТЕЛЬНЫЙ ПОЯС",
-    "ТЁМНЫЕ ГЛУБИНЫ",
-    "РАДИАЦИОННЫЙ КАРМАН",
-];
-const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2];
-const LINK_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Backend {
-    WebGpu,
-    WebGl,
-}
-
-impl Backend {
-    fn name(self) -> &'static str {
-        match self {
-            Self::WebGpu => "webgpu",
-            Self::WebGl => "webgl",
-        }
-    }
-
-    async fn select(requested: &str) -> Result<Self, JsValue> {
-        match requested {
-            "webgpu" => {
-                if !wgpu::util::is_browser_webgpu_supported().await {
-                    return Err(error(
-                        "WebGPU недоступен. Используйте браузер с WebGPU через localhost или HTTPS.",
-                    ));
-                }
-                Ok(Self::WebGpu)
-            }
-            "webgl" => Ok(Self::WebGl),
-            _ if wgpu::util::is_browser_webgpu_supported().await => Ok(Self::WebGpu),
-            _ => Ok(Self::WebGl),
-        }
-    }
-}
-
-fn error(e: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&e.to_string())
-}
-fn js_message(e: &JsValue) -> String {
-    e.as_string()
-        .or_else(|| {
-            e.dyn_ref::<js_sys::Error>()
-                .map(|e| String::from(e.message()))
-        })
-        .unwrap_or_else(|| format!("{e:?}"))
-}
-
-/// Rasterize the four static map labels once, in Rust, into the atlas that the
-/// fragment shader samples. The browser only ever uploads the resulting bytes
-/// to the GPU; no JavaScript canvas is involved in drawing.
-fn rasterize_labels() -> Result<Vec<u8>, JsValue> {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
-    let font = FontRef::try_from_slice(epaint_default_fonts::HACK_REGULAR).map_err(error)?;
-    let scale = PxScale::from(20.);
-    let scaled = font.as_scaled(scale);
-    let ascent = scaled.ascent();
-    let mut pixels = vec![0u8; (ATLAS_WIDTH * ATLAS_HEIGHT * 4) as usize];
-    for (row, label) in LABELS.iter().enumerate() {
-        let baseline = row as f32 * 32. + ascent;
-        let mut pen = 0.;
-        for ch in label.chars() {
-            let id = font.glyph_id(ch);
-            let glyph = id.with_scale_and_position(scale, point(pen, baseline));
-            if let Some(outline) = font.outline_glyph(glyph) {
-                let bounds = outline.px_bounds();
-                outline.draw(|gx, gy, coverage| {
-                    let x = bounds.min.x as i32 + gx as i32;
-                    let y = bounds.min.y as i32 + gy as i32;
-                    if x < 0 || y < 0 || x >= ATLAS_WIDTH as i32 || y >= ATLAS_HEIGHT as i32 {
-                        return;
-                    }
-                    let index = ((y as u32 * ATLAS_WIDTH + x as u32) * 4) as usize;
-                    let src = coverage.clamp(0., 1.);
-                    let dst = pixels[index + 3] as f32 / 255.;
-                    pixels[index] = 255;
-                    pixels[index + 1] = 255;
-                    pixels[index + 2] = 255;
-                    pixels[index + 3] = ((src + dst * (1. - src)).clamp(0., 1.) * 255.) as u8;
-                });
-            }
-            pen += scaled.h_advance(id) + 3.;
-        }
-    }
-    Ok(pixels)
-}
-
-/// One `requestAnimationFrame` at a time. Rust owns this signal, so JS only
-/// reports "new data/view exists"; it never drives the WebGPU paint call.
-#[derive(Default, Clone)]
-struct RepaintSignal {
-    callback: Rc<RefCell<Option<js_sys::Function>>>,
-    handle: Rc<Cell<Option<i32>>>,
-}
-impl RepaintSignal {
-    fn request(&self) {
-        if self.handle.get().is_some() {
-            return;
-        }
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let callback = self.callback.borrow();
-        if let Some(callback) = callback.as_ref() {
-            if let Ok(handle) = window.request_animation_frame(callback) {
-                self.handle.set(Some(handle));
-            }
-        }
-    }
-    fn cancel(&self) {
-        if let Some(handle) = self.handle.take() {
-            if let Some(window) = web_sys::window() {
-                let _ = window.cancel_animation_frame(handle);
-            }
-        }
-        self.callback.borrow_mut().take();
-    }
-}
-fn buffer(
-    device: &wgpu::Device,
-    label: &str,
-    size: u64,
-    usage: wgpu::BufferUsages,
-) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: usage | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-fn pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    format: wgpu::TextureFormat,
-    vertex: &str,
-    fragment: &str,
-    instance_layout: Option<(u64, &[wgpu::VertexAttribute])>,
-) -> wgpu::RenderPipeline {
-    let buffers = [wgpu::VertexBufferLayout {
-        array_stride: instance_layout.map_or(CELL_STRIDE, |v| v.0),
-        step_mode: wgpu::VertexStepMode::Instance,
-        attributes: instance_layout.map_or(&ATTRIBUTES[..], |v| v.1),
-    }];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(fragment),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some(vertex),
-            compilation_options: Default::default(),
-            buffers: if instance_layout.is_some() {
-                &buffers
-            } else {
-                &[]
-            },
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: Default::default(),
-        depth_stencil: None,
-        multisample: Default::default(),
-        multiview: None,
-        cache: None,
-    })
-}
-
-struct RendererState {
+pub(super) struct RendererState {
     canvas: web_sys::HtmlCanvasElement,
     backend: Backend,
     surface: wgpu::Surface<'static>,
@@ -227,22 +40,11 @@ struct RendererState {
     gpu_error: Arc<Mutex<Option<String>>>,
     error_handler: Option<js_sys::Function>,
 }
-
-#[wasm_bindgen]
-pub struct WorldRenderer {
-    state: Rc<RefCell<RendererState>>,
-    signal: RepaintSignal,
-    window: Option<web_sys::Window>,
-    resize: Option<Closure<dyn FnMut()>>,
-    observer: Option<web_sys::ResizeObserver>,
-    _observer_callback: Option<Closure<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>>,
-    // Keeping the closure alive also keeps the wasm-bindgen trampoline valid
-    // for the whole lifetime of the renderer.
-    _raf: Closure<dyn FnMut()>,
-}
-
 impl RendererState {
-    async fn create(canvas: web_sys::HtmlCanvasElement, requested: &str) -> Result<Self, JsValue> {
+    pub(super) async fn create(
+        canvas: web_sys::HtmlCanvasElement,
+        requested: &str,
+    ) -> Result<Self, JsValue> {
         let backend = Backend::select(requested).await?;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: match backend {
@@ -476,7 +278,7 @@ impl RendererState {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("CellHub WGSL"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("scene.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../scene.wgsl").into()),
         });
         let terrain_pipeline = pipeline(
             &device,
@@ -559,7 +361,7 @@ impl RendererState {
             error_handler: None,
         })
     }
-    pub fn set_frame(
+    pub(super) fn set_frame(
         &mut self,
         cells: &[f32],
         terrain: &[f32],
@@ -635,13 +437,13 @@ impl RendererState {
         self.dirty = true;
         Ok(())
     }
-    pub fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
+    pub(super) fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
         if x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0. {
             self.view[2..7].copy_from_slice(&[x, y, zoom, layer as f32, selected as f32]);
             self.dirty = true;
         }
     }
-    pub fn render(&mut self) -> Result<(), JsValue> {
+    pub(super) fn render(&mut self) -> Result<(), JsValue> {
         if self.destroyed {
             return Ok(());
         }
@@ -738,7 +540,7 @@ impl RendererState {
         self.dirty = false;
         Ok(())
     }
-    pub fn destroy(&mut self) {
+    pub(super) fn destroy(&mut self) {
         if !self.destroyed {
             self.destroyed = true;
             self.cells.destroy();
@@ -751,145 +553,28 @@ impl RendererState {
     }
 }
 
-#[wasm_bindgen]
-impl WorldRenderer {
-    /// `canvas` is only a DOM surface. Rust creates all GPU resources, owns the
-    /// animation-frame loop and submits every draw itself. `backend` is
-    /// `"auto"`, `"webgpu"` or `"webgl"`; auto probes WebGPU before touching
-    /// the canvas, because a canvas cannot switch from a WebGPU context to
-    /// WebGL2 later.
-    pub async fn create(
-        canvas: web_sys::HtmlCanvasElement,
-        backend: String,
-    ) -> Result<WorldRenderer, JsValue> {
-        let state = Rc::new(RefCell::new(RendererState::create(canvas, &backend).await?));
-        let signal = RepaintSignal::default();
-        let callback = {
-            let state: Weak<RefCell<RendererState>> = Rc::downgrade(&state);
-            let signal = signal.clone();
-            Closure::wrap(Box::new(move || {
-                signal.handle.set(None);
-                let Some(state) = state.upgrade() else {
-                    return;
-                };
-                let mut renderer = state.borrow_mut();
-                let result = renderer.render();
-                let ok = result.is_ok();
-                let reschedule = ok && renderer.dirty;
-                let handler = renderer.error_handler.clone();
-                if !ok {
-                    renderer.dirty = false;
-                }
-                drop(renderer);
-                match result {
-                    Ok(()) => {
-                        if reschedule {
-                            signal.request();
-                        }
-                    }
-                    Err(e) => {
-                        let message = js_message(&e);
-                        if let Some(handler) = handler {
-                            let _ = handler.call1(
-                                &JsValue::NULL,
-                                &JsValue::from_str(&format!("Renderer: {message}")),
-                            );
-                        } else {
-                            web_sys::console::error_1(&JsValue::from_str(&message));
-                        }
-                    }
-                }
-            }) as Box<dyn FnMut()>)
-        };
-        let function: js_sys::Function = callback
-            .as_ref()
-            .unchecked_ref::<js_sys::Function>()
-            .clone();
-        *signal.callback.borrow_mut() = Some(function);
-        let window = web_sys::window();
-        let resize = Some(Closure::wrap(Box::new({
-            let signal = signal.clone();
-            move || signal.request()
-        }) as Box<dyn FnMut()>));
-        if let (Some(window), Some(resize)) = (&window, &resize) {
-            window.add_event_listener_with_callback(
-                "resize",
-                resize.as_ref().unchecked_ref::<js_sys::Function>(),
-            )?;
-        }
-        // A layout change can resize the canvas without a window resize (for
-        // example when the editor gains an archetype). The old JS rAF loop
-        // polled for that; the observer keeps the Rust-driven loop correct.
-        let observer_callback = Closure::wrap(Box::new({
-            let signal = signal.clone();
-            move |_: js_sys::Array, _: web_sys::ResizeObserver| signal.request()
-        })
-            as Box<dyn FnMut(js_sys::Array, web_sys::ResizeObserver)>);
-        let observer = web_sys::ResizeObserver::new(
-            observer_callback
-                .as_ref()
-                .unchecked_ref::<js_sys::Function>(),
-        )?;
-        observer.observe(&state.borrow().canvas);
-        let renderer = Self {
-            state,
-            signal: signal.clone(),
-            window,
-            resize,
-            observer: Some(observer),
-            _observer_callback: Some(observer_callback),
-            _raf: callback,
-        };
-        renderer.signal.request();
-        Ok(renderer)
+impl RendererState {
+    pub(super) fn backend_name(&self) -> &'static str {
+        self.backend.name()
     }
-    /// Actual backend chosen by `create`, for the status label and for
-    /// WebGPU-only device-lost handling in JS.
-    pub fn backend(&self) -> String {
-        self.state.borrow().backend.name().to_string()
-    }
-    pub fn set_error_handler(&mut self, handler: js_sys::Function) {
-        self.state.borrow_mut().error_handler = Some(handler);
-    }
-    pub fn set_frame(
-        &mut self,
-        cells: &[f32],
-        terrain: &[f32],
-        links: &[u32],
-    ) -> Result<(), JsValue> {
-        self.state.borrow_mut().set_frame(cells, terrain, links)?;
-        self.signal.request();
-        Ok(())
-    }
-    pub fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
-        self.state
-            .borrow_mut()
-            .set_view(x, y, zoom, layer, selected);
-        self.signal.request();
-    }
-    /// Manual synchronous paint, mainly for tests and GPU readback fixtures.
-    /// The app never calls this: the Rust animation-frame loop does.
-    pub fn render(&mut self) -> Result<(), JsValue> {
-        self.state.borrow_mut().render()
-    }
-    pub fn destroy(&mut self) {
-        self.signal.cancel();
-        if let (Some(window), Some(resize)) = (self.window.take(), self.resize.take()) {
-            let _ = window.remove_event_listener_with_callback(
-                "resize",
-                resize.as_ref().unchecked_ref::<js_sys::Function>(),
-            );
-        }
-        if let Some(observer) = self.observer.take() {
-            observer.disconnect();
-        }
-        self._observer_callback.take();
-        self.state.borrow_mut().destroy();
-    }
-}
 
-impl Drop for WorldRenderer {
-    fn drop(&mut self) {
-        self.destroy();
+    pub(super) fn canvas(&self) -> &web_sys::HtmlCanvasElement {
+        &self.canvas
+    }
+
+    pub(super) fn set_error_handler(&mut self, handler: js_sys::Function) {
+        self.error_handler = Some(handler);
+    }
+
+    pub(super) fn error_handler(&self) -> Option<js_sys::Function> {
+        self.error_handler.clone()
+    }
+
+    pub(super) fn needs_repaint(&self) -> bool {
+        self.dirty
+    }
+
+    pub(super) fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 }

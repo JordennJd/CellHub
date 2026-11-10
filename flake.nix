@@ -29,6 +29,7 @@
             pkgs.cargo-nextest
             pkgs.nodejs_24
             pkgs.just
+            pkgs.python3
           ];
 
           # # Optional: helps some editors find the rust source

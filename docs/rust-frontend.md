@@ -14,7 +14,7 @@ GPU-буферы клеток и связей переиспользуются �
 
 ## WebGL2
 
-Это не второй рендерер: тот же `WorldRenderer`, `web.rs` и `scene.wgsl` собираются с feature `webgl` и работают поверх WebGL2. Naga транслирует WGSL в GLSL ES 3.0, а GL-бэкенд wgpu создаёт WebGL2-контекст. Поэтому карта, подписи, связи, выделение и hit testing на обоих бэкендах совпадают.
+Это не второй рендерер: тот же `WorldRenderer`, `web/` и `scene.wgsl` собираются с feature `webgl` и работают поверх WebGL2. Naga транслирует WGSL в GLSL ES 3.0, а GL-бэкенд wgpu создаёт WebGL2-контекст. Поэтому карта, подписи, связи, выделение и hit testing на обоих бэкендах совпадают.
 
 WebGL2 — это GLES 3.0, поэтому у него нет compute и storage-буферов. Terrain хранится в текстуре `Rgba32Float` и читается через `textureLoad`; лимиты устройства запрашиваются как `Limits::downlevel_webgl2_defaults()` (гарантированные 16 КиБ UBO и 2048 px текстуры). Шейдер использует только возможности ES 3.0: instancing, `fwidth`, `flat`, `discard`.
 

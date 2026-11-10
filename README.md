@@ -22,7 +22,7 @@ npm run dev
 
 Если установлен [just](https://github.com/casey/just) (он входит в Nix devShell), те же шаги выполняет `just dev`: при необходимости ставит npm-зависимости, автоматически устанавливает `wasm-bindgen-cli` 0.2.130 в `.tools/wasm-bindgen`, собирает WASM и запускает Vite. Без аргументов `just` запускает `just dev`. Список рецептов — `just --list`.
 
-`just install-hooks` включает git-хук, который перед коммитом проверяет форматирование Rust через `cargo fmt --check`. Отформатировать код — `just fmt`.
+`just install-hooks` включает git-хук, который перед коммитом проверяет форматирование Rust через `cargo fmt --check` и порядок модулей в `crates/` через `just check-order`. Отформатировать код — `just fmt`.
 
 Production-сборка деплоится на тестовый сервер через `just deploy <host> [ssh-port]`. Адрес сервера не хранится в репозитории и передаётся аргументом. Внутри сервера статика раздаётся по HTTP на порту 8081, откуда её забирает внешний reverse-proxy.
 
@@ -58,11 +58,11 @@ npm run preview     # production-версия после npm run build
 
 ## Структура и границы
 
-- `crates/simulation/src/lib.rs`: данные ECS, генерация карты, fixed-step системы, WASM API и тесты. Rust не зависит от DOM или React.
+- `crates/simulation/src/`: `genome.rs` (архетипы и ABI генома), `terrain.rs` (карта), `components.rs` (ECS-компоненты), `simulation/` (WASM API, fixed-step системы, связи и тесты). Rust не зависит от DOM или React.
 - `frontend/simulation.worker.ts`: очередь команд, загрузка WASM, часы и перенос снимков на главный поток.
 - `frontend/model.ts`: контракт команд и представление генома в UI.
 - `frontend/WorldView.tsx`: выбор бэкенда (`auto`/`webgpu`/`webgl`) и повторный монтаж при потере WebGPU-устройства. `RustWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
-- `crates/frontend/src/web.rs`: прямой wgpu-рендерер, GPU-буферы, resize и освобождение ресурсов. `scene_data.rs`: подготовка инстансов связей и native-тесты.
+- `crates/frontend/src/web/`: прямой wgpu-рендерер (`backend.rs`, `labels.rs`, `gpu.rs`, `renderer.rs`, `repaint.rs`, `mod.rs`), GPU-буферы, resize и освобождение ресурсов. `scene_data.rs`: подготовка инстансов связей и native-тесты.
 - `crates/frontend/src/scene.wgsl`: инстансинг клеток и связей, SDF-оформление, карта и подписи. egui/eframe не используются.
 - `frontend/main.tsx`: HTML/React-редактор и управление экспериментом.
 - `docs/architecture.md`: ABI, порядок систем, сетевое расширение и ограничения.

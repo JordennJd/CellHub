@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Проверяет форматирование Rust-файлов перед коммитом.
+# Проверяет форматирование и порядок модулей Rust-файлов перед коммитом.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
@@ -12,5 +12,10 @@ fi
 
 if ! bash "$repo_root/scripts/rust.sh" fmt --all -- --check; then
   echo "✗ Rust-файлы не отформатированы. Выполните: just fmt (или cargo fmt --all)" >&2
+  exit 1
+fi
+
+if ! python3 "$repo_root/scripts/module_order.py" "$repo_root"/crates/*/src/lib.rs; then
+  echo "✗ Нарушен порядок модулей. Исправьте порядок mod/use в crates/*/src." >&2
   exit 1
 fi
