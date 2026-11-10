@@ -34,7 +34,7 @@ npm run check       # проверка TypeScript (после сборки WASM)
 npm run preview     # production-версия после npm run build
 ```
 
-`dist/` можно раздавать любым статическим HTTP-сервером с MIME `application/wasm`. Web Worker и WASM не загружаются через `file://`. COOP/COEP не требуются: SharedArrayBuffer пока не используется. Canvas рисуется через Rust/wgpu: сначала выбирается WebGPU, а если его нет или инициализация не удалась — тот же рендерер и те же WGSL-шейдеры запускаются через WebGL2. Для WebGPU нужны secure context и поддержка браузером; WebGL2 работает как автоматический резерв, поэтому принудительно включить его можно через `?renderer=webgl`, а WebGPU — через `?renderer=webgpu`. Активный бэкенд доступен в атрибуте `data-renderer` канваса для диагностики. Android поддерживается как адаптивная веб-страница, не APK; на устройстве пока не проверено.
+`dist/` можно раздавать любым статическим HTTP-сервером с MIME `application/wasm`. Web Worker и WASM не загружаются через `file://`. COOP/COEP не требуются: SharedArrayBuffer пока не используется. Canvas рисуется через Rust/wgpu. При загрузке приложение пытается запустить WebGPU; если это не удалось, кнопка WebGPU в шапке блокируется, а рендерер принудительно переключается на WebGL2. Перезагрузка страницы повторяет попытку WebGPU. Две кнопки WebGPU/WebGL позволяют переключать бэкенд вручную; принудительный WebGL также доступен через `?renderer=webgl`. Активный бэкенд доступен в атрибуте `data-renderer` канваса для диагностики. Android поддерживается как адаптивная веб-страница, не APK; на устройстве пока не проверено.
 
 ## Как пользоваться
 
@@ -62,7 +62,7 @@ npm run preview     # production-версия после npm run build
 - `crates/simulation/src/`: `genome.rs` (архетипы и ABI генома), `terrain.rs` (карта), `components.rs` (ECS-компоненты), `simulation/` (WASM API, fixed-step системы, связи и тесты). Rust не зависит от DOM или React.
 - `frontend/simulation.worker.ts`: очередь команд, загрузка WASM, часы и перенос снимков на главный поток.
 - `frontend/model.ts`: контракт команд и представление генома в UI.
-- `frontend/WorldView.tsx`: выбор бэкенда (`auto`/`webgpu`/`webgl`) и повторный монтаж при потере WebGPU-устройства. `RustWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
+- `frontend/WorldView.tsx`: выбор бэкенда, повторный монтаж при сбое и принудительный переход на WebGL. `frontend/backend.ts`: начальный выбор WebGPU и тип бэкенда. `frontend/RendererToggle.tsx`: две кнопки WebGPU/WebGL с блокировкой WebGPU после ошибки. `RustWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
 - `crates/frontend/src/web/`: прямой wgpu-рендерер (`backend.rs`, `labels.rs`, `gpu.rs`, `renderer.rs`, `repaint.rs`, `mod.rs`), GPU-буферы, resize и освобождение ресурсов. `scene_data.rs`: подготовка инстансов связей и native-тесты.
 - `crates/frontend/src/scene.wgsl`: инстансинг клеток и связей, SDF-оформление, карта и подписи. egui/eframe не используются.
 - `frontend/main.tsx`: HTML/React-редактор и управление экспериментом.

@@ -76,6 +76,47 @@ header {
   border-color: #344034;
   font-size: 12px;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.renderer-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: #111c17e8;
+  border: 1px solid #354636;
+  border-radius: 6px;
+}
+.renderer-toggle button {
+  border: 0;
+  background: none;
+  padding: 6px 9px;
+  border-radius: 4px;
+  color: #899d88;
+  font:
+    9px "IBM Plex Mono",
+    monospace;
+  letter-spacing: 0.5px;
+}
+.renderer-toggle button:hover {
+  background: #2d4032;
+}
+.renderer-toggle button.active {
+  color: #d0e3b5;
+  background: #34452d;
+}
+.renderer-toggle button:disabled {
+  text-decoration: line-through;
+}
+.renderer-toggle button:disabled:hover {
+  background: none;
+}
+.renderer-blocked {
+  margin-left: 4px;
+  color: #d59a88;
+}
 main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 350px;
@@ -734,10 +775,17 @@ dd {
   .brand {
     font-size: 22px;
   }
-  header > .quiet {
+  .header-actions {
+    gap: 6px;
+  }
+  .renderer-toggle button {
+    padding: 6px 7px;
+    font-size: 8px;
+  }
+  .header-actions .quiet {
     font-size: 0;
   }
-  header > .quiet:first-letter {
+  .header-actions .quiet:first-letter {
     font-size: 15px;
   }
   main {
@@ -854,8 +902,8 @@ dd {
 .bottom-bar { font-size: 11px; }
 @media (max-width: 720px) {
   .layer-control { top: 18px; right: 14px; width: 185px; }
-  header > .quiet { font-size: 11px; }
-  header > .quiet:first-letter { font-size: inherit; }
+  .header-actions .quiet { font-size: 11px; }
+  .header-actions .quiet:first-letter { font-size: inherit; }
   .bottom-bar { font-size: 10px; line-height: 1.6; }
   .lab { min-height: 420px; }
 }

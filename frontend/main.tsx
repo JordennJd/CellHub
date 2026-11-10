@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { WorldView, type ViewState } from "./WorldView";
+import { RendererToggle } from "./RendererToggle";
+import { initialBackend, type BackendPreference } from "./backend";
 import {
   defaultGenome,
   multicellularGenome,
@@ -33,6 +35,8 @@ function App() {
     [tool, setTool] = useState("place"),
     [layer, setLayer] = useState("biome"),
     [selected, setSelected] = useState<number | null>(null),
+    [backend, setBackend] = useState<BackendPreference>(initialBackend),
+    [webgpuBlocked, setWebgpuBlocked] = useState(false),
     [view, setView] = useState<ViewState>({ zoom: 1, x: 0, y: 0 }),
     [recenter, setRecenter] = useState(0),
     [error, setError] = useState(""),
@@ -42,6 +46,23 @@ function App() {
   const slotNames = useRef(new Map<string, string[]>());
   const selection = useRef(selected);
   selection.current = selected;
+  function changeBackend(next: BackendPreference) {
+    setBackend(next);
+    setError("");
+  }
+  function backendFailed(failed: BackendPreference, message: string) {
+    console.warn(`CellHub: ${failed} renderer failed`, message);
+    if (failed === "webgpu") {
+      setWebgpuBlocked(true);
+      setBackend("webgl");
+      setError("");
+      setNotice(
+        "WebGPU недоступен — включён WebGL. Кнопка WebGPU заблокирована до перезагрузки.",
+      );
+      return;
+    }
+    setError(message);
+  }
   function send(c: Command) {
     if (c.type === "spawn" || c.type === "edit")
       slotNames.current.set(Array.from(c.genome).join(","), genome.map((slot) => slot.name));
@@ -181,9 +202,16 @@ function App() {
           <span className="brandmark" aria-hidden="true">◉</span> CellHub
         </div>
         {!ready && <span role="status">Загрузка…</span>}
-        <button className="quiet" onClick={save}>
-          ↓ Сохранить геном
-        </button>
+        <div className="header-actions">
+          <RendererToggle
+            value={backend}
+            webgpuBlocked={webgpuBlocked}
+            onChange={changeBackend}
+          />
+          <button className="quiet" onClick={save}>
+            ↓ Сохранить геном
+          </button>
+        </div>
       </header>
       <main>
         <section className="lab">
@@ -195,7 +223,9 @@ function App() {
             onPoint={point}
             onView={setView}
             onError={setError}
+            onBackendFailure={backendFailed}
             recenter={recenter}
+            backend={backend}
           />
           {touchControls && <div className="map-toolbar" aria-label="Инструменты карты">
             <div className="segmented">

@@ -2,15 +2,19 @@ import { useEffect, useRef } from "react";
 import init, { WorldRenderer } from "./rust-wasm/cellhub_frontend.js";
 import { bindCanvasControls } from "./input/canvas-controls";
 import { WORLD, STRIDE, type Frame } from "./model";
+import type { BackendPreference } from "./backend";
 import type { WorldViewProps } from "./world-view-types";
+export type { BackendPreference } from "./backend";
 let moduleReady: Promise<unknown> | undefined;
 const layerIndex = (layer: string) =>
   ({ biome: 0, light: 1, radiation: 2, food: 3 } as Record<string, number>)[
     layer
   ] ?? 0;
 
-export type BackendPreference = "auto" | "webgpu" | "webgl";
-type RustWorldViewProps = WorldViewProps & { backend: BackendPreference };
+type RustWorldViewProps = WorldViewProps & {
+  backend: BackendPreference;
+  onBackendFailure: (message: string) => void;
+};
 
 export function RustWorldView(props: RustWorldViewProps) {
   const host = useRef<HTMLDivElement>(null),
@@ -86,7 +90,7 @@ export function RustWorldView(props: RustWorldViewProps) {
       el.appendChild(value);
       return value;
     };
-    let canvas = mountCanvas();
+    const canvas = mountCanvas();
 
     const reset = () => {
       const c = camera.current;
@@ -131,19 +135,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           throw e;
         }));
         if (disposed) return;
-        let instance: WorldRenderer;
-        try {
-          instance = await WorldRenderer.create(canvas, props.backend);
-        } catch (e) {
-          if (disposed) return;
-          if (props.backend !== "auto") throw e;
-          // A canvas keeps the first context type forever. If WebGPU got far
-          // enough to claim it, start over on a fresh canvas with WebGL2.
-          console.warn("CellHub: WebGPU failed, retrying with WebGL", e);
-          canvas.remove();
-          canvas = mountCanvas();
-          instance = await WorldRenderer.create(canvas, "webgl");
-        }
+        const instance = await WorldRenderer.create(canvas, props.backend);
         if (disposed) {
           instance.destroy();
           instance.free();
@@ -151,7 +143,7 @@ export function RustWorldView(props: RustWorldViewProps) {
         }
         renderer.current = instance;
         instance.set_error_handler((message: string) => {
-          if (!disposed) live.current.onError(message);
+          if (!disposed) live.current.onBackendFailure(message);
         });
         const backend = instance.backend();
         canvas.dataset.renderer = backend;
@@ -167,7 +159,9 @@ export function RustWorldView(props: RustWorldViewProps) {
             ?.getConfiguration?.()
             ?.device.lost.then((info) => {
               if (!disposed && info.reason !== "destroyed")
-                live.current.onError(`WebGPU device lost: ${info.message}`);
+                live.current.onBackendFailure(
+                  `WebGPU device lost: ${info.message}`,
+                );
             });
         }
         addControls();
@@ -175,7 +169,7 @@ export function RustWorldView(props: RustWorldViewProps) {
         applyView(true);
         reportView(true);
       } catch (e) {
-        if (!disposed) live.current.onError(`Renderer: ${String(e)}`);
+        if (!disposed) live.current.onBackendFailure(`Renderer: ${String(e)}`);
       }
     })();
 

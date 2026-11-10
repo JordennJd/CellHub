@@ -109,7 +109,10 @@ try {
   await call("Page.navigate", {url:`${url}/?paused`});
   await until("!!document.querySelector('.world canvas[data-renderer]') && window.__cellhubFrame");
   const hasWebGPU = await evaluate("document.querySelector('.world canvas').dataset.renderer==='webgpu'");
-  console.log("PASS: real Rust renderer initialized (WebGPU or WebGL fallback)");
+  assert.equal(await evaluate("document.querySelectorAll('.renderer-toggle button').length"),2);
+  assert.equal(await evaluate("document.querySelector('.renderer-toggle [aria-pressed=true]').dataset.backend"),hasWebGPU?"webgpu":"webgl");
+  assert.equal(await evaluate("document.querySelector('[data-backend=webgpu]').disabled"),!hasWebGPU);
+  console.log("PASS: real Rust renderer initialized (WebGPU or forced WebGL fallback)");
   assert.equal(await evaluate("document.querySelector('.app').dataset.controls"),"mouse");
   assert.equal(await evaluate("document.querySelector('.map-toolbar')"),null);
   assert(await evaluate("!/(WASM|RUST|LAB|SEED|experimental|Большие возможности|КОНСТРУКТОР ЖИЗНИ)/.test(document.body.innerText)"));
@@ -308,8 +311,19 @@ try {
   // run; validate WebGL2 in a Chrome started with `--enable-unsafe-swiftshader
   // --use-angle=swiftshader`.
   if (await evaluate("!!document.createElement('canvas').getContext('webgl2')")) {
-    await call("Page.navigate",{url:`${url}/?renderer=webgl&paused`});
-    await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl' && document.querySelector('.world canvas')");
+    await call("Page.navigate",{url:`${url}/?paused`});
+    await until("!!document.querySelector('.world canvas[data-renderer]') && window.__cellhubFrame");
+    if (hasWebGPU) {
+      assert.equal(await evaluate("document.querySelector('.renderer-toggle [aria-pressed=true]').dataset.backend"),"webgpu");
+      assert(!(await evaluate("document.querySelector('[data-backend=webgpu]').disabled")));
+      await evaluate("document.querySelector('[data-backend=webgl]').click()");
+      await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl' && document.querySelector('.renderer-toggle [aria-pressed=true]')?.dataset.backend==='webgl' && window.__cellhubFrame");
+      console.log("PASS: manual RendererToggle switches a live scene to WebGL");
+    } else {
+      assert.equal(await evaluate("document.querySelector('.renderer-toggle [aria-pressed=true]').dataset.backend"),"webgl");
+      assert(await evaluate("document.querySelector('[data-backend=webgpu]').disabled"));
+      console.log("PASS: failed WebGPU is blocked in the UI and WebGL is forced");
+    }
     await evaluate("document.querySelector('[role=switch]').click()"); await delay(80);
     await click("Пример: многоклеточный организм");
     await clickWorld(600,900);await click("4×");
