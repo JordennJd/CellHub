@@ -1,0 +1,84 @@
+.arena-shell .canvas-actions {
+  gap: 12px;
+}
+
+.arena-zoom {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.arena-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.7px;
+}
+
+.arena-status.online {
+  border-color: #9bb49f;
+  color: var(--accent);
+}
+
+.arena-status small {
+  color: var(--muted);
+  font: inherit;
+  letter-spacing: 0;
+}
+
+.arena-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #9aa79a;
+}
+
+.arena-status.online .arena-status-dot {
+  background: #3e8f5f;
+  box-shadow: 0 0 8px #3e8f5f66;
+}
+
+.arena-room-metrics {
+  display: grid;
+  gap: 0;
+  margin: 0 0 16px;
+}
+
+.arena-room-metrics > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.arena-room-metrics dt {
+  color: var(--muted);
+}
+
+.arena-room-metrics dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.arena-room-metrics code {
+  font-size: 12px;
+}
+
+.arena-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.arena-shell .transport {
+  min-height: 64px;
+}

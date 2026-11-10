@@ -698,10 +698,11 @@ progress {
   max-height: calc(100dvh - 40px);
   overflow: auto;
   padding: 24px;
-  border: 1px solid #465a3d;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #131e18;
-  box-shadow: 0 24px 80px #000a;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 24px 80px #0006;
 }
 .online-panel > header {
   height: auto;
@@ -723,40 +724,38 @@ progress {
   padding: 0 3px;
   font-size: 25px;
   line-height: 1;
-  color: #93a58b;
+  color: var(--muted);
 }
 .online-note {
   margin: 12px 0;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
-  color: #93a58b;
+  color: var(--muted);
 }
 .online-field {
   display: flex;
   flex-direction: column;
   gap: 7px;
   margin: 11px 0;
-  font-size: 10px;
-  letter-spacing: 0.5px;
-  color: #9bac92;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--muted);
 }
 .online-field input {
   width: 100%;
   padding: 10px;
-  color: #dce6dc;
-  background: #0d1711;
-  border: 1px solid #354c36;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  font:
-    12px "IBM Plex Mono",
-    monospace;
+  font-size: 13px;
 }
 .online-primary {
   width: 100%;
   margin-top: 8px;
   padding: 12px;
-  color: #162411;
-  background: #bedb92;
+  color: #fff;
+  background: var(--accent);
   border: 0;
   font-weight: 600;
 }
@@ -783,7 +782,8 @@ progress {
   gap: 16px;
   text-align: left;
   padding: 11px 13px;
-  background: #17251c;
+  background: #f7faf5;
+  border: 1px solid var(--border);
 }
 .online-room-row > span {
   display: flex;
@@ -795,32 +795,32 @@ progress {
   text-align: right;
 }
 .online-room-row b {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 .online-room-row small {
-  font-size: 9px;
-  color: #84987d;
+  font-size: 10px;
+  color: var(--muted);
 }
 .online-room-row i {
   min-width: 66px;
-  font-size: 10px;
+  font-size: 11px;
   font-style: normal;
-  color: #bcd99e;
+  color: var(--accent);
   text-align: right;
 }
 .online-empty {
   padding: 18px;
-  border: 1px dashed #354531;
+  border: 1px dashed var(--border);
   border-radius: 7px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
-  color: #879a7e;
+  color: var(--muted);
 }
 .online-room {
   margin-top: 18px;
   padding-top: 18px;
-  border-top: 1px solid #2c3d2a;
+  border-top: 1px solid var(--border);
 }
 .online-room-head {
   display: flex;
@@ -834,13 +834,11 @@ progress {
 }
 .online-code {
   padding: 7px 10px;
-  border: 1px solid #4a6042;
+  border: 1px solid var(--border);
   border-radius: 5px;
-  font:
-    12px "IBM Plex Mono",
-    monospace;
+  font-size: 13px;
   letter-spacing: 2px;
-  color: #c4dfa8;
+  color: var(--accent);
 }
 .online-metrics {
   display: grid;
@@ -853,22 +851,18 @@ progress {
   flex-direction: column;
   gap: 6px;
   padding: 10px;
-  background: #0f1a13;
-  border: 1px solid #2c3d2a;
+  background: #f7faf5;
+  border: 1px solid var(--border);
   border-radius: 6px;
 }
 .online-metrics span {
-  font:
-    8px "IBM Plex Mono",
-    monospace;
-  letter-spacing: 0.8px;
-  color: #84977c;
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
 }
 .online-metrics b {
-  font:
-    15px "IBM Plex Mono",
-    monospace;
-  color: #d4e7c3;
+  font-size: 16px;
+  color: var(--text);
 }
 .online-actions {
   display: flex;

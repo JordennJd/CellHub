@@ -10,7 +10,7 @@
 //! arrives in a chunk (or as soon as the acknowledgement arrives, if the cell
 //! is already known).
 
-import type { Frame } from "../model";
+import { MODE_STRIDE, type Frame } from "../model";
 import {
   CHUNK_COUNT,
   CHUNK_SIZE,
@@ -194,9 +194,9 @@ export class PredictionWorld {
     genome: Float32Array,
     now = performance.now(),
   ) {
-    const stride = 12;
-    const index = mode * stride;
-    if (index < 0 || index + stride > genome.length) return;
+    // `flatten` prepends a two-value ABI header before the 19-float rows.
+    const index = 2 + mode * MODE_STRIDE;
+    if (index < 0 || index + MODE_STRIDE > genome.length) return;
     const kind = Math.round(genome[index]);
     const geneSpeed = genome[index + 5];
     const speed = kind === 2 ? geneSpeed : geneSpeed * 0.15;
@@ -352,5 +352,7 @@ function writeCell(cells: Float32Array, offset: number, cell: SceneCell) {
   cells[offset + 7] = cell.generation;
   cells[offset + 8] = cell.mutations;
   cells[offset + 9] = cell.angle;
+  cells[offset + 10] = cell.speed;
+  cells[offset + 11] = cell.linked ? 1 : 0;
   return offset + RENDER_STRIDE;
 }

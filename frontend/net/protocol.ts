@@ -7,7 +7,8 @@ export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
 export const TERRAIN_SIZE = 48;
 export const TERRAIN_TILES_PER_CHUNK = TERRAIN_SIZE / CHUNKS_PER_AXIS;
 export const CELL_STRIDE = 12;
-export const RENDER_STRIDE = 10;
+/** Client frame layout matches the renderer and the local model: 12 floats. */
+export const RENDER_STRIDE = 12;
 const BIN_CHUNK = 1;
 
 export type RoomInfo = {

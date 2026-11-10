@@ -13,7 +13,7 @@ import { saveEntry, type LibraryEntry, type GenomeData, type PlateData } from '.
 import { readSettings } from './Settings';
 export type Session = {
     key: string;
-    kind: 'sandbox' | 'challenge' | 'tutorial';
+    kind: 'sandbox' | 'challenge' | 'tutorial' | 'arena';
     challengeId?: string;
     tutorialId?: string;
     entry?: LibraryEntry;

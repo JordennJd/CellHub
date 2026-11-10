@@ -33,7 +33,7 @@ try{
  };`});
  await call('Page.navigate',{url});await until("document.querySelector('.home-shell')");
  assert.deepEqual(await evaluate("[...document.querySelectorAll('.home-mode-card')].map(button=>({title:button.querySelector('.home-mode-title').textContent,disabled:button.disabled}))"),[
-  {title:'Испытания',disabled:false},{title:'Песочница',disabled:false},{title:'Хаос',disabled:true},{title:'Арена',disabled:true}
+  {title:'Испытания',disabled:false},{title:'Песочница',disabled:false},{title:'Хаос',disabled:true},{title:'Арена',disabled:false}
  ]);
  assert.equal(await evaluate("document.querySelectorAll('.future-section').length"),0);
  await screenshot('work/cellhub-home.png');await openSandbox();

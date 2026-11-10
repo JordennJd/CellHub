@@ -30,7 +30,7 @@ function ModeCard({ kind, title, description, onClick }: {
         <span className="home-mode-title" id={`mode-${kind}-title`}>{title}</span>
         <span className="home-mode-description" id={`mode-${kind}-description`}>{description}</span>
         <span className="home-mode-status" id={`mode-${kind}-status`}>
-            {onClick ? <><span>{kind === 'sandbox' ? 'Начать' : 'Выбрать'}</span><span aria-hidden="true">→</span></> : 'Пока недоступно'}
+            {onClick ? <><span>{kind === 'sandbox' ? 'Начать' : kind === 'arena' ? 'Войти' : 'Выбрать'}</span><span aria-hidden="true">→</span></> : 'Пока недоступно'}
         </span>
     </button>;
 }
@@ -68,7 +68,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
                     <ModeCard kind="challenge" title="Испытания" description="Задачи с заданными условиями и целями." onClick={() => setPage('challenges')}/>
                     <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
                     <ModeCard kind="chaos" title="Хаос" description="Биомы, паразиты и сложные экосистемы."/>
-                    <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками."/>
+                    <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками." onClick={() => onStart({ kind: 'arena' })}/>
                 </div>
                 <div className="home-secondary-grid">
                     <section className="home-panel" aria-labelledby="home-tutorials">
