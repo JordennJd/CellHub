@@ -1,13 +1,18 @@
 //! Cell simulation: public wasm ABI and tick orchestration.
 
 mod bonds;
+mod biology;
+mod environment;
+mod persistence;
+mod tools;
 mod step;
 #[cfg(test)]
 mod tests;
 
-use crate::components::{Cell, LIMIT, Position, SIZE, radius};
+use crate::components::{Cell, LIMIT, Position, SIZE, SNAPSHOT_STRIDE, radius};
 use crate::genome::{Genome, decode};
 use crate::terrain::{Tile, map};
+use environment::Environment;
 use hecs::World;
 use std::collections::BTreeSet;
 use wasm_bindgen::prelude::*;
@@ -26,6 +31,7 @@ pub struct Simulation {
     frame: Vec<f32>,
     // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
     bonds: BTreeSet<(u32, u32)>,
+    settings: Environment,
 }
 
 #[wasm_bindgen]
@@ -44,11 +50,85 @@ impl Simulation {
             infections: 0,
             frame: Vec::new(),
             bonds: BTreeSet::new(),
+            settings: Environment::default(),
         }
     }
 
     pub fn reset(&mut self) {
         *self = Self::new(self.seed);
+    }
+
+    /// Remove living cells while retaining the current substrate, time and settings.
+    pub fn sterilize(&mut self) {
+        self.deaths += self.world.len();
+        self.world.clear();
+        self.bonds.clear();
+        self.frame.clear();
+    }
+
+    pub fn configure(
+        &mut self,
+        light: f32,
+        food: f32,
+        radiation: f32,
+        viscosity: f32,
+        aging: bool,
+        kill_at_edge: bool,
+        only_point_mutations: Option<bool>,
+        gravity: Option<f32>,
+        density: Option<f32>,
+    ) -> Result<(), JsError> {
+        self.configure_environment(Environment {
+            light,
+            food,
+            radiation,
+            viscosity,
+            aging,
+            kill_at_edge,
+            only_point_mutations: only_point_mutations.unwrap_or(false),
+            gravity: gravity.unwrap_or(0.),
+            density: density.unwrap_or(0.),
+        })
+        .map_err(|error| JsError::new(&error))
+    }
+
+    pub fn environment(&self) -> Vec<f32> {
+        let s = self.settings;
+        vec![
+            s.light,
+            s.food,
+            s.radiation,
+            s.viscosity,
+            s.aging as u8 as f32,
+            s.kill_at_edge as u8 as f32,
+            s.only_point_mutations as u8 as f32,
+            s.gravity,
+            s.density,
+        ]
+    }
+
+    pub fn remove(&mut self, id: u32) -> Result<(), JsError> {
+        self.remove_cell(id).map_err(|error| JsError::new(&error))
+    }
+
+    pub fn boost(&mut self, id: u32) -> Result<(), JsError> {
+        self.boost_cell(id).map_err(|error| JsError::new(&error))
+    }
+
+    pub fn move_cell(&mut self, id: u32, x: f32, y: f32) -> Result<(), JsError> {
+        self.reposition_cell(id, x, y)
+            .map_err(|error| JsError::new(&error))
+    }
+
+    /// Versioned exact numeric state; the worker provides the JSON envelope.
+    pub fn export_state(&self) -> Vec<f64> {
+        self.encode_state()
+    }
+
+    /// Validate into a new world first, then atomically replace the current world.
+    pub fn restore_state(&mut self, values: &[f64]) -> Result<(), JsError> {
+        self.restore_checked(values)
+            .map_err(|error| JsError::new(&error))
     }
 
     pub fn spawn(&mut self, x: f32, y: f32, mode: usize, values: &[f32]) -> Result<u32, JsError> {
@@ -79,6 +159,7 @@ impl Simulation {
                 generation: 0,
                 mutations: 0,
                 cooldown: 0.,
+                mirrored: false,
             },
             genome,
         ));
@@ -127,7 +208,7 @@ impl Simulation {
 
     pub fn snapshot(&mut self) -> Vec<f32> {
         self.frame.clear();
-        let mut rows: Vec<_> = self
+        let mut rows: Vec<[f32; SNAPSHOT_STRIDE]> = self
             .world
             .query::<(&Position, &Cell, &Genome)>()
             .iter()
@@ -143,6 +224,13 @@ impl Simulation {
                     c.generation as f32,
                     c.mutations as f32,
                     p.angle,
+                    if g.mode(c.mode).color[0] < 0. {
+                        -1.
+                    } else {
+                        let [r, green, b] = g.mode(c.mode).color.map(|v| (v * 255.).round() as u32);
+                        ((r << 16) | (green << 8) | b) as f32
+                    },
+                    c.mirrored as u8 as f32,
                 ]
             })
             .collect();

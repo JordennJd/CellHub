@@ -13,8 +13,9 @@
     "preview": "vite preview --host 127.0.0.1",
     "test:wasm": "npm run build:wasm && node --test scripts/simulation.test.mjs",
     "test:browser": "node scripts/browser-smoke.mjs",
-    "test:model": "node --experimental-strip-types --test scripts/model.test.mjs",
-    "test": "npm run test:rust && npm run test:model && npm run test:wasm"
+    "test:model": "node --experimental-strip-types --test scripts/model.test.mjs scripts/controls.test.mjs",
+    "test:game": "npm run build:wasm && node scripts/game.test.mjs",
+    "test": "npm run test:rust && npm run test:model && npm run test:wasm && node scripts/game.test.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",

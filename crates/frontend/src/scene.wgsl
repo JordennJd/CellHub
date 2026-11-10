@@ -50,16 +50,19 @@ struct CellOut {
     @location(3) @interpolate(flat) angle:f32,
     @location(4) @interpolate(flat) mutations:f32,
     @location(5) @interpolate(flat) selected:u32,
+    @location(6) @interpolate(flat) custom_color:f32,
 }
-@vertex fn cell_vs(@builtin(vertex_index) v:u32,@location(0) a:vec4f,@location(1) b:vec4f,@location(2) c:vec2f)->CellOut {
-    // Original snapshot: id,x,y,radius, kind,mass,age,generation, mutations,angle.
+@vertex fn cell_vs(@builtin(vertex_index) v:u32,@location(0) a:vec4f,@location(1) b:vec4f,@location(2) c:vec4f)->CellOut {
+    // id,x,y,radius, kind,mass,age,generation, mutations,angle,RGB,mirrored.
     var o:CellOut;let extent=max(a.w*2.+2.,a.w+9.);o.local=corner(v)*extent;
-    o.pos=project(a.yz+o.local);o.radius=a.w;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);return o;
+    o.pos=project(a.yz+o.local);o.radius=a.w;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);o.custom_color=c.z;return o;
 }
 fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a,v)/max(dot(v,v),0.0001),0.,1.);return length(p-a-v*t);}
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
     let palette=array<u32,6>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u);
-    let color=rgb(palette[min(o.kind,5u)]);let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
+    var color=rgb(palette[min(o.kind,5u)]);
+    if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
+    let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
     let halo=coverage(d-r-3.);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.7);
     let nucleus=coverage(length(o.local-direction*r*0.2)-r*0.29);
     let tail=coverage(segment_distance(o.local,-direction*r,-direction*r*2.)-0.5);

@@ -1,9 +1,9 @@
 //! Small wgpu resource builders and the vertex layouts they share.
 
-pub(super) const CELL_STRIDE: u64 = 40;
+pub(super) const CELL_STRIDE: u64 = 48;
 pub(super) const LINK_STRIDE: u64 = 24;
 pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2];
+    wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 pub(super) const LINK_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2];
 

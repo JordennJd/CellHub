@@ -1,16 +1,18 @@
 use std::collections::HashMap;
 
+pub(crate) const CELL_VALUES: usize = 12;
+
 /// Resolve stable IDs once per snapshot, then upload one instance per bond.
 /// Layout: ax, ay, bx, by, id_a, id_b (six float32 values).
 pub(crate) fn pack_links(cells: &[f32], links: &[u32]) -> Result<Vec<f32>, &'static str> {
-    if cells.len() % 10 != 0 || links.len() % 2 != 0 {
+    if cells.len() % CELL_VALUES != 0 || links.len() % 2 != 0 {
         return Err("Invalid bond snapshot length");
     }
     if links.is_empty() {
         return Ok(Vec::new());
     }
-    let mut positions = HashMap::with_capacity(cells.len() / 10);
-    for cell in cells.chunks_exact(10) {
+    let mut positions = HashMap::with_capacity(cells.len() / CELL_VALUES);
+    for cell in cells.chunks_exact(CELL_VALUES) {
         let id = cell[0] as u32;
         if id == 0
             || id as f32 != cell[0]
@@ -38,7 +40,8 @@ mod tests {
     use super::*;
     fn cells() -> Vec<f32> {
         vec![
-            9., 40., 50., 10., 0., 1., 0., 0., 0., 0., 2., 10., 20., 10., 2., 1., 0., 0., 0., 0.,
+            9., 40., 50., 10., 0., 1., 0., 0., 0., 0., -1., 0., 2., 10., 20., 10., 2., 1., 0., 0.,
+            0., 0., -1., 0.,
         ]
     }
     #[test]

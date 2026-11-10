@@ -68,10 +68,10 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
       return;
     }
     start = { ...point, camera: { ...camera }, id: event.pointerId, pointerType: event.pointerType,
-      action: touch ? options.tool() : event.button === 1 ? "pan" : event.button === 2 ? "select" : "place" };
+      action: touch ? options.tool() : event.button === 1 ? "pan" : event.button === 2 ? "select" : options.tool() };
     moved = false;
     repeated = false;
-    if (event.pointerType === "mouse" && event.button === 0) {
+    if (event.pointerType === "mouse" && event.button === 0 && start.action === "place") {
       mousePosition = point;
       holdTimer = setTimeout(() => {
         repeated = true;
@@ -113,7 +113,7 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
     if (!cancelled && start?.id === event.pointerId && (!moved || movingMouseClick) && !repeated && !multiTouch && start.action !== "pan") {
       const point = world(local(event));
       if (point.x >= 0 && point.y >= 0 && point.x <= worldSize && point.y <= worldSize)
-        options.onPoint(point, start.action === "select" ? "select" : "place");
+        options.onPoint(point, start.action === "place" ? "place" : "select");
     }
     pointers.delete(event.pointerId);
     pinch = null;
@@ -135,6 +135,12 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
   const cancel = (event: PointerEvent) => finish(event, true);
   const wheel = (event: WheelEvent) => {
     event.preventDefault();
+    // Zooming ends an active placement stroke, including its delayed repeats.
+    // Releasing the pointer after zoom must not place a cell at a new scale.
+    if (start) {
+      stopRepeating();
+      repeated = true;
+    }
     const point = local(event), before = world(point);
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1);
     camera.zoom = clampZoom(camera.zoom * Math.exp(-delta * 0.001));
