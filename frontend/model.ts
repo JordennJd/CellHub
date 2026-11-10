@@ -1,8 +1,8 @@
 export const WORLD = 3072;
 export const POPULATION_LIMIT = 20_000;
 export const STRIDE = 12;
-export const MODE_STRIDE = 19;
-export const GENOME_ABI_VERSION = -3;
+export const MODE_STRIDE = 22;
+export const GENOME_ABI_VERSION = -4;
 export const TYPES = [
   {
     name: "Фотоцит",
@@ -40,6 +40,12 @@ export const TYPES = [
     color: 0xf08373,
     info: "Забирает массу соседних клеток, кроме защищённых кератиноцитов.",
   },
+  {
+    name: "Нитроцит",
+    latin: "Nitrocyte",
+    color: 0x8ed6b3,
+    info: "Пополняет запас азота и передаёт избыток по постоянным связям.",
+  },
 ];
 export type Mode = {
   name: string;
@@ -62,6 +68,9 @@ export type Mode = {
   red: number;
   green: number;
   blue: number;
+  maxConnections: number;
+  nutrientPriority: number;
+  prioritizeWhenStarving: boolean;
 };
 export type NumericModeKey = {
   [K in keyof Mode]: Mode[K] extends number ? K : never;
@@ -72,6 +81,7 @@ export const newMode = (index: number): Mode => ({
   canDivide: true, bindChildren: false, keepAdhesionA: false, keepAdhesionB: false,
   childAngleA: 0, childAngleB: 0, mirrorA: false, mirrorB: false,
   red: -1, green: -1, blue: -1,
+  maxConnections: -1, nutrientPriority: 1, prioritizeWhenStarving: false,
 });
 export const defaultGenome = (): Mode[] =>
   [newMode(0)];
@@ -87,12 +97,14 @@ export const flatten = (g: Mode[]) => new Float32Array([GENOME_ABI_VERSION, g.le
   m.kind, m.threshold, m.childA, m.childB, m.ratio, m.speed, m.angle, m.lifespan,
   Number(m.canDivide), Number(m.bindChildren), Number(m.keepAdhesionA), Number(m.keepAdhesionB),
   m.childAngleA, m.childAngleB, Number(m.mirrorA), Number(m.mirrorB), m.red, m.green, m.blue,
+  m.maxConnections, m.nutrientPriority, Number(m.prioritizeWhenStarving),
 ])]);
 
 export function inflate(g: Float32Array): Mode[] {
-  const extended = g[0] === GENOME_ABI_VERSION;
+  const current = g[0] === GENOME_ABI_VERSION;
+  const extended = current || g[0] === -3;
   const legacy = !extended && g.length === 64;
-  const stride = extended ? MODE_STRIDE : legacy ? 8 : 12;
+  const stride = current ? MODE_STRIDE : extended ? 19 : legacy ? 8 : 12;
   const offset = extended ? 2 : 0;
   const count = extended ? g[1] : g.length / stride;
   if (!Number.isInteger(count) || count < 1 || g.length !== offset + count * stride || !g.every(Number.isFinite))
@@ -100,7 +112,9 @@ export function inflate(g: Float32Array): Mode[] {
   const modes = Array.from({ length: count }, (_, i) => {
     const a = Array.from(g.slice(offset + i * stride, offset + (i + 1) * stride),
       value => Math.round(value * 1e6) / 1e6);
-    const flags = legacy ? [] : [...a.slice(8, 12), ...(extended ? a.slice(14, 16) : [])];
+    const flags = legacy ? [] : a.slice(8, 12);
+    if (extended) flags.push(...a.slice(14, 16));
+    if (current) flags.push(a[21]);
     if (flags.some(v => v !== 0 && v !== 1)) throw new Error("Некорректные переключатели генома");
     return {
       ...newMode(i), kind: a[0], threshold: a[1], childA: a[2], childB: a[3],
@@ -109,9 +123,10 @@ export function inflate(g: Float32Array): Mode[] {
       keepAdhesionA: !legacy && a[10] === 1, keepAdhesionB: !legacy && a[11] === 1,
       ...(extended ? { childAngleA: a[12], childAngleB: a[13], mirrorA: a[14] === 1, mirrorB: a[15] === 1,
         red: a[16], green: a[17], blue: a[18] } : {}),
+      ...(current ? { maxConnections: a[19], nutrientPriority: a[20], prioritizeWhenStarving: a[21] === 1 } : {}),
     };
   });
-  return validateModes(modes, 3);
+  return validateModes(modes, 4);
 }
 
 // Removing an archetype redirects references to it to the following archetype
@@ -125,18 +140,20 @@ export function removeMode(genome: Mode[], index: number): Mode[] {
 }
 
 export function serializeGenome(genome: Mode[]): string {
-  return JSON.stringify({ version: 3, modes: validateModes(genome, 3) });
+  return JSON.stringify({ version: 4, modes: validateModes(genome, 4) });
 }
 
-function validateModes(modes: unknown, version: 1 | 2 | 3): Mode[] {
+function validateModes(modes: unknown, version: 1 | 2 | 3 | 4): Mode[] {
   if (!Array.isArray(modes) || modes.length < 1 || (version === 1 && modes.length !== 8))
     throw new Error("Неверный формат генома");
   const numeric: NumericModeKey[] = ["kind", "threshold", "childA", "childB", "ratio", "speed", "angle", "lifespan"];
   const extension = ["childAngleA", "childAngleB", "mirrorA", "mirrorB", "red", "green", "blue"] as const;
+  const resourceFields = ["maxConnections", "nutrientPriority", "prioritizeWhenStarving"] as const;
   return modes.map((source, i) => {
     if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("Некорректные настройки режима");
     const m = { ...source };
     if (version < 3) for (const key of extension) if (m[key] === undefined) m[key] = newMode(i)[key];
+    if (version < 4) for (const key of resourceFields) if (m[key] === undefined) m[key] = newMode(i)[key];
     if (version === 1) Object.assign(m, { canDivide: true, bindChildren: false, keepAdhesionA: false, keepAdhesionB: false });
     if ((m.name !== undefined && (typeof m.name !== "string" || !m.name.trim()))
       || numeric.some(key => typeof m[key] !== "number" || !Number.isFinite(m[key]))
@@ -146,6 +163,9 @@ function validateModes(modes: unknown, version: 1 | 2 | 3): Mode[] {
       || m.threshold < 1 || m.threshold > 8 || m.ratio < 0.2 || m.ratio > 0.8
       || m.speed < 0 || m.speed > 60 || Math.abs(m.angle) > 3.14 || m.lifespan < 20 || m.lifespan > 1000
       || Math.abs(m.childAngleA) > 3.14 || Math.abs(m.childAngleB) > 3.14
+      || !Number.isInteger(m.maxConnections) || m.maxConnections < -1 || m.maxConnections > POPULATION_LIMIT
+      || !Number.isFinite(m.nutrientPriority) || m.nutrientPriority < 0.25 || m.nutrientPriority > 4
+      || typeof m.prioritizeWhenStarving !== "boolean"
       || ["canDivide", "bindChildren", "keepAdhesionA", "keepAdhesionB", "mirrorA", "mirrorB"].some(key => typeof m[key] !== "boolean")
       || !([m.red, m.green, m.blue].every(v => v === -1) || [m.red, m.green, m.blue].every(v => v >= 0 && v <= 1)))
       throw new Error("Некорректные настройки режима");
@@ -155,14 +175,15 @@ function validateModes(modes: unknown, version: 1 | 2 | 3): Mode[] {
       lifespan: m.lifespan, canDivide: m.canDivide, bindChildren: m.bindChildren,
       keepAdhesionA: m.keepAdhesionA, keepAdhesionB: m.keepAdhesionB,
       childAngleA: m.childAngleA, childAngleB: m.childAngleB, mirrorA: m.mirrorA, mirrorB: m.mirrorB,
-      red: m.red, green: m.green, blue: m.blue };
+      red: m.red, green: m.green, blue: m.blue, maxConnections: m.maxConnections,
+      nutrientPriority: m.nutrientPriority, prioritizeWhenStarving: m.prioritizeWhenStarving };
   });
 }
 
 export function parseGenome(text: string): Mode[] {
   const raw = JSON.parse(text);
   if (Array.isArray(raw)) return validateModes(raw, 1);
-  if (raw?.version !== 2 && raw?.version !== 3) throw new Error("Неподдерживаемый формат генома");
+  if (raw?.version !== 2 && raw?.version !== 3 && raw?.version !== 4) throw new Error("Неподдерживаемый формат генома");
   return validateModes(raw.modes, raw.version);
 }
 
@@ -183,16 +204,18 @@ export function initialPopulation(count: number): { x: number; y: number; mode: 
   }));
 }
 
-export type Command =
+export type WorldCommand = (
   | { type: "spawn"; x: number; y: number; mode: number; genome: Float32Array }
   | { type: "edit"; id: number; mode: number; genome: Float32Array }
-  | { type: "inspect"; id: number }
-  | { type: "speed"; value: number }
-  | { type: "reset"; requestId?: string }
   | { type: "configure"; settings: Environment }
   | { type: "remove" | "boost"; id: number }
   | { type: "move"; id: number; x: number; y: number }
   | { type: "sterilize" }
+) & { atTick?: number };
+export type Command = WorldCommand
+  | { type: "inspect"; id: number }
+  | { type: "speed"; value: number }
+  | { type: "reset"; requestId?: string }
   | { type: "export"; requestId: string }
   | { type: "restore"; state: string; requestId?: string }
   | { type: "preview"; genome: Float32Array; mode: number; steps: number }
@@ -207,10 +230,11 @@ export type Environment = {
   onlyPointMutations: boolean;
   gravity: number;
   density: number;
+  nitrogen: number;
 };
 export const DEFAULT_ENVIRONMENT: Environment = {
   light: 1, food: 1, radiation: 1, viscosity: 1, aging: true, killAtEdge: false,
-  onlyPointMutations: false, gravity: 0, density: 0,
+  onlyPointMutations: false, gravity: 0, density: 0, nitrogen: 1,
 };
 export type Frame = {
   type: "frame";
@@ -218,4 +242,6 @@ export type Frame = {
   links: Uint32Array;
   terrain: Float32Array;
   stats: Float32Array;
+  nitrogen?: Float32Array;
+  nitrates?: Float32Array;
 };

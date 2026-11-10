@@ -1,7 +1,9 @@
 use super::Simulation;
 
-use crate::components::{Cell, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE};
-use crate::genome::MODE_STRIDE;
+use crate::components::{
+    Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE,
+};
+use crate::genome::{KIND_COUNT, MODE_STRIDE, NITROCYTE_KIND, decode_checked};
 use crate::terrain::tile_index;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -15,7 +17,7 @@ fn stationary_genes(kind: u8) -> Vec<f32> {
 
 #[test]
 fn only_phagocytes_consume_substrate_food() {
-    for kind in 0..6 {
+    for kind in 0..KIND_COUNT {
         let mut s = quiet_world();
         s.configure_environment(super::environment::Environment {
             light: 0.,
@@ -24,7 +26,9 @@ fn only_phagocytes_consume_substrate_food() {
             ..Default::default()
         })
         .unwrap();
-        s.spawn(2000., 1300., 0, &stationary_genes(kind)).unwrap();
+        let mut genes = decode_checked(&stationary_genes(0)).unwrap().values();
+        genes[2] = f32::from(kind);
+        s.spawn(2000., 1300., 0, &genes).unwrap();
         let tile = tile_index(2000., 1300.);
         let food = s.tiles[tile].food;
         s.advance(30);
@@ -55,7 +59,7 @@ fn bond_energy_is_synchronous_conservative_and_independent_of_entity_order() {
             cell.mass = masses[i];
         }
         s.bonds = edges.iter().map(|&(a, b)| (a + 100, b + 100)).collect();
-        s.exchange_bond_energy(0.5);
+        s.exchange_bond_energy(0.5, &s.bond_degrees());
         s.world
             .query::<&Cell>()
             .iter()
@@ -81,6 +85,130 @@ fn bond_energy_is_synchronous_conservative_and_independent_of_entity_order() {
         .abs()
             < 0.000001
     );
+}
+
+#[test]
+fn bond_energy_respects_base_and_starvation_priorities() {
+    let mass_after_exchange = |mass, priority, emergency| {
+        let mut s = quiet_world();
+        let donor = s.spawn(500., 500., 0, &stationary_genes(0)).unwrap();
+        let mut genes = decode_checked(&stationary_genes(0)).unwrap().values();
+        genes[22] = priority;
+        genes[23] = emergency;
+        let receiver = s.spawn(522., 500., 0, &genes).unwrap();
+        let target = entity(&s, receiver);
+        s.world.get::<&mut Cell>(target).unwrap().mass = mass;
+        s.bonds.insert((donor, receiver));
+        s.exchange_bond_energy(0.5, &s.bond_degrees());
+        let result = s.world.get::<&Cell>(target).unwrap().mass;
+        let remainder = s.world.get::<&Cell>(entity(&s, donor)).unwrap().mass;
+        assert!((result + remainder - (1. + mass)).abs() < 0.000001);
+        result
+    };
+    assert!(mass_after_exchange(1., 2., 0.) > mass_after_exchange(1., 1., 0.));
+    assert!(mass_after_exchange(0.5, 1., 1.) > mass_after_exchange(0.5, 1., 0.));
+    assert_eq!(
+        mass_after_exchange(0.9, 1., 1.),
+        mass_after_exchange(0.9, 1., 0.)
+    );
+}
+
+#[test]
+fn nitrogen_uptake_and_nitrocyte_supply_follow_environment_and_bonds() {
+    let mut s = quiet_world();
+    s.configure_environment(super::environment::Environment {
+        radiation: 0.,
+        nitrogen: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut genes = decode_checked(&stationary_genes(0)).unwrap().values();
+    genes[2] = f32::from(NITROCYTE_KIND);
+    let source = s.spawn(500., 500., 0, &genes).unwrap();
+    let recipients: Vec<_> = [522., 544., 566.]
+        .into_iter()
+        .map(|x| s.spawn(x, 500., 0, &stationary_genes(0)).unwrap())
+        .collect();
+    for (_, cell) in s.world.query_mut::<&mut Cell>() {
+        cell.nitrogen = 0.5;
+    }
+    s.bonds
+        .extend([(source, recipients[0]), (recipients[0], recipients[1])]);
+    s.advance(120);
+    let amount = |s: &Simulation, id| s.world.get::<&Cell>(entity(s, id)).unwrap().nitrogen;
+    assert!(amount(&s, source) > 0.5);
+    assert!(amount(&s, recipients[1]) > amount(&s, recipients[2]) + 0.05);
+    let unfed = amount(&s, recipients[2]);
+    let patch = tile_index(566., 500.);
+    assert_eq!(s.tiles[patch].nitrates, 0.);
+    s.configure_environment(super::environment::Environment {
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let nitrates = s.tiles[patch].nitrates;
+    s.advance(30);
+    assert!(amount(&s, recipients[2]) > unfed);
+    assert!(s.tiles[patch].nitrates < nitrates);
+}
+
+#[test]
+fn nitrogen_deficit_blocks_division_or_kills_and_daughters_split_reserve_evenly() {
+    let run = |reserve| {
+        let mut s = quiet_world();
+        s.configure_environment(super::environment::Environment {
+            radiation: 0.,
+            nitrogen: 0.,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut genes = modern_genes(1);
+        genes[1] = 1.;
+        genes[4] = 0.25;
+        let id = s.spawn(500., 500., 0, &genes).unwrap();
+        s.world.get::<&mut Cell>(entity(&s, id)).unwrap().nitrogen = reserve;
+        mature_all(&mut s);
+        s.advance(1);
+        s.world
+            .query::<&Cell>()
+            .iter()
+            .map(|(_, c)| (c.mass, c.nitrogen))
+            .collect::<Vec<_>>()
+    };
+    assert!(run(0.09).is_empty());
+    assert_eq!(run(0.15).len(), 1);
+    let daughters = run(0.8);
+    assert_eq!(daughters.len(), 2);
+    assert_ne!(daughters[0].0, daughters[1].0);
+    assert_eq!(daughters[0].1, daughters[1].1);
+    assert!((daughters[0].1 - 0.4).abs() < 0.001);
+}
+
+#[test]
+fn connection_limit_counts_only_permanent_bonds_and_preserves_them() {
+    for (limit, bonded, divides) in [
+        (-1., true, true),
+        (0., false, false),
+        (1., true, false),
+        (1., false, true),
+        (2., true, true),
+    ] {
+        let mut s = quiet_world();
+        let mut genes = decode_checked(&modern_genes(1)).unwrap().values();
+        genes[3] = 1.;
+        genes[21] = limit;
+        let parent = s.spawn(500., 500., 0, &genes).unwrap();
+        let neighbor = s.spawn(518., 500., 0, &stationary_genes(0)).unwrap();
+        if bonded {
+            s.bonds.insert((parent, neighbor));
+        }
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.world.len(), if divides { 3 } else { 2 });
+        if !divides && bonded {
+            assert_eq!(s.links(), [parent, neighbor]);
+        }
+    }
 }
 
 #[test]
@@ -231,17 +359,13 @@ fn version_one_world_migrates_without_changing_living_cells() {
     let genes = modern_genes(2);
     original.spawn(500., 500., 1, &genes).unwrap();
     original.advance(10);
-    let current = original.encode_state();
-    let cell_start = 18 + crate::terrain::GRID * crate::terrain::GRID * 5 + 1;
-    let mut legacy = current[..14].to_vec();
-    legacy.extend_from_slice(&current[17..cell_start + 10]);
-    legacy[0] = 1.;
-    legacy.push(genes.len() as f64);
-    legacy.extend(genes.into_iter().map(f64::from));
-    legacy.push(0.); // no bonds
+    for tile in &mut original.tiles {
+        tile.nitrates = tile.nitrate_capacity;
+    }
+    let legacy = legacy_checkpoint(&original, 1);
     let mut restored = Simulation::new(123);
     restored.restore_checked(&legacy).unwrap();
-    assert_eq!(restored.encode_state(), current);
+    assert_eq!(restored.encode_state(), original.encode_state());
     original.advance(120);
     restored.advance(120);
     assert_eq!(restored.encode_state(), original.encode_state());
@@ -256,14 +380,46 @@ fn version_two_world_retains_mirroring_with_default_environment_extensions() {
         .get::<&mut Cell>(entity(&original, id))
         .unwrap()
         .mirrored = true;
-    let current = original.encode_state();
-    let mut legacy = current[..14].to_vec();
-    legacy[0] = 2.;
-    legacy.extend_from_slice(&current[17..]);
+    let legacy = legacy_checkpoint(&original, 2);
     let mut restored = Simulation::new(123);
     restored.restore_checked(&legacy).unwrap();
-    assert_eq!(restored.encode_state(), current);
+    assert_eq!(restored.encode_state(), original.encode_state());
     assert_eq!(restored.snapshot()[11], 1.);
+}
+
+fn legacy_checkpoint(simulation: &Simulation, version: u32) -> Vec<f64> {
+    let current = simulation.encode_state();
+    let mut legacy = current[..if version >= 3 { 17 } else { 14 }].to_vec();
+    legacy[0] = f64::from(version);
+    let tiles = current[19] as usize;
+    legacy.push(tiles as f64);
+    let mut offset = 20 + 7 * tiles;
+    for tile in current[20..offset].chunks_exact(7) {
+        legacy.extend_from_slice(&tile[..5]);
+    }
+    let cells = current[offset] as usize;
+    legacy.push(cells as f64);
+    offset += 1;
+    for _ in 0..cells {
+        legacy.extend_from_slice(&current[offset..offset + if version >= 2 { 11 } else { 10 }]);
+        let length = current[offset + 12] as usize;
+        offset += 13;
+        let values: Vec<_> = current[offset..offset + length]
+            .iter()
+            .map(|&v| v as f32)
+            .collect();
+        let genome = decode_checked(&values).unwrap();
+        let values = if version == 1 {
+            genome.legacy_values()
+        } else {
+            genome.values_v3()
+        };
+        legacy.push(values.len() as f64);
+        legacy.extend(values.into_iter().map(f64::from));
+        offset += length;
+    }
+    legacy.extend_from_slice(&current[offset..]);
+    legacy
 }
 
 #[test]
@@ -343,11 +499,20 @@ fn point_only_mutation_changes_values_without_changing_cell_types() {
 }
 
 #[test]
-fn version_three_genomes_reject_malformed_extra_fields() {
+fn version_four_genomes_reject_malformed_extra_fields() {
     let genes = crate::genome::decode_checked(&modern_genes(1))
         .unwrap()
         .values();
-    for (index, value) in [(1, 2.), (2 + 12, 4.), (2 + 14, 0.5), (2 + 16, 0.5)] {
+    for (index, value) in [
+        (1, 2.),
+        (2 + 12, 4.),
+        (2 + 14, 0.5),
+        (2 + 16, 0.5),
+        (2 + 19, -2.),
+        (2 + 19, 0.5),
+        (2 + 20, 0.),
+        (2 + 21, 0.5),
+    ] {
         let mut invalid = genes.clone();
         invalid[index] = value;
         assert!(
@@ -375,6 +540,7 @@ fn world_save_restore_preserves_future_evolution() {
             only_point_mutations: true,
             gravity: 0.1,
             density: -0.5,
+            nitrogen: 1.5,
         })
         .unwrap();
     let mut genes = modern_genes(3);
@@ -420,7 +586,9 @@ fn corrupt_world_restore_is_atomic() {
         (14, 0.5),
         (15, 2.),
         (16, -4.),
-        (17, 0.),
+        (17, -1.),
+        (18, 2.),
+        (19, 0.),
     ] {
         let mut corrupt = state.clone();
         corrupt[index] = value;
@@ -483,8 +651,13 @@ fn tools_and_sterilization_do_not_reset_environment_or_time() {
     s.bonds.insert((a, b));
     s.advance(10);
     let mass = s.world.get::<&Cell>(entity(&s, a)).unwrap().mass;
+    s.world.get::<&mut Cell>(entity(&s, a)).unwrap().nitrogen = 0.2;
     s.boost_cell(a).unwrap();
     assert_eq!(s.world.get::<&Cell>(entity(&s, a)).unwrap().mass, mass + 1.);
+    assert_eq!(
+        s.world.get::<&Cell>(entity(&s, a)).unwrap().nitrogen,
+        INITIAL_NITROGEN
+    );
     s.reposition_cell(a, 700., 800.).unwrap();
     assert_eq!(s.world.get::<&Position>(entity(&s, a)).unwrap().x, 700.);
     s.remove_cell(a).unwrap();
@@ -584,7 +757,8 @@ fn circular_dish_migrates_square_saves_and_survives_reset() {
     square.advance(10);
     let mut dish = quiet_world();
     dish.set_circular_dish(true);
-    dish.restore_checked(&square.encode_state()).unwrap();
+    dish.restore_checked(&legacy_checkpoint(&square, 3))
+        .unwrap();
     assert_eq!(dish.world.len(), 1);
     assert_eq!(dish.tick, square.tick);
     assert_eq!(dish.genome(id), square.genome(id));
@@ -603,6 +777,23 @@ fn circular_dish_migrates_square_saves_and_survives_reset() {
     dish.reset();
     dish.spawn(0., 0., 0, &stationary_genes(0)).unwrap();
     assert_inside_dish(&dish);
+}
+
+#[test]
+fn restoring_an_edge_cell_keeps_geometry_and_next_tick() {
+    let mut dish = quiet_world();
+    dish.set_circular_dish(true);
+    dish.settings.kill_at_edge = true;
+    dish.spawn(SIZE - 10., SIZE / 2., 0, &stationary_genes(0))
+        .unwrap();
+    let saved = dish.encode_state();
+    let mut restored = quiet_world();
+    restored.restore_checked(&saved).unwrap();
+    assert_eq!(restored.encode_state(), saved);
+    dish.advance(1);
+    restored.advance(1);
+    assert_eq!(restored.world.len(), 0);
+    assert_eq!(restored.encode_state(), dish.encode_state());
 }
 
 #[test]
@@ -972,14 +1163,16 @@ fn chunk_snapshot_exports_cells_links_and_terrain() {
     s.bonds.insert((a, b));
 
     let first = s.chunk_snapshot(0, 0, 512.);
-    assert_eq!(first.cells.len(), 12);
+    assert_eq!(first.cells.len(), 15);
     assert_eq!(first.cells[0], a as f32);
     assert_eq!(first.cells[11], 1.);
     assert_eq!(first.links, vec![a, b]);
-    assert_eq!(first.terrain.len(), 8 * 8 * 4);
+    assert_eq!(&first.cells[12..], &[-1., 0., INITIAL_NITROGEN]);
+    assert_eq!(first.terrain.len(), 8 * 8 * 5);
+    assert_eq!(first.terrain[4], s.tiles[0].nitrates);
 
     let second = s.chunk_snapshot(1, 0, 512.);
-    assert_eq!(second.cells.len(), 12);
+    assert_eq!(second.cells.len(), 15);
     assert_eq!(second.cells[0], b as f32);
     assert!(second.links.is_empty());
 }

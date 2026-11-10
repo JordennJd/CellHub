@@ -68,13 +68,19 @@ export function Arena({ onExit }: { onExit: () => void }) {
     const stats = arena.frame?.stats;
     const count = stats?.[1] ?? 0;
 
-    let cell: Float32Array | undefined;
+    let cell: Float32Array | undefined, nitrogen: number | undefined;
+    let connections = 0;
     if (arena.frame && selected !== null)
         for (let i = 0; i < arena.frame.cells.length; i += STRIDE)
             if (arena.frame.cells[i] === selected) {
                 cell = arena.frame.cells.subarray(i, i + STRIDE);
+                nitrogen = arena.frame.nitrogen?.[i / STRIDE];
                 break;
             }
+
+    if (cell && arena.frame) {
+        for (const endpoint of arena.frame.links) if (endpoint === selected) connections++;
+    }
 
     useEffect(() => {
         setLobbyOpen(arena.phase !== 'online');
@@ -205,6 +211,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                             <option value="biome">Среда</option>
                             <option value="light">Свет</option>
                             <option value="food">Пища</option>
+                            <option value="nitrates">Нитраты</option>
                             <option value="radiation">Радиация</option>
                         </select>
                     </label>
@@ -268,7 +275,8 @@ export function Arena({ onExit }: { onExit: () => void }) {
                             <h3>Выбранная клетка</h3>
                             <dl className="cell-details">
                                 {[['Тип', TYPES[cell[4]]?.name], ['Режим', diagnostic?.genome[diagnostic.mode]?.name ?? '…'],
-                                    ['Связь', cell[11] ? 'Да' : 'Нет'], ['Масса', `${cell[5].toFixed(2)} нг`],
+                                    ['Постоянных связей', connections], ['Зеркальность', cell[11] ? 'Да' : 'Нет'],
+                                    ['Масса', `${cell[5].toFixed(2)} нг`], ['Азот', nitrogen === undefined ? '…' : `${(nitrogen * 100).toFixed(1)}%`],
                                     ['Возраст', `${cell[6].toFixed(1)} с`], ['Поколение', cell[7]],
                                     ['Изменений генома', cell[8]]].map(([key, value]) =>
                                     <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}

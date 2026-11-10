@@ -25,7 +25,7 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
   latest.current = { genome, initialMode, age };
 
   useEffect(() => {
-    const w = new Worker(new URL("../simulation.worker.ts", import.meta.url), { type: "module" });
+    const w = new Worker(new URL("../simulation.worker.ts", import.meta.url), { type: "module", name: "cellhub-preview" });
     worker.current = w;
     w.onmessage = ({ data }) => {
       if (data.type === "ready") setReady(true);

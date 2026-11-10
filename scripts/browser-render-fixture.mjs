@@ -32,8 +32,15 @@ export const gpuCaptureSource = `    // Read the rendered GPU texture as well as
             buffer.unmap();buffer.destroy();
             const image=document.createElement('canvas');image.width=width;image.height=height;
             image.getContext('2d').putImageData(new ImageData(pixels,width,height),0,0);
-            const offset=(Math.floor(height/2)*width+Math.floor(width/2))*4;
-            return {pixel:Array.from(pixels.slice(offset,offset+4)),png:image.toDataURL('image/png').split(',')[1]};
+            const sample=(x,y)=>{
+              const col=Math.floor(width/2+x*width/canvas.clientWidth);
+              const row=Math.floor(height/2+y*height/canvas.clientHeight);
+              const offset=(row*width+col)*4;
+              return Array.from(pixels.slice(offset,offset+4));
+            };
+            const surface=[[-65,-65],[-65,0],[-65,65],[0,-65],[0,65],[65,-65],[65,0],[65,65]];
+            const body=[[-8,-8],[-8,8],[8,-8],[8,8],[-12,0],[0,12]];
+            return {pixel:sample(0,0),surface:surface.map(([x,y])=>sample(x,y)),body:body.map(([x,y])=>sample(x,y)),png:image.toDataURL('image/png').split(',')[1]};
           });
         }
       };
@@ -57,16 +64,19 @@ export async function verifyRenderFixtures({evaluate, delay}) {
   const gpuImage = async path => {
     const result=await evaluate("window.__gpuReadback");
     assert(result?.png, "GPU readback was not captured");
-    await writeFile(path,Buffer.from(result.png,"base64"));return result.pixel;
+    if(path) await writeFile(path,Buffer.from(result.png,"base64"));
+    return result;
   };
-  const normal=await gpuImage("work/cellhub-bond-normal.png");
+  const {pixel:normal}=await gpuImage("work/cellhub-bond-normal.png");
   await evaluate("window.__captureGPU='gpu-fixture';__gpuFixture.renderer.set_view(1536,1536,1,0,9);__gpuFixture.renderer.render()");
   await delay(100);
-  const selected=await gpuImage("work/cellhub-bond-selected.png");
+  const {pixel:selected}=await gpuImage("work/cellhub-bond-selected.png");
   await evaluate("window.__captureGPU='gpu-fixture';__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.render()");
   await delay(100);
-  const removed=await gpuImage("work/cellhub-bond-removed.png");
-  assert.deepEqual(removed,[37,62,43,255],"removing the bond reveals the dark green dish background");
+  const {pixel:removed,surface}=await gpuImage("work/cellhub-bond-removed.png");
+  assert(removed[1]>removed[0]&&removed[1]>removed[2]&&removed[3]===255,"removing the bond reveals the dark green dish background");
+  const green=surface.map(pixel=>pixel[1]);
+  assert(Math.max(...green)-Math.min(...green)>8,"the substrate has visible mottling");
   assert.equal(normal[3],255,"the bond remains opaque over the dish");
   assert.equal(selected[3],255,"selection remains opaque over the dish");
   assert(normal.slice(0,3).every((v,i)=>v>removed[i]),"the light green bond is brighter than the dish");
@@ -76,20 +86,38 @@ export async function verifyRenderFixtures({evaluate, delay}) {
   console.log(JSON.stringify({gpuPixels:{normal,selected,removed}}));
   assert(await evaluate(`(() => {try {__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array([2]));return false;}catch(e){return String(e).includes('bond snapshot');}})()`));
 
+  // Subtract the textured dish at the same coordinates to isolate the cell's texture.
+  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array(),__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.set_view(1536,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
+  const {body:emptyBody}=await gpuImage();
+  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array([2,1536,1536,10,0,1,0,0,0,0,0xff0000,0]),__gpuFixture.terrain,new Uint32Array());window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
+  const {body:granules}=await gpuImage("work/cellhub-cell-texture.png");
+  const alpha=granules.map(([red],i)=>(red-emptyBody[i][0])/(255-emptyBody[i][0]));
+  assert(Math.max(...alpha)-Math.min(...alpha)>0.1,"cytoplasm varies across one cell independently of the substrate");
+
   // A black custom cell retains its dark body and gets a visible nucleus/outline.
   await evaluate("__gpuFixture.renderer.set_frame(new Float32Array([2,1536,1536,10,0,1,0,0,0,0,0,0]),__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.set_view(1536,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
   await delay(100);
-  const darkNucleus=await gpuImage("work/cellhub-custom-dark-nucleus.png");
+  const {pixel:darkNucleus}=await gpuImage("work/cellhub-custom-dark-nucleus.png");
   assert(darkNucleus.slice(0,3).every(v=>v>180),"a black custom cell has a light visible nucleus");
   await evaluate("__gpuFixture.renderer.set_view(1545.75,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
   await delay(100);
-  const darkOutline=await gpuImage("work/cellhub-custom-dark-outline.png");
+  const {pixel:darkOutline}=await gpuImage("work/cellhub-custom-dark-outline.png");
   assert(darkOutline.slice(0,3).every(v=>v>150),"a black custom cell has a light visible outline");
   await evaluate("__gpuFixture.renderer.set_view(1531,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
   await delay(100);
-  const darkBody=await gpuImage("work/cellhub-custom-dark-body.png");
+  const {pixel:darkBody}=await gpuImage("work/cellhub-custom-dark-body.png");
   assert(darkBody.slice(0,3).every((v,i)=>v<removed[i]),"contrast fallback preserves the custom black body");
+
+  await evaluate(`(()=>{
+    const {renderer,terrain}=__gpuFixture;
+    const nitrates=terrain.slice();
+    for(let i=2;i<nitrates.length;i+=4)nitrates[i]=1;
+    renderer.set_frame(new Float32Array(),nitrates,new Uint32Array());
+    renderer.set_view(1536,1536,1,4,-1);window.__captureGPU='gpu-fixture';renderer.render();
+  })()`);
+  const {pixel:nitrate}=await gpuImage();
+  assert(nitrate[2]>nitrate[1]+12&&nitrate[2]>nitrate[0]+40,"the nitrate layer uses the projected field and its own blue scale");
   await evaluate("__gpuFixture.renderer.destroy();__gpuFixture.renderer.free();__gpuFixture.canvas.remove();delete window.__gpuFixture");
-  console.log("PASS: GPU bond/custom-color fixtures and invalid-frame rejection");
+  console.log("PASS: GPU textures, nitrate layer, bonds, custom colors and invalid-frame rejection");
 
 }

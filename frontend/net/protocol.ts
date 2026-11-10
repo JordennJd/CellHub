@@ -1,12 +1,13 @@
 //! Wire constants and binary chunk decoding for the optional server mode.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 export const CHUNK_SIZE = 512;
 export const CHUNKS_PER_AXIS = 6;
 export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
 export const TERRAIN_SIZE = 48;
 export const TERRAIN_TILES_PER_CHUNK = TERRAIN_SIZE / CHUNKS_PER_AXIS;
-export const CELL_STRIDE = 12;
+export const CELL_STRIDE = 15;
+export const TERRAIN_STRIDE = 5;
 /** Client frame layout matches the renderer and the local model: 12 floats. */
 export const RENDER_STRIDE = 12;
 const BIN_CHUNK = 1;
@@ -78,7 +79,7 @@ export function decodeChunk(buffer: ArrayBuffer): ChunkFrame | null {
     31 +
     cellCount * CELL_STRIDE * 4 +
     linkCount * 2 * 4 +
-    tileCount * 4 * 4;
+    tileCount * TERRAIN_STRIDE * 4;
   if (buffer.byteLength !== expected) return null;
   const readFloats = (offset: number, count: number) => {
     const out = new Float32Array(count);
@@ -101,7 +102,7 @@ export function decodeChunk(buffer: ArrayBuffer): ChunkFrame | null {
     chunkY,
     cells: readFloats(cellsStart, cellCount * CELL_STRIDE),
     links,
-    terrain: readFloats(terrainStart, tileCount * 4),
+    terrain: readFloats(terrainStart, tileCount * TERRAIN_STRIDE),
   };
 }
 

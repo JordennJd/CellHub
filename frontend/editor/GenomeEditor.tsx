@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { defaultGenome, modeColor, multicellularGenome, newMode, removeMode, TYPES, type Mode, type NumericModeKey } from "../model";
+import { defaultGenome, modeColor, multicellularGenome, newMode, removeMode, POPULATION_LIMIT, TYPES, type Mode, type NumericModeKey } from "../model";
 import { GenomePreview } from "./GenomePreview";
 import "./editor.css";
 
@@ -104,6 +104,13 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       <fieldset disabled={!m.canDivide}>
         <legend className="sr-only">Параметры деления</legend>
         {setting("Масса для деления", "threshold", 1, 8, 0.1, "Деление возможно при достижении этой массы и возраста 0,5 с. Рост зависит от типа клетки, доступной пищи и света.", "нг")}
+        <label className="genome-check"><input type="checkbox" checked={m.maxConnections >= 0}
+          onChange={e => update("maxConnections", e.target.checked ? 4 : -1)} />Ограничивать деление по числу связей</label>
+        {m.maxConnections >= 0 && <label className="genome-cell-type">Порог постоянных связей
+          <input type="number" min={0} max={POPULATION_LIMIT} step={1} value={m.maxConnections}
+            onChange={e => { const n = e.currentTarget.valueAsNumber; if (Number.isInteger(n)) update("maxConnections", Math.min(POPULATION_LIMIT, Math.max(0, n))); }} />
+        </label>}
+        {m.maxConnections >= 0 && <p>При достижении порога клетка перестаёт делиться. Существующие связи сохраняются.</p>}
         <div className="genome-children">{(["childA", "childB"] as const).map((key, index) => <section key={key}>
           <label>Дочерняя клетка {index === 0 ? "A" : "B"}<select value={m[key]} onChange={e => update(key, Number(e.target.value))}>{genome.map((g, i) => <option key={i} value={i}>{g.name} · {TYPES[g.kind].name}</option>)}</select></label>
           <label className="genome-check"><input type="checkbox" checked={index === 0 ? m.keepAdhesionA : m.keepAdhesionB} onChange={e => update(index === 0 ? "keepAdhesionA" : "keepAdhesionB", e.target.checked)} />Наследует связи родителя</label>
@@ -116,6 +123,11 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
         {orientation("Угол деления","angle","Поворачивает ось, вдоль которой располагаются дочерние клетки, относительно направления родителя. Зеркально отражённая клетка поворачивает её в обратную сторону.")}
       </fieldset>
       <p className="genome-lineage">{m.name} → {m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}</p>
+    </section>
+    <section><h3>Питание</h3>
+      {setting("Приоритет питания", "nutrientPriority", 0.25, 4, 0.05, "Повышает долю питания, которую получает клетка при обмене по постоянным связям.", "×")}
+      <label className="genome-check"><input type="checkbox" checked={m.prioritizeWhenStarving}
+        onChange={e => update("prioritizeWhenStarving", e.target.checked)} />Повышать приоритет при голодании</label>
     </section>
     <section><h3>Жизненный цикл</h3>
       {setting(m.kind === 2 ? "Скорость жгутика" : "Подвижность", "speed", 0, 60, 1, m.kind === 2 ? "Жгутик двигает клетку и связанные с ней клетки. Более высокая скорость увеличивает расход массы." : "Задаёт подвижность свободной клетки. Связанная клетка без жгутика сама не перемещает организм.")}

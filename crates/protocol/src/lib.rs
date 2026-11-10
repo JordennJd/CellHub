@@ -6,14 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const WORLD_SIZE: f32 = 3072.;
 pub const CHUNK_SIZE: f32 = 512.;
 pub const CHUNKS_PER_AXIS: u32 = 6;
 pub const CHUNK_COUNT: usize = (CHUNKS_PER_AXIS * CHUNKS_PER_AXIS) as usize;
 pub const TERRAIN_GRID: usize = 48;
 pub const TERRAIN_TILES_PER_CHUNK: usize = TERRAIN_GRID / CHUNKS_PER_AXIS as usize;
-pub const CELL_STRIDE: usize = 12;
+pub const CELL_STRIDE: usize = 15;
+pub const TERRAIN_STRIDE: usize = 5;
 pub const BIN_CHUNK: u8 = 1;
 
 pub fn chunk_of(x: f32, y: f32) -> (u8, u8) {
@@ -144,10 +145,10 @@ impl Chunk {
     pub fn encode(&self) -> Result<Vec<u8>, &'static str> {
         if !self.cells.len().is_multiple_of(CELL_STRIDE)
             || !self.links.len().is_multiple_of(2)
-            || !self.terrain.len().is_multiple_of(4)
+            || !self.terrain.len().is_multiple_of(TERRAIN_STRIDE)
             || self.cells.len() / CELL_STRIDE > u16::MAX as usize
             || self.links.len() / 2 > u16::MAX as usize
-            || self.terrain.len() / 4 > u16::MAX as usize
+            || self.terrain.len() / TERRAIN_STRIDE > u16::MAX as usize
         {
             return Err("Invalid chunk payload");
         }
@@ -168,7 +169,7 @@ impl Chunk {
         out.extend([self.chunk_x, self.chunk_y]);
         out.extend(((self.cells.len() / CELL_STRIDE) as u16).to_le_bytes());
         out.extend(((self.links.len() / 2) as u16).to_le_bytes());
-        out.extend(((self.terrain.len() / 4) as u16).to_le_bytes());
+        out.extend(((self.terrain.len() / TERRAIN_STRIDE) as u16).to_le_bytes());
         out.extend([0u8; 2]);
         for value in &self.cells {
             out.extend(value.to_le_bytes());
@@ -207,7 +208,7 @@ impl Chunk {
             + 8
             + cell_count * CELL_STRIDE * 4
             + link_count * 2 * 4
-            + tile_count * 4 * 4;
+            + tile_count * TERRAIN_STRIDE * 4;
         if bytes.len() != expected {
             return None;
         }
@@ -229,7 +230,7 @@ impl Chunk {
             .iter()
             .map(|v| u32::from_le_bytes(*v))
             .collect();
-        let terrain = floats(terrain_start, tile_count * 4);
+        let terrain = floats(terrain_start, tile_count * TERRAIN_STRIDE);
         Some(Self {
             tick,
             population,
@@ -261,7 +262,7 @@ mod tests {
             chunk_y: 5,
             cells: (0..CELL_STRIDE as u32).map(|v| v as f32 * 0.5).collect(),
             links: vec![3, 4],
-            terrain: (0..4 * TERRAIN_TILES_PER_CHUNK * TERRAIN_TILES_PER_CHUNK)
+            terrain: (0..TERRAIN_STRIDE * TERRAIN_TILES_PER_CHUNK * TERRAIN_TILES_PER_CHUNK)
                 .map(|v| v as f32)
                 .collect(),
         };

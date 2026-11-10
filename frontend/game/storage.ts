@@ -51,8 +51,8 @@ export function validateData(kind: LibraryKind, data: unknown): GenomeData | Pla
         || state.values.length > 10000000
         || state.values.some(v => typeof v !== "number" || !Number.isFinite(v)))
         throw new Error("Данные эксперимента повреждены или их версия не поддерживается.");
-    const e: Record<string, unknown> = { onlyPointMutations: false, gravity: 0, density: 0, ...data.environment };
-    if ([e.light, e.food, e.radiation].some(v => typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 5)
+    const e: Record<string, unknown> = { onlyPointMutations: false, gravity: 0, density: 0, nitrogen: 1, ...data.environment };
+    if ([e.light, e.food, e.radiation, e.nitrogen].some(v => typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 5)
         || typeof e.viscosity !== "number" || !Number.isFinite(e.viscosity) || e.viscosity < 0.1 || e.viscosity > 5
         || typeof e.aging !== "boolean" || typeof e.killAtEdge !== "boolean"
         || typeof e.onlyPointMutations !== "boolean"

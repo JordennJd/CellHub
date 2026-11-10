@@ -29,7 +29,7 @@ try{
  window.__cellhubFrames=0;const NativeWorker=window.Worker;
  window.Worker=class extends NativeWorker{
  postMessage(message,...args){if(message.type==='reset'||message.type==='restore'){window.__mainWorker=this;window.__cellhubFrame=null;}return super.postMessage(message,...args);}
- constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(this===window.__mainWorker&&data.type==='frame'){window.__cellhubFrame=data;window.__cellhubFrames++;}});}
+ constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(data.type==='ready')this.threaded=data.threaded;if(this===window.__mainWorker&&data.type==='frame'){window.__cellhubFrame=data;window.__cellhubFrames++;}});}
  };`});
  await call('Page.navigate',{url});await until("document.querySelector('.home-shell')");
  assert.deepEqual(await evaluate("[...document.querySelectorAll('.home-mode-card')].map(button=>({title:button.querySelector('.home-mode-title').textContent,disabled:button.disabled}))"),[
@@ -37,6 +37,7 @@ try{
  ]);
  assert.equal(await evaluate("document.querySelectorAll('.future-section').length"),0);
  await screenshot('work/cellhub-home.png');await openSandbox();
+ assert.equal(await evaluate('window.__mainWorker.threaded'),await evaluate('crossOriginIsolated && navigator.hardwareConcurrency > 1'),'worker selects the matching WASM variant');
  const hasWebGPU=await evaluate("document.querySelector('.world canvas').dataset.renderer==='webgpu'");
  assert(await evaluate("!/(WASM|RUST|WebGPU|WebGL|SEED|experimental|Большие возможности|Маленькая жизнь)/.test(document.body.innerText)"));
  assert.equal(await evaluate('window.__cellhubFrame.stats[0]'),0);

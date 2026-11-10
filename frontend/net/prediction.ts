@@ -18,6 +18,7 @@ import {
   CELL_STRIDE,
   RENDER_STRIDE,
   TERRAIN_SIZE,
+  TERRAIN_STRIDE,
   TERRAIN_TILES_PER_CHUNK,
   chunkKey,
   type ChunkFrame,
@@ -41,6 +42,9 @@ type SceneCell = {
   angle: number;
   speed: number;
   linked: boolean;
+  color: number;
+  mirrored: number;
+  nitrogen: number;
   syncedAt: number;
 };
 
@@ -69,6 +73,7 @@ export class PredictionWorld {
   private deaths = 0;
   private infections = 0;
   private terrain = new Float32Array(TERRAIN_SIZE * TERRAIN_SIZE * 4);
+  private nitrates = new Float32Array(TERRAIN_SIZE * TERRAIN_SIZE);
   private stats = new Float32Array(5);
 
   applyChunk(chunk: ChunkFrame, now = performance.now()) {
@@ -105,6 +110,9 @@ export class PredictionWorld {
           angle: cells[i + 9],
           speed: cells[i + 10] || 0,
           linked: cells[i + 11] !== 0,
+          color: cells[i + 12],
+          mirrored: cells[i + 13],
+          nitrogen: cells[i + 14],
           syncedAt: now,
         };
         this.cells.set(id, cell);
@@ -120,6 +128,9 @@ export class PredictionWorld {
         cell.angle = cells[i + 9];
         cell.speed = cells[i + 10] || 0;
         cell.linked = cells[i + 11] !== 0;
+        cell.color = cells[i + 12];
+        cell.mirrored = cells[i + 13];
+        cell.nitrogen = cells[i + 14];
         cell.syncedAt = now;
       }
       this.lastSeen.set(id, chunk.tick);
@@ -133,7 +144,7 @@ export class PredictionWorld {
 
   private copyTerrain(chunk: ChunkFrame) {
     const terrain = chunk.terrain;
-    if (terrain.length !== TERRAIN_TILES_PER_CHUNK * TERRAIN_TILES_PER_CHUNK * 4)
+    if (terrain.length !== TERRAIN_TILES_PER_CHUNK * TERRAIN_TILES_PER_CHUNK * TERRAIN_STRIDE)
       return;
     const startX = chunk.chunkX * TERRAIN_TILES_PER_CHUNK;
     const startY = chunk.chunkY * TERRAIN_TILES_PER_CHUNK;
@@ -145,6 +156,7 @@ export class PredictionWorld {
         this.terrain[target + 1] = terrain[source++];
         this.terrain[target + 2] = terrain[source++];
         this.terrain[target + 3] = terrain[source++];
+        this.nitrates[target / 4] = terrain[source++];
       }
     }
   }
@@ -194,12 +206,14 @@ export class PredictionWorld {
     genome: Float32Array,
     now = performance.now(),
   ) {
-    // `flatten` prepends a two-value ABI header before the 19-float rows.
+    // `flatten` prepends a two-value ABI header before the mode rows.
     const index = 2 + mode * MODE_STRIDE;
     if (index < 0 || index + MODE_STRIDE > genome.length) return;
     const kind = Math.round(genome[index]);
     const geneSpeed = genome[index + 5];
     const speed = kind === 2 ? geneSpeed : geneSpeed * 0.15;
+    const [r, g, b] = genome.slice(index + 16, index + 19);
+    const color = r < 0 ? -1 : (Math.round(r * 255) << 16) | (Math.round(g * 255) << 8) | Math.round(b * 255);
     const id = this.nextGhostId--;
     this.pendingBySeq.set(seq, id);
     this.ghosts.set(id, {
@@ -216,6 +230,9 @@ export class PredictionWorld {
       angle: 0,
       speed,
       linked: false,
+      color,
+      mirrored: 0,
+      nitrogen: 1,
       syncedAt: now,
     });
   }
@@ -282,11 +299,14 @@ export class PredictionWorld {
   frame(): Frame {
     const count = this.cells.size + this.ghosts.size;
     const cells = new Float32Array(count * RENDER_STRIDE);
+    const nitrogen = new Float32Array(count);
     let offset = 0;
     for (const cell of this.cells.values()) {
+      nitrogen[offset / RENDER_STRIDE] = cell.nitrogen;
       offset = writeCell(cells, offset, cell);
     }
     for (const ghost of this.ghosts.values()) {
+      nitrogen[offset / RENDER_STRIDE] = ghost.nitrogen;
       offset = writeCell(cells, offset, ghost);
     }
     const links: number[] = [];
@@ -298,6 +318,8 @@ export class PredictionWorld {
       cells,
       links: Uint32Array.from(links),
       terrain: this.terrain,
+      nitrogen,
+      nitrates: this.nitrates,
       stats: this.stats,
     };
   }
@@ -326,6 +348,7 @@ export class PredictionWorld {
     this.deaths = 0;
     this.infections = 0;
     this.stats.fill(0);
+    this.nitrates.fill(0);
   }
 
   get cellCount() {
@@ -352,7 +375,7 @@ function writeCell(cells: Float32Array, offset: number, cell: SceneCell) {
   cells[offset + 7] = cell.generation;
   cells[offset + 8] = cell.mutations;
   cells[offset + 9] = cell.angle;
-  cells[offset + 10] = cell.speed;
-  cells[offset + 11] = cell.linked ? 1 : 0;
+  cells[offset + 10] = cell.color;
+  cells[offset + 11] = cell.mirrored;
   return offset + RENDER_STRIDE;
 }

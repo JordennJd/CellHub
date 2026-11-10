@@ -1,11 +1,14 @@
 //! Exact versioned world snapshots. No state is mutated before validation succeeds.
 
 use super::Simulation;
+use super::boundary::Boundary;
 use super::environment::Environment;
-use crate::components::{Cell, LIMIT, Position, SIZE};
+use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, Position, SIZE};
 use crate::genome::{Genome, decode_checked};
-use crate::terrain::{GRID, Tile};
+use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::BTreeSet;
+
+const VERSION: u32 = 4;
 
 struct Reader<'a> {
     values: &'a [f64],
@@ -48,7 +51,7 @@ impl Simulation {
     pub(super) fn encode_state(&self) -> Vec<f64> {
         let s = self.settings;
         let mut values = vec![
-            3.,
+            VERSION as f64,
             self.seed as f64,
             self.rng as f64,
             self.tick as f64,
@@ -65,6 +68,8 @@ impl Simulation {
             s.only_point_mutations as u8 as f64,
             s.gravity as f64,
             s.density as f64,
+            s.nitrogen as f64,
+            matches!(self.boundary, Boundary::Circle) as u8 as f64,
             self.tiles.len() as f64,
         ];
         for tile in &self.tiles {
@@ -75,6 +80,8 @@ impl Simulation {
                     tile.food,
                     tile.capacity,
                     tile.biome,
+                    tile.nitrates,
+                    tile.nitrate_capacity,
                 ]
                 .map(f64::from),
             );
@@ -100,6 +107,7 @@ impl Simulation {
                 c.mutations as f64,
                 c.cooldown as f64,
                 c.mirrored as u8 as f64,
+                c.nitrogen as f64,
             ]);
             let genes = genome.values();
             values.push(genes.len() as f64);
@@ -114,7 +122,11 @@ impl Simulation {
 
     pub(super) fn restore_checked(&mut self, values: &[f64]) -> Result<(), String> {
         let mut replacement = Self::decode_state(values)?;
-        replacement.set_circular_dish(matches!(self.boundary, super::boundary::Boundary::Circle));
+        // Old saves did not encode geometry. Keep their migration path into
+        // the current dish. Current saves restore geometry and coordinates as-is.
+        if values[0] < f64::from(VERSION) {
+            replacement.set_circular_dish(matches!(self.boundary, Boundary::Circle));
+        }
         *self = replacement;
         Ok(())
     }
@@ -125,7 +137,7 @@ impl Simulation {
         }
         let mut input = Reader { values, offset: 0 };
         let version = input.integer(u32::MAX)?;
-        if !(1..=3).contains(&version) {
+        if !(1..=VERSION).contains(&version) {
             return Err("Неподдерживаемая версия сохранения".into());
         }
         let seed = input.integer(u32::MAX)?;
@@ -157,21 +169,45 @@ impl Simulation {
             } else {
                 0.
             },
+            nitrogen: if version >= 4 {
+                input.float(0., 5.)?
+            } else {
+                1.
+            },
         };
         restored.settings.validate()?;
+        if version >= 4 && input.flag()? {
+            restored.boundary = Boundary::Circle;
+        }
         if input.integer((GRID * GRID) as u32)? as usize != GRID * GRID {
             return Err("Некорректный размер среды".into());
         }
         for tile in &mut restored.tiles {
+            let light = input.float(0., 5.)?;
+            let radiation = input.float(0., 5.)?;
+            let food = input.float(0., 5.)?;
+            let capacity = input.float(0., 5.)?;
+            let biome = input.integer(3)? as f32;
+            let (nitrates, nitrate_capacity) = if version >= 4 {
+                (input.float(0., 5.)?, input.float(0., 5.)?)
+            } else {
+                let capacity = nitrate_capacity(biome);
+                (capacity, capacity)
+            };
             *tile = Tile {
-                light: input.float(0., 5.)?,
-                radiation: input.float(0., 5.)?,
-                food: input.float(0., 5.)?,
-                capacity: input.float(0., 5.)?,
-                biome: input.integer(3)? as f32,
+                light,
+                radiation,
+                food,
+                capacity,
+                biome,
+                nitrates,
+                nitrate_capacity,
             };
             if tile.food > tile.capacity {
                 return Err("Запас пищи превышает ёмкость среды".into());
+            }
+            if tile.nitrates > tile.nitrate_capacity {
+                return Err("Запас нитратов превышает ёмкость среды".into());
             }
         }
         let count = input.integer(LIMIT as u32)?;
@@ -195,6 +231,11 @@ impl Simulation {
                 mutations: input.integer(u32::MAX)?,
                 cooldown: input.float(0., f32::MAX)?,
                 mirrored: if version >= 2 { input.flag()? } else { false },
+                nitrogen: if version >= 4 {
+                    input.float(0., INITIAL_NITROGEN)?
+                } else {
+                    INITIAL_NITROGEN
+                },
             };
             let length = input.integer(1_200_000)? as usize;
             if input.values.len().saturating_sub(input.offset) < length {
@@ -205,13 +246,12 @@ impl Simulation {
                 .collect::<Result<Vec<_>, _>>()?;
             let genome = decode_checked(&genes)?;
             // The ordinary input ABI clamps sliders; stored state must never be silently changed.
-            if (if version == 1 {
-                genome.legacy_values()
-            } else {
-                genome.values()
-            }) != genes
-                || cell.mode >= genome.len()
-            {
+            let canonical = match version {
+                1 => genome.legacy_values(),
+                2 | 3 => genome.values_v3(),
+                _ => genome.values(),
+            };
+            if canonical != genes || cell.mode >= genome.len() {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
             }
             let entity = restored.world.spawn((position, cell, genome));

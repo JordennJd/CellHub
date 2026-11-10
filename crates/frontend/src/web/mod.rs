@@ -7,6 +7,7 @@ mod error;
 mod backend;
 mod gpu;
 mod labels;
+mod material;
 mod renderer;
 mod repaint;
 

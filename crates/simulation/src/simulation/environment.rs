@@ -15,6 +15,7 @@ pub(super) struct Environment {
     pub gravity: f32,
     /// Log10 of fluid density relative to the common reference cell density.
     pub density: f32,
+    pub nitrogen: f32,
 }
 
 impl Default for Environment {
@@ -29,13 +30,14 @@ impl Default for Environment {
             only_point_mutations: false,
             gravity: 0.,
             density: 0.,
+            nitrogen: 1.,
         }
     }
 }
 
 impl Environment {
     pub(super) fn validate(&self) -> Result<(), String> {
-        if [self.light, self.food, self.radiation]
+        if [self.light, self.food, self.radiation, self.nitrogen]
             .iter()
             .any(|v| !v.is_finite() || !(0. ..=5.).contains(v))
             || !self.viscosity.is_finite()
@@ -52,7 +54,7 @@ impl Environment {
 
     /// A bounded terminal drift for the web model, not an Android physics constant.
     pub(super) fn vertical_drift(&self) -> f32 {
-        let fluid_density = 10_f32.powf(self.density);
+        let fluid_density = libm::powf(10., self.density);
         20. * self.gravity * (1. - fluid_density) / (1. + fluid_density) / self.viscosity
     }
 }
@@ -66,10 +68,18 @@ impl Simulation {
             } else {
                 1.
             };
+            let nitrate_fraction = if tile.nitrate_capacity > 0. {
+                tile.nitrates / tile.nitrate_capacity
+            } else {
+                1.
+            };
             tile.light = baseline.light * settings.light;
             tile.radiation = baseline.radiation * settings.radiation;
             tile.capacity = baseline.capacity * settings.food;
             tile.food = (fraction * tile.capacity).clamp(0., tile.capacity);
+            tile.nitrate_capacity = baseline.nitrate_capacity * settings.nitrogen;
+            tile.nitrates =
+                (nitrate_fraction * tile.nitrate_capacity).clamp(0., tile.nitrate_capacity);
         }
         self.settings = settings;
         Ok(())

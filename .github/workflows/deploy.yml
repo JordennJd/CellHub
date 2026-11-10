@@ -26,6 +26,7 @@ jobs:
         with:
           toolchain: nightly-2026-11-09
           targets: wasm32-unknown-unknown,aarch64-unknown-linux-musl
+          components: rust-src
 
       - name: Кэшировать Rust target и cargo registry
         uses: Swatinem/rust-cache@v2

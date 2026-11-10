@@ -3,6 +3,8 @@ struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32
 @group(0) @binding(1) var terrain: texture_2d<f32>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var atlas_sampler: sampler;
+@group(0) @binding(4) var material: texture_2d<f32>;
+@group(0) @binding(5) var material_sampler: sampler;
 
 fn corner(i:u32)->vec2f {
     let positions=array<vec2f,6>(vec2f(-1.,-1.),vec2f(1.,-1.),vec2f(-1.,1.),vec2f(-1.,1.),vec2f(1.,-1.),vec2f(1.,1.));
@@ -18,6 +20,9 @@ fn relative_luminance(color:vec3f)->f32 {
 fn over(base:vec4f,color:vec3f,a:f32)->vec4f {return vec4f(color*a,a)+base*(1.-a);}
 fn coverage(distance:f32)->f32 {let aa=max(fwidth(distance),0.001);return 1.-smoothstep(-aa*0.5,aa*0.5,distance);}
 fn dish_distance(world:vec2f)->f32 {return length(world-vec2f(1536.))-1536.;}
+fn grain(uv: vec2f) -> f32 {
+    return textureSample(material, material_sampler, uv).r - 0.5;
+}
 
 struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
 @vertex fn terrain_vs(@builtin(vertex_index) i:u32)->TerrainOut {
@@ -32,9 +37,15 @@ struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
     if camera.layer==1. {color=vec4f(mix(rgb(0x253e2bu),rgb(0xe7cf7du),clamp(t.x*0.65,0.,1.)),1.);}
     if camera.layer==2. {color=vec4f(mix(rgb(0x253e2bu),rgb(0xd28ce9u),clamp(t.y*0.65,0.,1.)),1.);}
     if camera.layer==3. {color=vec4f(mix(rgb(0x253e2bu),rgb(0x75d5bdu),clamp(t.z*0.65,0.,1.)),1.);}
+    if camera.layer==4. {color=vec4f(mix(rgb(0x253e2bu),rgb(0x88c4f0u),clamp(t.z*0.65,0.,1.)),1.);}
+    // World coordinates keep the surface grain still as the camera moves.
+    let mottling = grain(w / 224.) * select(0.34, 0.1, camera.layer > 0.);
+    color = vec4f(clamp(color.rgb + mottling * vec3f(0.78, 1., 0.84), vec3f(0.), vec3f(1.)), 1.);
     let food_center=vec2f(ij)*64.+vec2f(17.+f32(ij.y%3u)*9.,27.+f32(ij.x%3u)*7.);
-    let food=coverage(length(w-food_center)-1.8);
-    if t.z>0.15 {color=over(color,rgb(0xa5cf9bu),food*t.z*0.35*smoothstep(0.2,0.65,camera.zoom));}
+    // The center jumps at tile boundaries, so derive the pixel width from the continuous position.
+    let food_edge = 0.5 * max(length(fwidth(w)), 0.001);
+    let food = 1. - smoothstep(1.8 - food_edge, 1.8 + food_edge, length(w - food_center));
+    if camera.layer!=4. && t.z>0.15 {color=over(color,rgb(0xa5cf9bu),food*t.z*0.35*smoothstep(0.2,0.65,camera.zoom));}
     color=over(color,rgb(0x7b9889u),coverage(abs(distance+0.65/camera.zoom)-0.65/camera.zoom));
     return color*mask;
 }
@@ -56,16 +67,31 @@ struct CellOut {
     @location(5) @interpolate(flat) selected:u32,
     @location(6) @interpolate(flat) custom_color:f32,
     @location(7) world:vec2f,
+    @location(8) @interpolate(flat) material_phase:vec2f,
+    @location(9) @interpolate(flat) handedness:f32,
 }
 @vertex fn cell_vs(@builtin(vertex_index) v:u32,@location(0) a:vec4f,@location(1) b:vec4f,@location(2) c:vec4f)->CellOut {
     // id,x,y,radius, kind,mass,age,generation, mutations,angle,RGB,mirrored.
-    var o:CellOut;let radius=a.w;let extent=max(radius*2.+2./camera.zoom,radius+9./camera.zoom);o.local=corner(v)*extent;
-    o.world=a.yz+o.local;o.pos=project(o.world);o.radius=radius;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);o.custom_color=c.z;return o;
+    var o:CellOut;
+    let radius=a.w;
+    let extent=max(radius*2.+2./camera.zoom,radius+9./camera.zoom);
+    o.local=corner(v)*extent;
+    o.world=a.yz+o.local;
+    o.pos=project(o.world);
+    o.radius=radius;
+    o.kind=u32(b.x);
+    o.angle=c.y;
+    o.mutations=c.x;
+    o.selected=u32(a.x==camera.selected);
+    o.custom_color=c.z;
+    o.material_phase = fract(vec2f(0.38197, 0.61803) * f32(u32(abs(a.x)) % 251u));
+    o.handedness = select(1., -1., c.w > 0.);
+    return o;
 }
 fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a,v)/max(dot(v,v),0.0001),0.,1.);return length(p-a-v*t);}
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
-    let palette=array<u32,6>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u);
-    var color=rgb(palette[min(o.kind,5u)]);
+    let palette=array<u32,7>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,0x8ed6b3u);
+    var color=rgb(palette[min(o.kind,6u)]);
     if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
     let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
     let halo=coverage(d-r-1./camera.zoom);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.6/camera.zoom);
@@ -73,11 +99,17 @@ fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a
     let tail=coverage(segment_distance(o.local,-direction*r,-direction*r*2.)-0.6/camera.zoom);
     let mutation=coverage(length(o.local-vec2f(r*0.55,-r*0.55))-2.);
     let selection=coverage(abs(d-r-4./camera.zoom)-0.75/camera.zoom);
+    // Sampling in the cell's own basis makes granules rotate with the cell.
+    let radial = o.local / max(r, 0.001);
+    let side = vec2f(-direction.y, direction.x) * o.handedness;
+    let local_uv = vec2f(dot(radial, direction), dot(radial, side)) * 0.65;
+    let granules = grain(local_uv + o.material_phase);
+    let cytoplasm = clamp(0.36 + granules * 0.76 - 0.08 * min(dot(radial, radial), 1.), 0.12, 0.68);
     // Keep custom body RGB; lift only details that fall below 3:1 against the dish.
     var ink=color;
     let minimum_ink_luminance=3.*(relative_luminance(rgb(0x253e2bu))+0.05)-0.05;
     if o.custom_color>=0. && relative_luminance(color)<minimum_ink_luminance {ink=rgb(0xdce6dcu);}
-    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*0.22);out=over(out,ink,outline);out=over(out,ink,nucleus*0.9);
+    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*cytoplasm);out=over(out,ink,outline);out=over(out,ink,nucleus*0.9);
     if o.kind==2u {out=over(out,ink,tail);}
     if o.mutations>0. {out=over(out,vec3f(1.),mutation);}
     if o.selected!=0u {out=over(out,vec3f(1.),selection);}

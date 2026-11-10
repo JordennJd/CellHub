@@ -6,7 +6,7 @@ export function EnvironmentPanel({ value, onChange, locked = false, lockedReason
     lockedReason?: string;
 }) {
     return <section className="panel-section"><h2>Среда</h2>{locked && lockedReason && <p>{lockedReason}</p>}<fieldset disabled={locked}>
- {([['light', 'Свет', 0, 5], ['food', 'Питание', 0, 5], ['radiation', 'Радиация', 0, 5], ['viscosity', 'Вязкость', 0.1, 5]] as const).map(([key, label, min, max]) => <label className="range" key={key}><span>{label}<output>{value[key].toFixed(1)}×</output></span><input type="range" min={min} max={max} step="0.1" value={value[key]} onChange={e => onChange({ ...value, [key]: Number(e.target.value) })}/></label>)}
+ {([['light', 'Свет', 0, 5], ['food', 'Питание', 0, 5], ['nitrogen', 'Нитраты', 0, 5], ['radiation', 'Радиация', 0, 5], ['viscosity', 'Вязкость', 0.1, 5]] as const).map(([key, label, min, max]) => <label className="range" key={key}><span>{label}<output>{value[key].toFixed(1)}×</output></span><input type="range" min={min} max={max} step="0.1" value={value[key]} onChange={e => onChange({ ...value, [key]: Number(e.target.value) })}/></label>)}
  <label className="toggle"><input type="checkbox" checked={value.aging} onChange={e => onChange({ ...value, aging: e.target.checked })}/>Старение клеток</label>
  <label className="toggle"><input type="checkbox" checked={value.killAtEdge} onChange={e => onChange({ ...value, killAtEdge: e.target.checked })}/>Гибель у края</label></fieldset>
  <fieldset disabled={locked}>

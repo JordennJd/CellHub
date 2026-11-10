@@ -77,7 +77,7 @@ test("independent daughter directions, handedness and colors survive all current
   Object.assign(genome[1], { mirrorB: true, red: 1, green: 0, blue: 0 });
   const encoded = flatten(genome);
   assert.equal(encoded.length, 2 + genome.length * MODE_STRIDE);
-  assert.equal(encoded[0], -3);
+  assert.equal(encoded[0], -4);
   assert.equal(encoded[1], genome.length);
   assert.deepEqual(inflate(encoded), genome);
   assert.deepEqual(parseGenome(serializeGenome(genome)), genome);
@@ -86,6 +86,20 @@ test("independent daughter directions, handedness and colors survive all current
   assert.deepEqual(parseGenome(JSON.stringify({version:2,modes:genome})), genome);
   assert.equal(modeColor(genome[0]), 0x3399e6);
   assert.equal(modeColor(genome[1]), 0xff0000);
+});
+
+test("resource settings survive ABI and library round trips and legacy modes get neutral defaults", () => {
+  const mode = { ...newMode(0), kind: 6, maxConnections: 3, nutrientPriority: 2.5, prioritizeWhenStarving: true };
+  assert.deepEqual(inflate(flatten([mode])), [mode]);
+  assert.deepEqual(parseGenome(serializeGenome([mode])), [mode]);
+  const old = flatten([newMode(0)]).slice(0, 21);
+  old[0] = -3;
+  assert.deepEqual(inflate(old), [newMode(0)]);
+  for (const [index, value] of [[19, 2.5], [19, -2], [20, 0], [21, 0.5]]) {
+    const broken = flatten([mode]);
+    broken[2 + index] = value;
+    assert.throws(() => inflate(broken));
+  }
 });
 
 test("old twelve-field genomes preserve type hues and daughter directions", () => {

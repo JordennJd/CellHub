@@ -74,16 +74,20 @@ test("saved world JSON restores exact state and deterministic continuation", () 
 test("laboratory tools and substrate settings work through the real WASM ABI", () => {
   const sim = new Simulation(73421);
   try {
-    sim.configure(2, 3, 0, 2, false, true, true, 1, -1);
-    assert.deepEqual(Array.from(sim.environment()), [2, 3, 0, 2, 0, 1, 1, 1, -1]);
+    sim.configure(2, 3, 0, 2, false, true, true, 1, -1, 0);
+    assert.deepEqual(Array.from(sim.environment()), [2, 3, 0, 2, 0, 1, 1, 1, -1, 0]);
+    assert.equal(sim.nitrates().length, 48 * 48);
+    assert(sim.nitrates().every(value => value === 0));
     const before = sim.export_state();
     assert.throws(() => sim.configure(1, 1, 0, 0, true, false));
     assert.deepEqual(sim.export_state(), before);
     const id = sim.spawn(500, 500, 0, genes());
     sim.advance(10);
+    assert(sim.nitrogen_reserves()[0] < 1);
     const mass = sim.snapshot()[5];
     sim.move_cell(id, 650, 700);
     sim.boost(id);
+    assert.equal(sim.nitrogen_reserves()[0], 1);
     assert.equal(sim.snapshot()[1], 650);
     assert.equal(sim.snapshot()[2], 700);
     assert(Math.abs(sim.snapshot()[5] - mass - 1) < 0.00001);
@@ -98,7 +102,7 @@ test("laboratory tools and substrate settings work through the real WASM ABI", (
     assert.equal(sim.snapshot().length, 0);
     sim.reset();
     assert.equal(sim.stats()[0], 0);
-    assert.deepEqual(Array.from(sim.environment()), [1, 1, 1, 1, 1, 0, 0, 0, 0]);
+    assert.deepEqual(Array.from(sim.environment()), [1, 1, 1, 1, 1, 0, 0, 0, 0, 1]);
   } finally { sim.free(); }
 });
 
@@ -110,7 +114,7 @@ test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI"
     ]);
     sim.configure(1, 1, 0, 1, true, false, true, 0.5, -0.5);
     const id = sim.spawn(500, 500, 0, g);
-    assert.deepEqual(sim.genome(id), g);
+    assert.deepEqual(sim.genome(id), new Float32Array([-4, 1, ...g.slice(2), -1, 1, 0]));
     sim.boost(id);
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
@@ -176,6 +180,31 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
     const restored = messages.find(message => message.type === "restored");
     assert.equal(restored.requestId, "load-valid");
     assert.equal(restored.settings.viscosity, 1);
+
+    // Save before commands targeted to a future boundary. Replaying the loaded
+    // queue must apply same-tick commands in their original receipt order.
+    send({type:"spawn", x:500, y:500, mode:0, genome:genes(), atTick:2});
+    send({type:"boost", id:1, atTick:2});
+    send({type:"export", requestId:"before-scheduled"});
+    tick();
+    const checkpoint = messages.find(message => message.requestId === "before-scheduled");
+    for (const replay of [false, true]) {
+      if (replay) {
+        send({type:"restore", requestId:"load-scheduled", state:checkpoint.state});
+        tick();
+      }
+      send({type:"step"});
+      tick();
+      assert.equal(messages.at(-1).stats[1], 0);
+      send({type:"step"});
+      tick();
+      assert.equal(messages.at(-1).stats[0], 2);
+      assert.equal(messages.at(-1).cells[5], 2);
+      send({type:"export", requestId:`after-${replay}`});
+      tick();
+    }
+    const finalState = replay => messages.find(message => message.requestId === `after-${replay}`).state;
+    assert.equal(finalState(false), finalState(true));
   } finally {
     globalThis.self = previousSelf;
     globalThis.setInterval = previousInterval;
@@ -243,7 +272,7 @@ test("real WASM preserves variable genomes and transfers integer bond endpoints"
       1, 8, 2, 0, 0.5, 0, 0, 1000, 1, 0, 1, 0,
     ]);
     const id = sim.spawn(300, 300, 0, g);
-    assert.deepEqual(Array.from(sim.genome(id)), [-3, 3, ...Array.from({length:3}, (_,i)=>[...g.slice(i*12,i*12+12),0,0,0,0,-1,-1,-1]).flat()]);
+    assert.deepEqual(Array.from(sim.genome(id)), [-4, 3, ...Array.from({length:3}, (_,i)=>[...g.slice(i*12,i*12+12),0,0,0,0,-1,-1,-1,-1,1,0]).flat()]);
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
     sim.advance(1);
