@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import init, { WorldRenderer } from "./rust-wasm/cellhub_frontend.js";
+import { bindCanvasControls } from "./input/canvas-controls";
 import { WORLD, STRIDE, type Frame } from "./model";
 import type { WorldViewProps } from "./world-view-types";
 let moduleReady: Promise<unknown> | undefined;
@@ -101,88 +102,26 @@ export function RustWorldView(props: RustWorldViewProps) {
     resetView.current = reset;
     reset();
 
-    let down: { x: number; y: number; cx: number; cy: number } | null = null,
-      moved = false;
-    const point = (e: PointerEvent | WheelEvent) => {
-      const r = canvas.getBoundingClientRect();
-      return { x: e.clientX - r.left, y: e.clientY - r.top };
-    };
-    const world = (p: { x: number; y: number }) => ({
-      x: (p.x - el.clientWidth / 2) / camera.current.zoom + camera.current.x,
-      y: (p.y - el.clientHeight / 2) / camera.current.zoom + camera.current.y,
-    });
-    const pd = (e: PointerEvent) => {
-      const p = point(e);
-      down = { ...p, cx: camera.current.x, cy: camera.current.y };
-      moved = false;
-      canvas.setPointerCapture(e.pointerId);
-    };
-    const pm = (e: PointerEvent) => {
-      if (!down) return;
-      const p = point(e);
-      if (Math.hypot(p.x - down.x, p.y - down.y) > 5) moved = true;
-      if (moved || live.current.tool === "pan") {
-        camera.current.x = down.cx - (p.x - down.x) / camera.current.zoom;
-        camera.current.y = down.cy - (p.y - down.y) / camera.current.zoom;
-        applyView();
-        reportView();
-      }
-    };
-    const pu = (e: PointerEvent) => {
-      if (down && !moved && live.current.tool !== "pan") {
-        const p = world(point(e));
-        if (p.x >= 0 && p.y >= 0 && p.x <= WORLD && p.y <= WORLD) {
-          let id: number | null = null,
-            best = Infinity;
+    let removeControls = () => {};
+    const addControls = () => {
+      removeControls = bindCanvasControls(canvas, {
+        camera: camera.current,
+        worldSize: WORLD,
+        tool: () => live.current.tool,
+        onView: (final) => { applyView(); reportView(final); },
+        onPoint: (p, action) => {
+          let id: number | null = null, best = Infinity;
           const data = live.current.frame?.cells;
-          if (data)
+          if (action === "select" && data)
             for (let i = 0; i < data.length; i += STRIDE) {
-              const d = Math.hypot(data[i + 1] - p.x, data[i + 2] - p.y);
-              if (d < Math.max(data[i + 3], 12 / camera.current.zoom) && d < best) {
-                id = data[i];
-                best = d;
+              const distance = Math.hypot(data[i + 1] - p.x, data[i + 2] - p.y);
+              if (distance < Math.max(data[i + 3], 12 / camera.current.zoom) && distance < best) {
+                id = data[i]; best = distance;
               }
             }
-          live.current.onPoint(p.x, p.y, id);
-        }
-      }
-      down = null;
-      if (canvas.hasPointerCapture(e.pointerId))
-        canvas.releasePointerCapture(e.pointerId);
-      reportView(true);
-    };
-    const cancel = () => {
-      down = null;
-    };
-    const wheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const p = point(e),
-        before = world(p);
-      camera.current.zoom = Math.max(
-        0.12,
-        Math.min(4, camera.current.zoom * Math.exp(-e.deltaY * 0.001)),
-      );
-      const after = world(p);
-      camera.current.x += before.x - after.x;
-      camera.current.y += before.y - after.y;
-      applyView();
-      reportView(true);
-    };
-    const addListeners = (target: HTMLCanvasElement) => {
-      target.addEventListener("pointerdown", pd);
-      target.addEventListener("pointermove", pm);
-      target.addEventListener("pointerup", pu);
-      target.addEventListener("pointercancel", cancel);
-      target.addEventListener("lostpointercapture", cancel);
-      target.addEventListener("wheel", wheel, { passive: false });
-    };
-    const removeListeners = (target: HTMLCanvasElement) => {
-      target.removeEventListener("pointerdown", pd);
-      target.removeEventListener("pointermove", pm);
-      target.removeEventListener("pointerup", pu);
-      target.removeEventListener("pointercancel", cancel);
-      target.removeEventListener("lostpointercapture", cancel);
-      target.removeEventListener("wheel", wheel);
+          live.current.onPoint(p.x, p.y, id, action);
+        },
+      });
     };
 
     (async () => {
@@ -215,7 +154,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           if (!disposed) live.current.onError(message);
         });
         const backend = instance.backend();
-        live.current.onRenderer(backend === "webgl" ? "Rust WebGL" : "Rust WebGPU");
+        canvas.dataset.renderer = backend;
         if (backend === "webgpu") {
           // Keep this Promise handler in JS: wgpu 24's WebGPU lost callback
           // drops its wasm-bindgen Closure before device.lost settles.
@@ -231,7 +170,7 @@ export function RustWorldView(props: RustWorldViewProps) {
                 live.current.onError(`WebGPU device lost: ${info.message}`);
             });
         }
-        addListeners(canvas);
+        addControls();
         applyFrame(true);
         applyView(true);
         reportView(true);
@@ -243,7 +182,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     return () => {
       disposed = true;
       resetView.current = null;
-      removeListeners(canvas);
+      removeControls();
       canvas.remove();
       const instance = renderer.current;
       renderer.current = null;

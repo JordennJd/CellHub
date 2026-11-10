@@ -5,7 +5,7 @@ import { defaultGenome, newMode, multicellularGenome, flatten, inflate, parseGen
 test("archetype settings and all adhesion flags survive encoding and saving", () => {
   const modes = multicellularGenome();
   modes.push({ ...newMode(3), bindChildren: true, keepAdhesionA: true, keepAdhesionB: true });
-  assert.deepEqual(inflate(flatten(modes)), modes);
+  assert.deepEqual(inflate(flatten(modes)), modes.map((m, i) => ({ ...m, name: `M${i + 1}` })));
   assert.deepEqual(parseGenome(serializeGenome(modes)), modes);
   assert.equal(modes[1].canDivide, false);
   assert.equal(modes[2].keepAdhesionA, true);
@@ -14,19 +14,20 @@ test("archetype settings and all adhesion flags survive encoding and saving", ()
 });
 
 test("legacy eight-mode saves migrate without adding bonds", () => {
-  const legacy = defaultGenome().map(({ canDivide, bindChildren, keepAdhesionA, keepAdhesionB, ...m }) => m);
+  const legacy = Array.from({ length: 8 }, (_, i) => newMode(i)).map(({ name, canDivide, bindChildren, keepAdhesionA, keepAdhesionB, ...m }) => m);
   const loaded = parseGenome(JSON.stringify(legacy));
-  assert.deepEqual(loaded, defaultGenome());
+  assert.equal(loaded.length, 8);
+  assert.equal(loaded[0].name, "M1");
   assert.deepEqual(inflate(new Float32Array(legacy.flatMap(Object.values))), loaded);
 });
 
-test("genomes accept 1–40 archetypes and reject broken references and flags", () => {
-  for (const n of [1, 3, 40]) {
+test("genomes accept unbounded slots and reject broken references and flags", () => {
+  for (const n of [1, 3, 41, 100]) {
     const g = Array.from({ length: n }, (_, i) => newMode(i));
     assert.equal(parseGenome(serializeGenome(g)).length, n);
     assert.equal(inflate(flatten(g)).length, n);
   }
-  for (const invalid of [[], Array.from({ length: 41 }, (_, i) => newMode(i)),
+  for (const invalid of [[],
     [{ ...newMode(0), childA: 1 }], [{ ...newMode(0), childB: -1 }],
     [{ ...newMode(0), kind: 0.5 }], [{ ...newMode(0), bindChildren: 1 }],
     [{ ...newMode(0), canDivide: undefined }], [{ ...newMode(0), speed: NaN }]]) {
@@ -59,4 +60,13 @@ test("stress populations stay within the world without clamping or duplicate pos
   assert.equal(initialPopulation(POPULATION_LIMIT + 1).length, POPULATION_LIMIT);
   assert.equal(initialPopulation(2.9).length, 2);
   for (const count of [0, -1, NaN, Infinity]) assert.deepEqual(initialPopulation(count), []);
+});
+
+test("single photocyte default and slot names survive saving and deletion", () => {
+  assert.deepEqual(defaultGenome(), [newMode(0)]);
+  const g = multicellularGenome();
+  g[2].name = "Двигатель";
+  assert.equal(parseGenome(serializeGenome(g))[2].name, "Двигатель");
+  assert.equal(removeMode(g, 1)[1].name, "Двигатель");
+  assert.throws(() => parseGenome(serializeGenome([{ ...newMode(0), name: " " }])));
 });

@@ -5,9 +5,8 @@ export type WorldViewProps = {
   tool: string;
   layer: string;
   selected: number | null;
-  onPoint: (x: number, y: number, id: number | null) => void;
+  onPoint: (x: number, y: number, id: number | null, action: "place" | "select") => void;
   onView: (v: ViewState) => void;
-  onRenderer: (name: string) => void;
   onError: (message: string) => void;
   recenter: number;
 };

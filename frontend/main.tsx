@@ -8,7 +8,6 @@ import {
   removeMode,
   serializeGenome,
   parseGenome,
-  MAX_MODES,
   type NumericModeKey,
   flatten,
   inflate,
@@ -20,8 +19,11 @@ import {
   type Frame,
   type Command,
 } from "./model";
+import { SlotName } from "./editor/SlotName";
+import { useTouchControls } from "./input/useTouchControls";
 import "./style.css";
 function App() {
+  const touchControls = useTouchControls();
   const worker = useRef<Worker | null>(null);
   const [ready, setReady] = useState(false),
     [frame, setFrame] = useState<Frame | null>(null),
@@ -31,15 +33,18 @@ function App() {
     [tool, setTool] = useState("place"),
     [layer, setLayer] = useState("biome"),
     [selected, setSelected] = useState<number | null>(null),
-    [renderer, setRenderer] = useState("GPU"),
     [view, setView] = useState<ViewState>({ zoom: 1, x: 0, y: 0 }),
     [recenter, setRecenter] = useState(0),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
+    [demoMode, setDemoMode] = useState(false),
     [tab, setTab] = useState("genome");
+  const slotNames = useRef(new Map<string, string[]>());
   const selection = useRef(selected);
   selection.current = selected;
   function send(c: Command) {
+    if (c.type === "spawn" || c.type === "edit")
+      slotNames.current.set(Array.from(c.genome).join(","), genome.map((slot) => slot.name));
     worker.current?.postMessage(c);
   }
   useEffect(() => {
@@ -60,7 +65,8 @@ function App() {
       if (data.type === "error") setError(data.message);
       if (data.type === "genome" && data.id === selection.current) {
         if (data.genome.length) {
-          setGenome(inflate(data.genome));
+          const names = slotNames.current.get(Array.from(data.genome as Float32Array).join(","));
+          setGenome(inflate(data.genome).map((slot, i) => ({ ...slot, name: names?.[i] ?? slot.name })));
           setMode(data.mode);
         } else setNotice("Клетка уже завершила жизненный цикл.");
       }
@@ -93,8 +99,8 @@ function App() {
     setSpeed(value);
     send({ type: "speed", value });
   }
-  function point(x: number, y: number, id: number | null) {
-    if (tool === "place") {
+  function point(x: number, y: number, id: number | null, action: "place" | "select") {
+    if (action === "place") {
       send({ type: "spawn", x, y, mode, genome: flatten(genome) });
     } else {
       selection.current = id;
@@ -124,39 +130,19 @@ function App() {
       setError("Сохранённого совместимого генома нет.");
     }
   }
-  function addArchetype(copy = false) {
-    if (genome.length >= MAX_MODES) return;
+  function addSlot(copy = false) {
     const index = genome.length;
-    const archetype = copy ? { ...m,
+    const slot = copy ? { ...m, name: `M${index + 1}`,
       childA: m.childA === mode ? index : m.childA,
       childB: m.childB === mode ? index : m.childB,
     } : newMode(index);
-    setGenome([...genome, archetype]);
+    setGenome([...genome, slot]);
     setMode(index);
   }
-  function organismExample() {
-    setGenome(multicellularGenome());
+  function loadExample(slots: Mode[]) {
+    setGenome(slots);
     setMode(0);
-    setTool("place");
-    selection.current = null;
-    setSelected(null);
-    setNotice("Пример загружен: поместите M1 на светлом участке субстрата.");
-  }
-  function demo() {
-    send({ type: "reset" });
-    setSelected(null);
-    const g = defaultGenome();
-    for (let k = 0; k < 6; k++)
-      for (let i = 0; i < 10; i++) {
-        send({
-          type: "spawn",
-          x: 600 + (k % 3) * 700 + Math.cos(i * 2.4) * 80,
-          y: 700 + Math.floor(k / 3) * 1300 + Math.sin(i * 2.4) * 80,
-          mode: k,
-          genome: flatten(g),
-        });
-      }
-    setNotice("60 клеток помещены в разные биомы.");
+    setNotice("Пример загружен в редактор. Состояние канваса сохранено.");
   }
   const range = (
     label: string,
@@ -175,6 +161,7 @@ function App() {
           {unit}
         </b>
       </span>
+      <span className={`slider-control ${key === "ratio" ? "mass-slider" : ""}`} style={{ "--progress": `${key === "ratio" ? m[key] * 100 : (m[key] - min) / (max - min) * 100}%` } as React.CSSProperties}>
       <input
         type="range"
         min={min}
@@ -183,45 +170,23 @@ function App() {
         value={m[key]}
         onChange={(e) => update(key, Number(e.target.value))}
       />
+      {key === "ratio" && <span className="slider-ends" aria-hidden="true"><span>A</span><span>B</span></span>}
+      </span>
     </label>
   );
   return (
-    <div className="app">
+    <div className="app" data-controls={touchControls ? "touch" : "mouse"}>
       <header>
         <div className="brand">
-          <span className="brandmark">◉</span> CellHub{" "}
-          <span className="version">LAB / 01</span>
+          <span className="brandmark" aria-hidden="true">◉</span> CellHub
         </div>
-        <div className="experiment">
-          <span className="status-dot" />
-          {ready ? "Эксперимент 73421" : "Загрузка WASM…"}
-          <span className="separator">/</span>
-          <span>Открытый субстрат</span>
-        </div>
+        {!ready && <span role="status">Загрузка…</span>}
         <button className="quiet" onClick={save}>
           ↓ Сохранить геном
         </button>
       </header>
       <main>
         <section className="lab">
-          <div className="lab-top">
-            <div>
-              <span className="eyebrow">ЖИВЫЕ СИСТЕМЫ</span>
-              <h1>
-                Маленькая жизнь.
-                <br />
-                <span>Большие возможности.</span>
-              </h1>
-            </div>
-            <div className="engine">
-              <span className="status-dot" />
-              RUST · WASM
-              <br />
-              <small>
-                {renderer.replace("Renderer", "").toUpperCase()} / 30 Hz
-              </small>
-            </div>
-          </div>
           <WorldView
             frame={frame}
             tool={tool}
@@ -229,11 +194,10 @@ function App() {
             selected={selected}
             onPoint={point}
             onView={setView}
-            onRenderer={setRenderer}
             onError={setError}
             recenter={recenter}
           />
-          <div className="map-toolbar">
+          {touchControls && <div className="map-toolbar" aria-label="Инструменты карты">
             <div className="segmented">
               {[
                 ["place", "＋", "Поместить"],
@@ -243,6 +207,7 @@ function App() {
                 <button
                   key={key}
                   title={label}
+                  aria-label={label}
                   aria-pressed={tool === key}
                   className={tool === key ? "active" : ""}
                   onClick={() => setTool(key)}
@@ -252,16 +217,8 @@ function App() {
                 </button>
               ))}
             </div>
-            <button
-              className="square"
-              title="Показать всю карту"
-              onClick={() => setRecenter((v) => v + 1)}
-            >
-              ⛶
-            </button>
-          </div>
+          </div>}
           <div className="layer-control">
-            <span>СЛОЙ СУБСТРАТА</span>
             <select
               aria-label="Слой субстрата"
               value={layer}
@@ -272,20 +229,11 @@ function App() {
               <option value="food">Питательные вещества</option>
               <option value="radiation">Радиация</option>
             </select>
+            <button className="square" title="Показать всю карту" aria-label="Показать всю карту"
+              onClick={() => setRecenter((value) => value + 1)}>⛶</button>
           </div>
           {!stats?.[1] && ready && (
-            <div className="empty-state">
-              <span className="empty-cell">◉</span>
-              <h2>Всё начинается с клетки</h2>
-              <p>
-                Нажмите на субстрат, чтобы посеять жизнь.
-                <br />
-                Её будущий путь задаётся в редакторе справа.
-              </p>
-              <button onClick={demo}>
-                Начать с примера <span>↗</span>
-              </button>
-            </div>
+            <div className="empty-state">{touchControls ? "Коснитесь карты, чтобы поставить клетку" : "ЛКМ по карте — поставить клетку"}</div>
           )}
           <div className="map-legend">
             {["Мелководье", "Питательный пояс", "Глубины", "Радиация"].map(
@@ -305,8 +253,6 @@ function App() {
           </div>
           <div className="map-scale">
             <span>{Math.round(view.zoom * 100)}%</span>
-            <b>└────┘</b>
-            <span>3072 × 3072</span>
           </div>
           <div className="transport">
             <button
@@ -337,7 +283,7 @@ function App() {
               ))}
             </div>
             <div className="time">
-              <span>ВРЕМЯ СИМУЛЯЦИИ</span>
+              <span>ВРЕМЯ</span>
               <b>
                 {((stats?.[0] || 0) / 30).toFixed(1)} <small>с</small>
               </b>
@@ -363,10 +309,8 @@ function App() {
         <aside>
           <div className="editor-title">
             <div>
-              <span className="eyebrow">КОНСТРУКТОР ЖИЗНИ</span>
               <h2>Редактор генома</h2>
             </div>
-            <span className="dna">⌘</span>
           </div>
           <div className="tabs">
             <button
@@ -384,14 +328,26 @@ function App() {
           </div>
           {tab === "genome" ? (
             <div className="editor-content">
+              <section className="demo-panel">
+                <label className="demo-toggle">
+                  <span>Режим демонстрации</span>
+                  <input type="checkbox" role="switch" checked={demoMode}
+                    aria-controls="genome-examples" onChange={(e) => setDemoMode(e.target.checked)} />
+                </label>
+                {demoMode && <div id="genome-examples" className="demo-examples">
+                  <p className="editor-note">Пример заменит слоты редактора. Клетки и канвас сохранят текущее состояние.</p>
+                  <button onClick={() => loadExample(multicellularGenome())}>Пример: многоклеточный организм</button>
+                  <button onClick={() => loadExample(TYPES.map((_, i) => ({ ...newMode(i), kind: i })))}>Пример: все типы клеток</button>
+                </div>}
+              </section>
               <div className="section-label">
-                АРХЕТИП КЛЕТКИ <span>{mode + 1} / {genome.length}</span>
+                СЛОТ ГЕНОМА <span>{mode + 1} / {genome.length}</span>
               </div>
               <div className="modes">
                 {genome.map((g, i) => (
                   <button
                     key={i}
-                    aria-label={`Архетип M${i + 1}`}
+                    aria-label={`Слот ${g.name}`}
                     aria-pressed={i === mode}
                     className={mode === i ? "active" : ""}
                     onClick={() => setMode(i)}
@@ -401,21 +357,35 @@ function App() {
                         background: "#" + TYPES[g.kind].color.toString(16),
                       }}
                     />
-                    M{i + 1}
+                    {g.name}
                   </button>
                 ))}
               </div>
-              <div className="archetype-actions">
-                <button disabled={genome.length >= MAX_MODES} onClick={() => addArchetype()}>＋ Архетип</button>
-                <button disabled={genome.length >= MAX_MODES} onClick={() => addArchetype(true)}>Копия</button>
-                <button disabled={genome.length === 1} title="Ссылки на удалённый архетип перейдут к следующему, а для последнего — к предыдущему"
+              <div className="slot-actions">
+                <button onClick={() => addSlot()}>＋ Слот</button>
+                <button onClick={() => addSlot(true)}>Копия</button>
+                <button disabled={genome.length === 1} title="Ссылки на удалённый слот перейдут к следующему, а для последнего — к предыдущему"
                   onClick={() => {
                     setGenome(removeMode(genome, mode));
                     setMode(Math.min(mode, genome.length - 2));
-                    setNotice("Архетип удалён; ссылки на него перенаправлены к соседнему.");
+                    setNotice("Слот удалён; ссылки на него перенаправлены к соседнему.");
                   }}>Удалить</button>
               </div>
-              <button className="organism-example" onClick={organismExample}>Пример: многоклеточный организм</button>
+              <SlotName key={`${mode}:${m.name}`} name={m.name} onRename={(name) => update("name", name)} />
+              <div className="cell-type-control">
+              <label className="select-label">
+                Тип клетки
+                <select
+                  value={m.kind}
+                  onChange={(e) => update("kind", Number(e.target.value))}
+                >
+                  {TYPES.map((t, i) => (
+                    <option value={i} key={i}>
+                      {t.name} / {t.latin}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <div className="cell-card">
                 <div
                   className="cell-preview"
@@ -432,30 +402,18 @@ function App() {
                   <h3>{type.name}</h3>
                   <span>{type.latin}</span>
                 </div>
-                <span className="mode-badge">M{mode + 1}</span>
+                <span className="mode-badge">{m.name}</span>
               </div>
-              <label className="select-label">
-                Тип клетки
-                <select
-                  value={m.kind}
-                  onChange={(e) => update("kind", Number(e.target.value))}
-                >
-                  {TYPES.map((t, i) => (
-                    <option value={i} key={i}>
-                      {t.name} / {t.latin}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <p className="type-info">{type.info}</p>
+              </div>
               <div className="section-label line">
-                ЖИЗНЕННЫЙ ЦИКЛ <span>↗</span>
+                ЖИЗНЕННЫЙ ЦИКЛ
               </div>
               <label className="toggle">
                 <input type="checkbox" checked={m.canDivide} onChange={(e) => update("canDivide", e.target.checked)} />
                 <span>Разрешить деление</span>
               </label>
-              {!m.canDivide && <p className="editor-note">Архетип не размножается. Клетка продолжает питаться, двигаться и стареть.</p>}
+              {!m.canDivide && <p className="editor-note">Деление клетки выключено. Клетка продолжает питаться, двигаться и стареть.</p>}
               <fieldset className="division-settings" disabled={!m.canDivide}>
               {range("Масса для деления", "threshold", 1, 8, 0.1, " нг")}
               <div className="children">
@@ -469,7 +427,7 @@ function App() {
                     >
                       {genome.map((g, i) => (
                         <option key={i} value={i}>
-                          M{i + 1} · {TYPES[g.kind].name}
+                          {g.name} · {TYPES[g.kind].name}
                         </option>
                       ))}
                     </select>
@@ -486,7 +444,6 @@ function App() {
                 <input type="checkbox" checked={m.bindChildren} onChange={(e) => update("bindChildren", e.target.checked)} />
                 <span>Связать A и B после деления</span>
               </label>
-              <p className="editor-note">Каждый потомок наследует все прежние связи родителя, если включён его переключатель. Новая связь A–B задаётся отдельно.</p>
               {range(
                 "Распределение массы",
                 "ratio",
@@ -496,10 +453,6 @@ function App() {
                 "",
                 (v) => `${Math.round(v * 100)} : ${Math.round((1 - v) * 100)}`,
               )}
-              <div className="split">
-                <span style={{ width: `${m.ratio * 100}%` }}>A</span>
-                <span>B</span>
-              </div>
               {range(
                 "Угол деления",
                 "angle",
@@ -514,13 +467,12 @@ function App() {
               {m.kind === 2 && <p className="editor-note">Жгутик тянет за собой связанные клетки организма.</p>}
               {range("Продолжительность жизни", "lifespan", 20, 1000, 10, " с")}
               <div className="lineage">
-                <span>M{mode + 1}</span>
+                <span>{m.name}</span>
                 <i>→</i>
                 {m.canDivide ? <>
-                  <span>M{m.childA + 1}</span>
+                  <span>{genome[m.childA].name}</span>
                   <i>{m.bindChildren ? "⟷" : "+"}</i>
-                  <span>M{m.childB + 1}</span>
-                  <small>{m.bindChildren ? "Связанные потомки" : "Без новой связи A–B"} · наследуют весь геном</small>
+                  <span>{genome[m.childB].name}</span>
                 </> : <span>Без деления</span>}
               </div>
               {selected !== null && (
@@ -551,13 +503,11 @@ function App() {
                 </button>
               </div>
               <p className="editor-note">
-                Изменения задают геном новых клеток. Выберите клетку на карте,
-                чтобы изменить её геном отдельно.
+                Геном используется для новых клеток.
               </p>
             </div>
           ) : (
             <div className="editor-content">
-              <div className="section-label">ЭКСПЕРИМЕНТ / 73421</div>
               <div className="metric-grid">
                 {[
                   ["Рождений", stats?.[2] || 0],
@@ -594,41 +544,15 @@ function App() {
                 <p className="type-info">
                   {selected
                     ? "Клетка разделилась или погибла. Выберите её потомка."
-                    : "Включите инструмент «Выбрать» и нажмите на клетку в субстрате."}
+                    : touchControls ? "Выберите инструмент «Выбрать» и коснитесь клетки." : "Нажмите ПКМ на клетку."}
                 </p>
               )}
-              <button className="apply" onClick={demo}>
-                Новый пример · 60 клеток
-              </button>
-              <p className="editor-note">
-                Пример заменит текущую популяцию. Радиация случайно изменяет
-                режимы генома. Свет питает фотоциты; запас пищи истощается и
-                восстанавливается.
-              </p>
             </div>
           )}
-          <footer>
-            <span className="status-dot" />
-            Локальная симуляция<span>v0.1 / experimental</span>
-          </footer>
         </aside>
       </main>
       <div className="bottom-bar">
-        <span>
-          <i />{" "}
-          {tool === "place"
-            ? "Клик — поместить клетку"
-            : tool === "select"
-              ? "Клик — выбрать клетку"
-              : "Перетаскивание — переместить карту"}
-          <span className="desktop-hint">
-            {" "}
-            · Перетаскивание — обзор · Колесо — масштаб
-          </span>
-        </span>
-        <span>
-          SEED 73421 <span className="separator">/</span> {TYPES.length} ТИПОВ · {genome.length} АРХЕТИПОВ
-        </span>
+        {touchControls ? "Два пальца — масштаб и перемещение" : "ЛКМ — поставить / удерживать — серия · ПКМ — выбрать · Зажать колёсико — перемещение · Прокрутка — масштаб"}
       </div>
       {(error || notice) && (
         <div

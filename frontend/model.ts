@@ -1,7 +1,6 @@
 export const WORLD = 3072;
 export const POPULATION_LIMIT = 20_000;
 export const STRIDE = 10;
-export const MAX_MODES = 40;
 export const MODE_STRIDE = 12;
 export const TYPES = [
   {
@@ -42,6 +41,7 @@ export const TYPES = [
   },
 ];
 export type Mode = {
+  name: string;
   kind: number;
   threshold: number;
   childA: number;
@@ -59,12 +59,12 @@ export type NumericModeKey = {
   [K in keyof Mode]: Mode[K] extends number ? K : never;
 }[keyof Mode];
 export const newMode = (index: number): Mode => ({
-  kind: 0, threshold: 2.4, childA: index, childB: index,
+  name: `M${index + 1}`, kind: 0, threshold: 2.4, childA: index, childB: index,
   ratio: 0.5, speed: 12, angle: 0.8, lifespan: 240,
   canDivide: true, bindChildren: false, keepAdhesionA: false, keepAdhesionB: false,
 });
 export const defaultGenome = (): Mode[] =>
-  Array.from({ length: 8 }, (_, i) => ({ ...newMode(i), kind: i % TYPES.length }));
+  [newMode(0)];
 
 export const multicellularGenome = (): Mode[] => [
   { ...newMode(0), kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true, angle: 0, lifespan: 1000 },
@@ -80,13 +80,13 @@ export const flatten = (g: Mode[]) => new Float32Array(g.flatMap((m) => [
 export function inflate(g: Float32Array): Mode[] {
   const legacy = g.length === 64;
   const stride = legacy ? 8 : MODE_STRIDE;
-  if (!g.length || g.length % stride || g.length / stride > MAX_MODES)
+  if (!g.length || g.length % stride)
     throw new Error("Неверный размер генома");
   return Array.from({ length: g.length / stride }, (_, i) => {
     const a = Array.from(g.slice(i * stride, (i + 1) * stride),
       (value) => Math.round(value * 1e6) / 1e6);
     return {
-      kind: a[0], threshold: a[1], childA: a[2], childB: a[3],
+      name: `M${i + 1}`, kind: a[0], threshold: a[1], childA: a[2], childB: a[3],
       ratio: a[4], speed: a[5], angle: a[6], lifespan: a[7],
       canDivide: legacy || a[8] === 1, bindChildren: !legacy && a[9] === 1,
       keepAdhesionA: !legacy && a[10] === 1, keepAdhesionB: !legacy && a[11] === 1,
@@ -112,18 +112,18 @@ export function parseGenome(text: string): Mode[] {
   const raw = JSON.parse(text);
   const legacy = Array.isArray(raw);
   const modes = legacy ? raw : raw?.version === 2 ? raw.modes : null;
-  if (!Array.isArray(modes) || modes.length < 1 || modes.length > MAX_MODES || (legacy && modes.length !== 8))
+  if (!Array.isArray(modes) || modes.length < 1 || (legacy && modes.length !== 8))
     throw new Error("Неверный формат генома");
   const numeric: NumericModeKey[] = ["kind", "threshold", "childA", "childB", "ratio", "speed", "angle", "lifespan"];
-  return modes.map((m) => {
-    if (!m || numeric.some((k) => typeof m[k] !== "number" || !Number.isFinite(m[k]))
+  return modes.map((m, i) => {
+    if (!m || (m.name !== undefined && (typeof m.name !== "string" || !m.name.trim())) || numeric.some((k) => typeof m[k] !== "number" || !Number.isFinite(m[k]))
       || !Number.isInteger(m.kind) || m.kind < 0 || m.kind >= TYPES.length
       || [m.childA, m.childB].some((v) => !Number.isInteger(v) || v < 0 || v >= modes.length)
       || m.threshold < 1 || m.threshold > 8 || m.ratio < 0.2 || m.ratio > 0.8
       || m.speed < 0 || m.speed > 60 || Math.abs(m.angle) > 3.14 || m.lifespan < 20 || m.lifespan > 1000
       || (!legacy && ["canDivide", "bindChildren", "keepAdhesionA", "keepAdhesionB"].some((k) => typeof m[k] !== "boolean")))
-      throw new Error("Некорректные настройки архетипа");
-    return { ...m, canDivide: legacy ? true : m.canDivide, bindChildren: legacy ? false : m.bindChildren,
+      throw new Error("Некорректные настройки слота");
+    return { ...m, name: m.name?.trim() ?? `M${i + 1}`, canDivide: legacy ? true : m.canDivide, bindChildren: legacy ? false : m.bindChildren,
       keepAdhesionA: legacy ? false : m.keepAdhesionA, keepAdhesionB: legacy ? false : m.keepAdhesionB };
   });
 }
@@ -136,7 +136,7 @@ export function initialPopulation(count: number): { x: number; y: number; mode: 
   return Array.from({ length: size }, (_, i) => ({
     x: 20 + (i % columns + 0.5) * (WORLD - 40) / columns,
     y: 20 + (Math.floor(i / columns) + 0.5) * (WORLD - 40) / rows,
-    mode: i % TYPES.length,
+    mode: 0,
   }));
 }
 

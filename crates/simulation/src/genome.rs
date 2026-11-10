@@ -2,7 +2,6 @@
 
 use wasm_bindgen::prelude::*;
 
-pub(crate) const MAX_MODES: usize = 40;
 pub(crate) const MODE_STRIDE: usize = 12;
 
 #[derive(Clone, Copy, Debug)]
@@ -81,17 +80,16 @@ impl Genome {
 }
 
 pub(crate) fn decode(values: &[f32]) -> Result<Genome, JsError> {
-    // v1 used exactly eight modes of eight numbers. v2 uses 1–40 modes of twelve.
+    // v1 used exactly eight modes of eight numbers. v2 uses one or more slots of twelve.
     let legacy = values.len() == 64;
     let stride = if legacy { 8 } else { MODE_STRIDE };
     let count = values.len() / stride;
     if count == 0
-        || count > MAX_MODES
         || values.len() % stride != 0
         || values.iter().any(|v| !v.is_finite())
     {
         return Err(JsError::new(
-            "Genome must contain 1–40 archetypes of 12 finite numbers (or 64 legacy numbers)",
+            "Genome must contain one or more slots of 12 finite numbers (or 64 legacy numbers)",
         ));
     }
     let mut modes = vec![Mode::default(); count];
