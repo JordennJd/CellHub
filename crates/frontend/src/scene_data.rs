@@ -10,7 +10,7 @@ pub(crate) fn pack_links(cells: &[f32], links: &[u32]) -> Result<Vec<f32>, &'sta
         return Ok(Vec::new());
     }
     let mut positions = HashMap::with_capacity(cells.len() / 10);
-    for cell in cells.chunks_exact(10) {
+    for cell in cells.as_chunks::<10>().0 {
         let id = cell[0] as u32;
         if id == 0
             || id as f32 != cell[0]
@@ -22,7 +22,7 @@ pub(crate) fn pack_links(cells: &[f32], links: &[u32]) -> Result<Vec<f32>, &'sta
         }
     }
     let mut packed = Vec::with_capacity(links.len() * 3);
-    for pair in links.chunks_exact(2) {
+    for pair in links.as_chunks::<2>().0 {
         if pair[0] == pair[1] {
             return Err("Self bond in snapshot");
         }

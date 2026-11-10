@@ -1,10 +1,10 @@
 //! One simulation tick: metabolism, interactions, death, division and bonds.
 
 use super::Simulation;
+use super::spatial::BUCKET_SIZE;
 use crate::components::{Cell, LIMIT, Position, SIZE, radius};
 use crate::genome::Genome;
 use crate::terrain::tile_index;
-use hecs::Entity;
 use std::collections::{BTreeMap, HashSet};
 
 const STEP: f32 = 1. / 30.;
@@ -15,20 +15,17 @@ impl Simulation {
         for t in &mut self.tiles {
             t.food = (t.food + STEP * 0.018 * t.capacity).min(t.capacity);
         }
-        let mut entities: Vec<(u32, Entity)> = self
-            .world
-            .query::<&Cell>()
-            .iter()
-            .map(|(e, c)| (c.id, e))
-            .collect();
-        entities.sort_by_key(|a| a.0);
+        // IDs only grow, and children are appended in ID order, so this list
+        // stays sorted without re-querying and sorting the whole population.
+        let mut entities = std::mem::take(&mut self.entities);
         let population = self.world.len() as usize;
         let mut dead = Vec::new();
         let mut children = Vec::new();
         let mut inheritors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         let mut new_bonds = Vec::new();
         let bonded = self.linked_ids();
-        let mut buckets: BTreeMap<(i32, i32), Vec<(Entity, Position, u8)>> = BTreeMap::new();
+        let mut spatial = std::mem::take(&mut self.spatial);
+        spatial.clear();
         for &(_, e) in &entities {
             let noise = self.random();
             let mutation_roll = self.random();
@@ -120,10 +117,7 @@ impl Simulation {
                 dead.push(e);
                 continue;
             }
-            buckets
-                .entry(((p.x / 32.) as i32, (p.y / 32.) as i32))
-                .or_default()
-                .push((e, *p, m.kind));
+            spatial.insert(*p, e, m.kind);
         }
         let removed: HashSet<_> = dead.iter().copied().collect();
         let mut infections = Vec::new();
@@ -140,12 +134,15 @@ impl Simulation {
                     .unwrap();
                 (*p, g.mode(c.mode).kind, c.cooldown)
             };
+            let bx = (pos.x / BUCKET_SIZE) as isize;
+            let by = (pos.y / BUCKET_SIZE) as isize;
             for dy in -1..=1 {
                 for dx in -1..=1 {
-                    if let Some(neighbors) =
-                        buckets.get(&((pos.x / 32.) as i32 + dx, (pos.y / 32.) as i32 + dy))
-                    {
-                        for &(other, op, okind) in neighbors {
+                    if let Some(neighbors) = spatial.bucket(bx + dx, by + dy) {
+                        for neighbor in neighbors {
+                            let other = neighbor.entity;
+                            let op = neighbor.position;
+                            let okind = neighbor.kind;
                             if e == other || removed.contains(&other) {
                                 continue;
                             }
@@ -200,13 +197,18 @@ impl Simulation {
         }
         let divisions = children.len() / 2;
         self.deaths += (dead.len() - divisions) as u32;
+        entities.retain(|(_, entity)| !removed.contains(entity));
         for e in dead {
             self.world.despawn(e).unwrap();
         }
         for (p, c, g) in children {
-            self.world.spawn((p, c, g));
+            let id = c.id;
+            let entity = self.world.spawn((p, c, g));
+            entities.push((id, entity));
             self.births += 1;
         }
         self.replace_bonds(&inheritors, new_bonds);
+        self.entities = entities;
+        self.spatial = spatial;
     }
 }

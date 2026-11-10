@@ -170,7 +170,7 @@ fn bonded_chain_at_boundary_is_finite_and_deterministic() {
         let snapshot = s.snapshot();
         assert!(snapshot.iter().all(|v| v.is_finite()));
         assert_eq!(s.bonds.len(), 23);
-        for row in snapshot.chunks_exact(10) {
+        for row in snapshot.as_chunks::<10>().0 {
             assert!((12. ..=SIZE - 12.).contains(&row[1]));
             assert!((12. ..=SIZE - 12.).contains(&row[2]));
         }
@@ -308,7 +308,7 @@ fn edit_is_isolated_and_boundary_motion_is_finite() {
     s.edit(a, 0, &edited).unwrap();
     assert_eq!(s.genome(b), original);
     s.advance(120);
-    for row in s.snapshot().chunks_exact(10) {
+    for row in s.snapshot().as_chunks::<10>().0 {
         assert!(row.iter().all(|v| v.is_finite()));
         assert!((0. ..=SIZE).contains(&row[1]));
         assert!((0. ..=SIZE).contains(&row[2]));
@@ -331,4 +331,24 @@ fn division_respects_population_limit() {
     }
     s.advance(1);
     assert_eq!(s.world.len() as usize, LIMIT);
+}
+#[test]
+fn chunk_snapshot_exports_cells_links_and_terrain() {
+    let mut s = Simulation::new(5);
+    let g = modern_genes(1);
+    let a = s.spawn(100., 100., 0, &g).unwrap();
+    let b = s.spawn(600., 100., 0, &g).unwrap();
+    s.bonds.insert((a, b));
+
+    let first = s.chunk_snapshot(0, 0, 512.);
+    assert_eq!(first.cells.len(), 12);
+    assert_eq!(first.cells[0], a as f32);
+    assert_eq!(first.cells[11], 1.);
+    assert_eq!(first.links, vec![a, b]);
+    assert_eq!(first.terrain.len(), 8 * 8 * 4);
+
+    let second = s.chunk_snapshot(1, 0, 512.);
+    assert_eq!(second.cells.len(), 12);
+    assert_eq!(second.cells[0], b as f32);
+    assert!(second.links.is_empty());
 }

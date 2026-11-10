@@ -66,6 +66,14 @@ install-hooks:
 test: _deps _wasm-bindgen
     npm test
 
+# Сетевой смоук: публичная комната, чанки и server-authoritative команды
+test-server: _deps
+    npm run test:server
+
+# Запустить авторитарный сервер (WebSocket + статика dist)
+server: _deps
+    cargo run -p cellhub-server -- --bind 127.0.0.1:8082 --static dist
+
 # Только тесты модели на Rust
 test-rust:
     npm run test:rust

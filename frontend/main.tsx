@@ -3,6 +3,10 @@ import { createRoot } from "react-dom/client";
 import { WorldView, type ViewState } from "./WorldView";
 import { RendererToggle } from "./RendererToggle";
 import { initialBackend, type BackendPreference } from "./backend";
+import { OnlinePanel } from "./OnlinePanel";
+import { MultiplayerClient, type NetPhase } from "./net/client";
+import type { RoomInfo } from "./net/protocol";
+import type { SyncState } from "./net/prediction";
 import {
   defaultGenome,
   multicellularGenome,
@@ -24,11 +28,27 @@ import {
 import { SlotName } from "./editor/SlotName";
 import { useTouchControls } from "./input/useTouchControls";
 import "./style.css";
+function defaultServerUrl() {
+  const requested = new URLSearchParams(location.search).get("server");
+  if (requested) return requested;
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  return `${protocol}://${location.host}/ws`;
+}
 function App() {
   const touchControls = useTouchControls();
   const worker = useRef<Worker | null>(null);
+  const network = useRef<MultiplayerClient | null>(null);
+  const onlineRef = useRef(false);
+  const resumeSpeed = useRef(1);
   const [ready, setReady] = useState(false),
     [frame, setFrame] = useState<Frame | null>(null),
+    [onlineOpen, setOnlineOpen] = useState(false),
+    [netPhase, setNetPhase] = useState<NetPhase>("disconnected"),
+    [rooms, setRooms] = useState<RoomInfo[]>([]),
+    [netRoom, setNetRoom] = useState<RoomInfo | null>(null),
+    [isHost, setIsHost] = useState(false),
+    [sync, setSync] = useState<SyncState | null>(null),
+    [serverUrl] = useState(defaultServerUrl),
     [genome, setGenome] = useState(defaultGenome),
     [mode, setMode] = useState(0),
     [speed, setSpeed] = useState(1),
@@ -46,6 +66,9 @@ function App() {
   const slotNames = useRef(new Map<string, string[]>());
   const selection = useRef(selected);
   selection.current = selected;
+  const speedRef = useRef(speed);
+  speedRef.current = speed;
+  const online = netPhase === "online";
   function changeBackend(next: BackendPreference) {
     setBackend(next);
     setError("");
@@ -66,6 +89,15 @@ function App() {
   function send(c: Command) {
     if (c.type === "spawn" || c.type === "edit")
       slotNames.current.set(Array.from(c.genome).join(","), genome.map((slot) => slot.name));
+    if (onlineRef.current) {
+      if (c.type === "speed" || c.type === "step") {
+        setNotice("В онлайн-комнате время и шаг задаёт сервер.");
+        return;
+      }
+      if (!network.current?.command(c))
+        setError("Нет соединения с сервером.");
+      return;
+    }
     worker.current?.postMessage(c);
   }
   useEffect(() => {
@@ -82,7 +114,7 @@ function App() {
         const g=flatten(defaultGenome());
         for (const cell of population) w.postMessage({ type: "spawn", ...cell, genome: g });
       }
-      if (data.type === "frame") setFrame(data);
+      if (data.type === "frame" && !onlineRef.current) setFrame(data);
       if (data.type === "error") setError(data.message);
       if (data.type === "genome" && data.id === selection.current) {
         if (data.genome.length) {
@@ -94,6 +126,63 @@ function App() {
     };
     w.onerror = (e) => setError(e.message || "Не удалось загрузить Worker");
     return () => w.terminate();
+  }, []);
+  useEffect(() => {
+    const client = new MultiplayerClient({
+      onPhase: (phase) => {
+        onlineRef.current = phase === "online";
+        setNetPhase(phase);
+      },
+      onRooms: setRooms,
+      onWelcome: (welcome) => {
+        onlineRef.current = true;
+        setNetRoom(welcome.room);
+        setIsHost(welcome.host);
+        setOnlineOpen(false);
+        setSync(null);
+        setSelected(null);
+        selection.current = null;
+        setFrame(null);
+        setTab("genome");
+        resumeSpeed.current = speedRef.current;
+        worker.current?.postMessage({ type: "speed", value: 0 });
+        setSpeed(0);
+        setNotice(`Подключено: ${welcome.room.name} (${welcome.room.id}).`);
+      },
+      onFrame: (next, nextSync) => {
+        if (!onlineRef.current) return;
+        setFrame(next);
+        setSync(nextSync);
+      },
+      onInspect: (id, genome, mode) => {
+        if (id !== selection.current) return;
+        if (genome?.length) {
+          setGenome(inflate(Float32Array.from(genome)));
+          setMode(mode ?? 0);
+        } else {
+          setNotice("Клетка уже завершила жизненный цикл.");
+        }
+      },
+      onError: setError,
+      onNotice: setNotice,
+      onWorldReset: () => {
+        setSelected(null);
+        selection.current = null;
+      },
+      onPlayerCount: (players) =>
+        setNetRoom((room) => (room ? { ...room, players } : room)),
+      onDisconnected: () => {
+        onlineRef.current = false;
+        setNetRoom(null);
+        setSync(null);
+        const previous = resumeSpeed.current;
+        worker.current?.postMessage({ type: "speed", value: previous });
+        setSpeed(previous);
+        setNotice("Соединение с сервером закрыто.");
+      },
+    });
+    network.current = client;
+    return () => client.close();
   }, []);
   useEffect(() => {
     if (!notice) return;
@@ -117,6 +206,10 @@ function App() {
     );
   }
   function changeSpeed(value: number) {
+    if (onlineRef.current) {
+      setNotice("В онлайн-комнате скорость задаёт сервер.");
+      return;
+    }
     setSpeed(value);
     send({ type: "speed", value });
   }
@@ -124,6 +217,12 @@ function App() {
     if (action === "place") {
       send({ type: "spawn", x, y, mode, genome: flatten(genome) });
     } else {
+      if (id !== null && id < 0) {
+        selection.current = null;
+        setSelected(null);
+        setNotice("Клетка ещё не подтверждена сервером.");
+        return;
+      }
       selection.current = id;
       setSelected(id);
       if (id !== null) {
@@ -208,6 +307,15 @@ function App() {
             webgpuBlocked={webgpuBlocked}
             onChange={changeBackend}
           />
+          <button
+            className={`quiet network-toggle ${online ? "online" : ""}`}
+            onClick={() => setOnlineOpen(true)}
+          >
+            <i className="network-dot" />
+            <span className="network-label">
+              {online ? `СЕТЬ · ${netRoom?.id ?? ""}` : "Сеть"}
+            </span>
+          </button>
           <button className="quiet" onClick={save}>
             ↓ Сохранить геном
           </button>
@@ -287,15 +395,15 @@ function App() {
           <div className="transport">
             <button
               className="play"
-              disabled={!ready}
-              title={speed ? "Пауза" : "Продолжить"}
+              title={online ? "Время задаёт сервер" : speed ? "Пауза" : "Продолжить"}
+              disabled={!ready || online}
               onClick={() => changeSpeed(speed ? 0 : 1)}
             >
               {speed ? "Ⅱ" : "▶"}
             </button>
             <button
               className="step"
-              disabled={speed !== 0 || !ready}
+              disabled={speed !== 0 || !ready || online}
               title="Один шаг симуляции"
               onClick={() => send({ type: "step" })}
             >
@@ -306,6 +414,7 @@ function App() {
                 <button
                   className={speed === s ? "active" : ""}
                   key={s}
+                  disabled={online}
                   onClick={() => changeSpeed(s)}
                 >
                   {s}×
@@ -327,6 +436,8 @@ function App() {
             </div>
             <button
               className="quiet reset"
+              disabled={online && !isHost}
+              title={online && !isHost ? "Очистить мир может только создатель комнаты" : undefined}
               onClick={() => {
                 send({ type: "reset" });
                 setSelected(null);
@@ -334,6 +445,12 @@ function App() {
             >
               ↺ Очистить
             </button>
+            {online && (
+              <div className="server-pill" title="Сервер присылает чанки последовательно">
+                <span className="status-dot" /> SERVER
+                <small>{sync?.seen ?? 0}/{sync?.total ?? 36}</small>
+              </div>
+            )}
           </div>
         </section>
         <aside>
@@ -508,7 +625,7 @@ function App() {
               {selected !== null && (
                 <button
                   className="apply"
-                  disabled={!cell}
+                  disabled={!cell || selected < 0}
                   onClick={() => {
                     send({
                       type: "edit",
@@ -584,6 +701,40 @@ function App() {
       <div className="bottom-bar">
         {touchControls ? "Два пальца — масштаб и перемещение" : "ЛКМ — поставить / удерживать — серия · ПКМ — выбрать · Зажать колёсико — перемещение · Прокрутка — масштаб"}
       </div>
+      <OnlinePanel
+        open={onlineOpen}
+        phase={netPhase}
+        serverUrl={serverUrl}
+        rooms={rooms}
+        room={netRoom}
+        host={isHost}
+        playerName="Наблюдатель"
+        sync={sync}
+        onClose={() => setOnlineOpen(false)}
+        onConnect={(url) => network.current?.connect(url)}
+        onCreate={(name, player) => network.current?.createRoom(name, player)}
+        onJoin={(room, player) => network.current?.joinRoom(room, player)}
+        onRefresh={() => network.current?.listRooms()}
+        onLeave={() => {
+          network.current?.leaveRoom();
+          setNetRoom(null);
+          setSync(null);
+          setSelected(null);
+          const previous = resumeSpeed.current;
+          worker.current?.postMessage({ type: "speed", value: previous });
+          setSpeed(previous);
+        }}
+        onDisconnect={() => {
+          network.current?.close();
+          setNetRoom(null);
+          setSync(null);
+          setSelected(null);
+          const previous = resumeSpeed.current;
+          worker.current?.postMessage({ type: "speed", value: previous });
+          setSpeed(previous);
+          setNotice("Сетевая сессия завершена.");
+        }}
+      />
       {(error || notice) && (
         <div
           className={`toast ${error ? "error" : ""}`}

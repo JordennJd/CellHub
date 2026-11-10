@@ -1,0 +1,109 @@
+//! Wire constants and binary chunk decoding for the optional server mode.
+
+export const PROTOCOL_VERSION = 1;
+export const CHUNK_SIZE = 512;
+export const CHUNKS_PER_AXIS = 6;
+export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
+export const TERRAIN_SIZE = 48;
+export const TERRAIN_TILES_PER_CHUNK = TERRAIN_SIZE / CHUNKS_PER_AXIS;
+export const CELL_STRIDE = 12;
+export const RENDER_STRIDE = 10;
+const BIN_CHUNK = 1;
+
+export type RoomInfo = {
+  id: string;
+  name: string;
+  population: number;
+  players: number;
+  tick: number;
+  host: string;
+};
+
+export type PlayerInfo = { id: number; name: string };
+
+export type ServerControl =
+  | { type: "rooms"; rooms: RoomInfo[] }
+  | {
+      type: "welcome";
+      protocol: number;
+      player: PlayerInfo;
+      room: RoomInfo;
+      host: boolean;
+    }
+  | { type: "ack"; seq: number; cell_id?: number; error?: string }
+  | {
+      type: "inspect";
+      seq: number;
+      id: number;
+      genome?: number[];
+      mode?: number;
+    }
+  | { type: "error"; message: string; seq?: number }
+  | { type: "notice"; message: string }
+  | { type: "player_count"; players: number }
+  | { type: "world_reset"; tick: number }
+  | { type: "pong"; t: number }
+  | { type: "room_closed"; reason: string };
+
+export type ChunkFrame = {
+  tick: number;
+  population: number;
+  births: number;
+  deaths: number;
+  infections: number;
+  chunkX: number;
+  chunkY: number;
+  cells: Float32Array;
+  links: Uint32Array;
+  terrain: Float32Array;
+};
+
+/** Decode one little-endian server chunk. Returns null for malformed input. */
+export function decodeChunk(buffer: ArrayBuffer): ChunkFrame | null {
+  if (buffer.byteLength < 31) return null;
+  const view = new DataView(buffer);
+  if (view.getUint8(0) !== BIN_CHUNK) return null;
+  const tick = view.getUint32(1, true);
+  const population = view.getUint32(5, true);
+  const births = view.getUint32(9, true);
+  const deaths = view.getUint32(13, true);
+  const infections = view.getUint32(17, true);
+  const chunkX = view.getUint8(21);
+  const chunkY = view.getUint8(22);
+  const cellCount = view.getUint16(23, true);
+  const linkCount = view.getUint16(25, true);
+  const tileCount = view.getUint16(27, true);
+  const expected =
+    31 +
+    cellCount * CELL_STRIDE * 4 +
+    linkCount * 2 * 4 +
+    tileCount * 4 * 4;
+  if (buffer.byteLength !== expected) return null;
+  const readFloats = (offset: number, count: number) => {
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i++) out[i] = view.getFloat32(offset + i * 4, true);
+    return out;
+  };
+  const cellsStart = 31;
+  const linksStart = cellsStart + cellCount * CELL_STRIDE * 4;
+  const terrainStart = linksStart + linkCount * 2 * 4;
+  const links = new Uint32Array(linkCount * 2);
+  for (let i = 0; i < links.length; i++)
+    links[i] = view.getUint32(linksStart + i * 4, true);
+  return {
+    tick,
+    population,
+    births,
+    deaths,
+    infections,
+    chunkX,
+    chunkY,
+    cells: readFloats(cellsStart, cellCount * CELL_STRIDE),
+    links,
+    terrain: readFloats(terrainStart, tileCount * 4),
+  };
+}
+
+export function chunkKey(x: number, y: number) {
+  return y * CHUNKS_PER_AXIS + x;
+}

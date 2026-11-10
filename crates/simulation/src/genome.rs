@@ -1,7 +1,5 @@
 //! Genome archetypes, validation and ABI encoding.
 
-use wasm_bindgen::prelude::*;
-
 pub(crate) const MODE_STRIDE: usize = 12;
 
 #[derive(Clone, Copy, Debug)]
@@ -79,18 +77,17 @@ impl Genome {
     }
 }
 
-pub(crate) fn decode(values: &[f32]) -> Result<Genome, JsError> {
+#[allow(clippy::approx_constant)] // Genes intentionally use a compact ±3.14 radian clamp.
+pub(crate) fn decode(values: &[f32]) -> Result<Genome, String> {
     // v1 used exactly eight modes of eight numbers. v2 uses one or more slots of twelve.
     let legacy = values.len() == 64;
     let stride = if legacy { 8 } else { MODE_STRIDE };
     let count = values.len() / stride;
-    if count == 0
-        || values.len() % stride != 0
-        || values.iter().any(|v| !v.is_finite())
-    {
-        return Err(JsError::new(
-            "Genome must contain one or more slots of 12 finite numbers (or 64 legacy numbers)",
-        ));
+    if count == 0 || !values.len().is_multiple_of(stride) || values.iter().any(|v| !v.is_finite()) {
+        return Err(
+            "Genome must contain one or more slots of 12 finite numbers (or 64 legacy numbers)"
+                .to_owned(),
+        );
     }
     let mut modes = vec![Mode::default(); count];
     for (m, v) in modes.iter_mut().zip(values.chunks_exact(stride)) {
@@ -101,9 +98,7 @@ pub(crate) fn decode(values: &[f32]) -> Result<Genome, JsError> {
                 .any(|n| n.fract() != 0. || *n < 0. || *n >= count as f32)
             || (!legacy && v[8..].iter().any(|n| *n != 0. && *n != 1.))
         {
-            return Err(JsError::new(
-                "Invalid archetype type, child reference or adhesion flag",
-            ));
+            return Err("Invalid archetype type, child reference or adhesion flag".to_owned());
         }
         *m = Mode {
             kind: v[0].clamp(0., 5.) as u8,

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/simulation", "crates/frontend"]
+members = ["crates/simulation", "crates/protocol", "crates/server", "crates/frontend"]
 resolver = "2"
 [profile.release]
 lto = true
