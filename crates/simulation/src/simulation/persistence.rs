@@ -213,7 +213,8 @@ impl Simulation {
             {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
             }
-            restored.world.spawn((position, cell, genome));
+            let entity = restored.world.spawn((position, cell, genome));
+            restored.entities.push((id, entity));
         }
         let count = input.integer(1_000_000)?;
         for _ in 0..count {
@@ -226,6 +227,7 @@ impl Simulation {
         if input.offset != values.len() {
             return Err("Лишние данные в сохранении".into());
         }
+        restored.entities.sort_by_key(|&(id, _)| id);
         Ok(restored)
     }
 }

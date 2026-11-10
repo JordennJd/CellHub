@@ -24,7 +24,7 @@ pub(crate) fn pack_links(cells: &[f32], links: &[u32]) -> Result<Vec<f32>, &'sta
         }
     }
     let mut packed = Vec::with_capacity(links.len() * 3);
-    for pair in links.chunks_exact(2) {
+    for pair in links.as_chunks::<2>().0 {
         if pair[0] == pair[1] {
             return Err("Self bond in snapshot");
         }

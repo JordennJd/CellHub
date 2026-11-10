@@ -505,6 +505,26 @@ fn tools_and_sterilization_do_not_reset_environment_or_time() {
 }
 
 #[test]
+fn simulation_continues_after_removal_and_sterilization() {
+    let mut s = quiet_world();
+    let removed = s.spawn(400., 500., 0, &stationary_genes(0)).unwrap();
+    let survivor = s.spawn(600., 500., 0, &stationary_genes(0)).unwrap();
+    s.advance(1);
+    s.remove_cell(removed).unwrap();
+    s.advance(30);
+    assert_eq!(s.world.len(), 1);
+    assert!(s.world.get::<&Cell>(entity(&s, survivor)).unwrap().age > 1.);
+
+    s.sterilize();
+    s.advance(30);
+    assert_eq!(s.world.len(), 0);
+    let replacement = s.spawn(400., 500., 0, &stationary_genes(0)).unwrap();
+    s.advance(30);
+    assert_eq!(s.world.len(), 1);
+    assert!(s.world.get::<&Cell>(entity(&s, replacement)).unwrap().age > 0.99);
+}
+
+#[test]
 fn aging_and_edge_controls_have_distinct_effects() {
     let mut s = quiet_world();
     s.settings.aging = false;
@@ -861,4 +881,24 @@ fn division_respects_population_limit() {
     mature_all(&mut s);
     s.advance(1);
     assert_eq!(s.world.len() as usize, LIMIT);
+}
+#[test]
+fn chunk_snapshot_exports_cells_links_and_terrain() {
+    let mut s = Simulation::new(5);
+    let g = modern_genes(1);
+    let a = s.spawn(100., 100., 0, &g).unwrap();
+    let b = s.spawn(600., 100., 0, &g).unwrap();
+    s.bonds.insert((a, b));
+
+    let first = s.chunk_snapshot(0, 0, 512.);
+    assert_eq!(first.cells.len(), 12);
+    assert_eq!(first.cells[0], a as f32);
+    assert_eq!(first.cells[11], 1.);
+    assert_eq!(first.links, vec![a, b]);
+    assert_eq!(first.terrain.len(), 8 * 8 * 4);
+
+    let second = s.chunk_snapshot(1, 0, 512.);
+    assert_eq!(second.cells.len(), 12);
+    assert_eq!(second.cells[0], b as f32);
+    assert!(second.links.is_empty());
 }

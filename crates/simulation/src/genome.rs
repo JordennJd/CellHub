@@ -1,7 +1,5 @@
 //! Genome archetypes, validation and ABI encoding.
 
-use wasm_bindgen::prelude::*;
-
 pub(crate) const MODE_STRIDE: usize = 19;
 
 #[derive(Clone, Copy, Debug)]
@@ -102,10 +100,7 @@ impl Genome {
     }
 }
 
-pub(crate) fn decode(values: &[f32]) -> Result<Genome, JsError> {
-    decode_checked(values).map_err(|message| JsError::new(&message))
-}
-
+#[allow(clippy::approx_constant)] // Genes intentionally use a compact ±3.14 radian clamp.
 pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
     // v1 used eight modes of eight numbers, v2 raw rows of twelve; v3 adds a header.
     let version3 = values.first() == Some(&-3.);
@@ -129,7 +124,7 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
     };
     let count = values.len() / stride;
     if count == 0
-        || values.len() % stride != 0
+        || !values.len().is_multiple_of(stride)
         || values.iter().any(|v| !v.is_finite())
         || (version3 && count_hint != count as f32)
     {

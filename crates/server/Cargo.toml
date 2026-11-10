@@ -1,0 +1,18 @@
+[package]
+name = "cellhub-server"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "cellhub-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+cellhub-protocol = { path = "../protocol" }
+cellhub-simulation = { path = "../simulation" }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

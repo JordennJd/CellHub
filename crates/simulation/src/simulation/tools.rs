@@ -19,6 +19,7 @@ impl Simulation {
         self.world
             .despawn(entity)
             .map_err(|_| "Клетка больше не существует".to_string())?;
+        self.entities.retain(|&(cell_id, _)| cell_id != id);
         self.bonds.retain(|&(a, b)| a != id && b != id);
         self.deaths += 1;
         Ok(())
