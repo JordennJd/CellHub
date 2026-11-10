@@ -11,4 +11,7 @@ wgpu = { version = "=24.0.5", default-features = false, features = ["webgpu", "w
 bytemuck = "1"
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement", "Window", "Storage"] }
+web-sys = { version = "0.3", features = ["HtmlCanvasElement", "ResizeObserver", "Window", "console"] }
+js-sys = "0.3"
+ab_glyph = "0.2"
+epaint_default_fonts = "=0.31.1"
