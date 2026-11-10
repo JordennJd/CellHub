@@ -1,5 +1,7 @@
-//! Direct WebGPU renderer: terrain, labels, instanced bonds and cells.
-//! React owns UI/input; the simulation remains in its Worker.
+//! Direct wgpu renderer: terrain, labels, instanced bonds and cells.
+//! WebGPU is preferred; the same pipelines and WGSL run on WebGL2 through
+//! wgpu's GL backend when WebGPU is unavailable. React owns UI/input; the
+//! simulation remains in its Worker.
 use crate::scene_data::pack_links;
 
 use std::cell::{Cell, RefCell};
@@ -9,7 +11,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
-const TERRAIN_BYTES: u64 = 48 * 48 * 16;
+const TERRAIN_SIZE: u32 = 48;
+const TERRAIN_STRIDE: u32 = TERRAIN_SIZE * 16;
+const TERRAIN_BYTES: u64 = (TERRAIN_STRIDE * TERRAIN_SIZE) as u64;
 const CELL_STRIDE: u64 = 40;
 const LINK_STRIDE: u64 = 24;
 const ATLAS_WIDTH: u32 = 512;
@@ -24,6 +28,37 @@ const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x2];
 const LINK_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    WebGpu,
+    WebGl,
+}
+
+impl Backend {
+    fn name(self) -> &'static str {
+        match self {
+            Self::WebGpu => "webgpu",
+            Self::WebGl => "webgl",
+        }
+    }
+
+    async fn select(requested: &str) -> Result<Self, JsValue> {
+        match requested {
+            "webgpu" => {
+                if !wgpu::util::is_browser_webgpu_supported().await {
+                    return Err(error(
+                        "WebGPU недоступен. Используйте браузер с WebGPU через localhost или HTTPS.",
+                    ));
+                }
+                Ok(Self::WebGpu)
+            }
+            "webgl" => Ok(Self::WebGl),
+            _ if wgpu::util::is_browser_webgpu_supported().await => Ok(Self::WebGpu),
+            _ => Ok(Self::WebGl),
+        }
+    }
+}
 
 fn error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
@@ -167,6 +202,7 @@ fn pipeline(
 
 struct RendererState {
     canvas: web_sys::HtmlCanvasElement,
+    backend: Backend,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -177,7 +213,7 @@ struct RendererState {
     link_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     uniform: wgpu::Buffer,
-    terrain: wgpu::Buffer,
+    terrain: wgpu::Texture,
     cells: wgpu::Buffer,
     capacity: u64,
     count: u32,
@@ -206,9 +242,13 @@ pub struct WorldRenderer {
 }
 
 impl RendererState {
-    async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<Self, JsValue> {
+    async fn create(canvas: web_sys::HtmlCanvasElement, requested: &str) -> Result<Self, JsValue> {
+        let backend = Backend::select(requested).await?;
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
+            backends: match backend {
+                Backend::WebGpu => wgpu::Backends::BROWSER_WEBGPU,
+                Backend::WebGl => wgpu::Backends::GL,
+            },
             ..Default::default()
         });
         let surface = instance
@@ -227,13 +267,25 @@ impl RendererState {
                 force_fallback_adapter: false,
             })
             .await
-            .ok_or_else(|| error("WebGPU adapter unavailable"))?;
+            .ok_or_else(|| {
+                error(match backend {
+                    Backend::WebGpu => "WebGPU adapter unavailable",
+                    Backend::WebGl => "WebGL2 adapter unavailable",
+                })
+            })?;
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("CellHub"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
+                    // WebGL2 is GLES 3.0: no storage buffers/compute, 16 KiB
+                    // UBOs and 2048 px textures guaranteed. Keep that floor
+                    // but allow the adapter's larger canvas resolution.
+                    required_limits: match backend {
+                        Backend::WebGpu => wgpu::Limits::default(),
+                        Backend::WebGl => wgpu::Limits::downlevel_webgl2_defaults()
+                            .using_resolution(adapter.limits()),
+                    },
                     memory_hints: Default::default(),
                 },
                 None,
@@ -279,11 +331,42 @@ impl RendererState {
             contents: bytemuck::cast_slice(&view),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let terrain = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        // A texture instead of a storage buffer: WebGL2 has no SSBOs. The
+        // shader reads one texel per terrain cell with textureLoad.
+        let terrain = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("terrain"),
-            contents: &vec![0u8; TERRAIN_BYTES as usize],
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            size: wgpu::Extent3d {
+                width: TERRAIN_SIZE,
+                height: TERRAIN_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
         });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &terrain,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &vec![0u8; TERRAIN_BYTES as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(TERRAIN_STRIDE),
+                rows_per_image: Some(TERRAIN_SIZE),
+            },
+            wgpu::Extent3d {
+                width: TERRAIN_SIZE,
+                height: TERRAIN_SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        let terrain_view = terrain.create_view(&Default::default());
         let atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("static map label atlas"),
             size: wgpu::Extent3d {
@@ -339,10 +422,10 @@ impl RendererState {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
                 },
@@ -374,7 +457,7 @@ impl RendererState {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: terrain.as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&terrain_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -450,6 +533,7 @@ impl RendererState {
         }
         Ok(Self {
             canvas,
+            backend,
             surface,
             device,
             queue,
@@ -527,8 +611,25 @@ impl RendererState {
         if !link_bytes.is_empty() {
             self.queue.write_buffer(&self.links, 0, link_bytes);
         }
-        self.queue
-            .write_buffer(&self.terrain, 0, bytemuck::cast_slice(terrain));
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.terrain,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(terrain),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(TERRAIN_STRIDE),
+                rows_per_image: Some(TERRAIN_SIZE),
+            },
+            wgpu::Extent3d {
+                width: TERRAIN_SIZE,
+                height: TERRAIN_SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
         self.count = (cells.len() / 10) as u32;
         self.link_count = (links.len() / 2) as u32;
         self.dirty = true;
@@ -653,9 +754,15 @@ impl RendererState {
 #[wasm_bindgen]
 impl WorldRenderer {
     /// `canvas` is only a DOM surface. Rust creates all GPU resources, owns the
-    /// animation-frame loop and submits every WebGPU command itself.
-    pub async fn create(canvas: web_sys::HtmlCanvasElement) -> Result<WorldRenderer, JsValue> {
-        let state = Rc::new(RefCell::new(RendererState::create(canvas).await?));
+    /// animation-frame loop and submits every draw itself. `backend` is
+    /// `"auto"`, `"webgpu"` or `"webgl"`; auto probes WebGPU before touching
+    /// the canvas, because a canvas cannot switch from a WebGPU context to
+    /// WebGL2 later.
+    pub async fn create(
+        canvas: web_sys::HtmlCanvasElement,
+        backend: String,
+    ) -> Result<WorldRenderer, JsValue> {
+        let state = Rc::new(RefCell::new(RendererState::create(canvas, &backend).await?));
         let signal = RepaintSignal::default();
         let callback = {
             let state: Weak<RefCell<RendererState>> = Rc::downgrade(&state);
@@ -735,6 +842,11 @@ impl WorldRenderer {
         };
         renderer.signal.request();
         Ok(renderer)
+    }
+    /// Actual backend chosen by `create`, for the status label and for
+    /// WebGPU-only device-lost handling in JS.
+    pub fn backend(&self) -> String {
+        self.state.borrow().backend.name().to_string()
     }
     pub fn set_error_handler(&mut self, handler: js_sys::Function) {
         self.state.borrow_mut().error_handler = Some(handler);

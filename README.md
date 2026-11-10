@@ -1,10 +1,10 @@
 # CellHub
 
-Общий PoC объединяет React-редактор многоклеточного генома и Rust/WebGPU-отрисовку мира.
+Общий PoC объединяет React-редактор многоклеточного генома и Rust/wgpu-отрисовку мира через WebGPU или WebGL2.
 Редактор, панели и оформление находятся в React; `crates/frontend` рисует только
 мир, а симуляция Rust/hecs работает в Worker. Подробности: [гибридная архитектура](docs/rust-frontend.md).
 
-Локальная веб-песочница искусственной жизни: React/TypeScript управляет интерфейсом, Rust/wgpu и WGSL-шейдеры рисуют субстрат и клетки через WebGPU с инстансингом, Rust nightly + hecs ECS исполняет симуляцию в Web Worker через WebAssembly.
+Локальная веб-песочница искусственной жизни: React/TypeScript управляет интерфейсом, Rust/wgpu и WGSL-шейдеры рисуют субстрат и клетки с инстансингом, Rust nightly + hecs ECS исполняет симуляцию в Web Worker через WebAssembly. Один и тот же рендерер работает через WebGPU, а при его недоступности — через WebGL2 (GL-бэкенд wgpu и трансляция WGSL в GLSL).
 
 ## Запуск
 
@@ -34,7 +34,7 @@ npm run check       # проверка TypeScript (после сборки WASM)
 npm run preview     # production-версия после npm run build
 ```
 
-`dist/` можно раздавать любым статическим HTTP-сервером с MIME `application/wasm`. Web Worker и WASM не загружаются через `file://`. COOP/COEP не требуются: SharedArrayBuffer пока не используется. Основной canvas рисуется через Rust/wgpu/WebGPU; для него необходимы secure context и поддержка браузером. При недоступности или ошибке WebGPU автоматически загружается резервный PixiJS/WebGL-рендерер с теми же связями. `?renderer=webgl` выбирает его явно; активный рендерер указан над картой. Android поддерживается как адаптивная веб-страница, не APK; на устройстве пока не проверено.
+`dist/` можно раздавать любым статическим HTTP-сервером с MIME `application/wasm`. Web Worker и WASM не загружаются через `file://`. COOP/COEP не требуются: SharedArrayBuffer пока не используется. Canvas рисуется через Rust/wgpu: сначала выбирается WebGPU, а если его нет или инициализация не удалась — тот же рендерер и те же WGSL-шейдеры запускаются через WebGL2. Для WebGPU нужны secure context и поддержка браузером; WebGL2 работает как автоматический резерв, поэтому принудительно включить его можно через `?renderer=webgl`, а WebGPU — через `?renderer=webgpu`. Активный бэкенд указан над картой. Android поддерживается как адаптивная веб-страница, не APK; на устройстве пока не проверено.
 
 ## Как пользоваться
 
@@ -58,10 +58,10 @@ npm run preview     # production-версия после npm run build
 
 ## Структура и границы
 
-- `crates/simulation/src/lib.rs`: данные ECS, генерация карты, fixed-step системы, WASM API и тесты. Rust не зависит от DOM, React или PixiJS.
+- `crates/simulation/src/lib.rs`: данные ECS, генерация карты, fixed-step системы, WASM API и тесты. Rust не зависит от DOM или React.
 - `frontend/simulation.worker.ts`: очередь команд, загрузка WASM, часы и перенос снимков на главный поток.
 - `frontend/model.ts`: контракт команд и представление генома в UI.
-- `frontend/WorldView.tsx`: выбор рендерера и переход на WebGL. `RustWorldView.tsx` / `PixiWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
+- `frontend/WorldView.tsx`: выбор бэкенда (`auto`/`webgpu`/`webgl`) и повторный монтаж при потере WebGPU-устройства. `RustWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
 - `crates/frontend/src/web.rs`: прямой wgpu-рендерер, GPU-буферы, resize и освобождение ресурсов. `scene_data.rs`: подготовка инстансов связей и native-тесты.
 - `crates/frontend/src/scene.wgsl`: инстансинг клеток и связей, SDF-оформление, карта и подписи. egui/eframe не используются.
 - `frontend/main.tsx`: HTML/React-редактор и управление экспериментом.

@@ -8,7 +8,10 @@ const layerIndex = (layer: string) =>
     layer
   ] ?? 0;
 
-export function RustWorldView(props: WorldViewProps) {
+export type BackendPreference = "auto" | "webgpu" | "webgl";
+type RustWorldViewProps = WorldViewProps & { backend: BackendPreference };
+
+export function RustWorldView(props: RustWorldViewProps) {
   const host = useRef<HTMLDivElement>(null),
     live = useRef(props);
   live.current = props;
@@ -72,13 +75,18 @@ export function RustWorldView(props: WorldViewProps) {
   }, [props.recenter]);
 
   useEffect(() => {
-    const el = host.current!,
-      canvas = document.createElement("canvas");
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.setAttribute("aria-label", "Субстрат CellHub: клетки и биомы");
-    el.appendChild(canvas);
+    const el = host.current!;
     let disposed = false;
+    const mountCanvas = () => {
+      const value = document.createElement("canvas");
+      value.style.width = "100%";
+      value.style.height = "100%";
+      value.setAttribute("aria-label", "Субстрат CellHub: клетки и биомы");
+      el.appendChild(value);
+      return value;
+    };
+    let canvas = mountCanvas();
+
     const reset = () => {
       const c = camera.current;
       c.x = WORLD / 2;
@@ -160,68 +168,89 @@ export function RustWorldView(props: WorldViewProps) {
       applyView();
       reportView(true);
     };
-    canvas.addEventListener("pointerdown", pd);
-    canvas.addEventListener("pointermove", pm);
-    canvas.addEventListener("pointerup", pu);
-    canvas.addEventListener("pointercancel", cancel);
-    canvas.addEventListener("lostpointercapture", cancel);
-    canvas.addEventListener("wheel", wheel, { passive: false });
+    const addListeners = (target: HTMLCanvasElement) => {
+      target.addEventListener("pointerdown", pd);
+      target.addEventListener("pointermove", pm);
+      target.addEventListener("pointerup", pu);
+      target.addEventListener("pointercancel", cancel);
+      target.addEventListener("lostpointercapture", cancel);
+      target.addEventListener("wheel", wheel, { passive: false });
+    };
+    const removeListeners = (target: HTMLCanvasElement) => {
+      target.removeEventListener("pointerdown", pd);
+      target.removeEventListener("pointermove", pm);
+      target.removeEventListener("pointerup", pu);
+      target.removeEventListener("pointercancel", cancel);
+      target.removeEventListener("lostpointercapture", cancel);
+      target.removeEventListener("wheel", wheel);
+    };
+
     (async () => {
-      if (!("gpu" in navigator))
-        throw new Error(
-          "WebGPU недоступен. Используйте браузер с WebGPU через localhost или HTTPS.",
-        );
-      await (moduleReady ??= init().catch((e) => {
-        moduleReady = undefined;
-        throw e;
-      }));
-      if (disposed) return;
-      const instance = await WorldRenderer.create(canvas);
-      if (disposed) {
-        instance.destroy();
-        instance.free();
-        return;
-      }
-      renderer.current = instance;
-      instance.set_error_handler((message: string) => {
-        if (!disposed) live.current.onError(message);
-      });
-      live.current.onRenderer("Rust WebGPU");
-      // Keep this Promise handler in JS: wgpu 24's WebGPU lost callback drops
-      // its wasm-bindgen Closure before the device.lost Promise settles.
-      const gpuContext = canvas.getContext("webgpu") as unknown as {
-        getConfiguration?: () => {
-          device: { lost: Promise<{ reason: string; message: string }> };
-        } | null;
-      };
-      gpuContext
-        ?.getConfiguration?.()
-        ?.device.lost.then((info) => {
-          if (!disposed && info.reason !== "destroyed")
-            live.current.onError(`WebGPU device lost: ${info.message}`);
+      try {
+        await (moduleReady ??= init().catch((e) => {
+          moduleReady = undefined;
+          throw e;
+        }));
+        if (disposed) return;
+        let instance: WorldRenderer;
+        try {
+          instance = await WorldRenderer.create(canvas, props.backend);
+        } catch (e) {
+          if (disposed) return;
+          if (props.backend !== "auto") throw e;
+          // A canvas keeps the first context type forever. If WebGPU got far
+          // enough to claim it, start over on a fresh canvas with WebGL2.
+          console.warn("CellHub: WebGPU failed, retrying with WebGL", e);
+          canvas.remove();
+          canvas = mountCanvas();
+          instance = await WorldRenderer.create(canvas, "webgl");
+        }
+        if (disposed) {
+          instance.destroy();
+          instance.free();
+          return;
+        }
+        renderer.current = instance;
+        instance.set_error_handler((message: string) => {
+          if (!disposed) live.current.onError(message);
         });
-      applyFrame(true);
-      applyView(true);
-      reportView(true);
-    })().catch((e) => {
-      if (!disposed) live.current.onError(`Renderer: ${String(e)}`);
-    });
+        const backend = instance.backend();
+        live.current.onRenderer(backend === "webgl" ? "Rust WebGL" : "Rust WebGPU");
+        if (backend === "webgpu") {
+          // Keep this Promise handler in JS: wgpu 24's WebGPU lost callback
+          // drops its wasm-bindgen Closure before device.lost settles.
+          const gpuContext = canvas.getContext("webgpu") as unknown as {
+            getConfiguration?: () => {
+              device: { lost: Promise<{ reason: string; message: string }> };
+            } | null;
+          };
+          gpuContext
+            ?.getConfiguration?.()
+            ?.device.lost.then((info) => {
+              if (!disposed && info.reason !== "destroyed")
+                live.current.onError(`WebGPU device lost: ${info.message}`);
+            });
+        }
+        addListeners(canvas);
+        applyFrame(true);
+        applyView(true);
+        reportView(true);
+      } catch (e) {
+        if (!disposed) live.current.onError(`Renderer: ${String(e)}`);
+      }
+    })();
+
     return () => {
       disposed = true;
       resetView.current = null;
-      canvas.removeEventListener("pointerdown", pd);
-      canvas.removeEventListener("pointermove", pm);
-      canvas.removeEventListener("pointerup", pu);
-      canvas.removeEventListener("pointercancel", cancel);
-      canvas.removeEventListener("lostpointercapture", cancel);
-      canvas.removeEventListener("wheel", wheel);
+      removeListeners(canvas);
+      canvas.remove();
       const instance = renderer.current;
       renderer.current = null;
       if (instance) {
         instance.destroy();
         instance.free();
       }
-      canvas.remove();
     };
   }, []);
   return <div className="world" ref={host} />;

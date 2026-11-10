@@ -1,6 +1,6 @@
 struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32, padding: f32 }
 @group(0) @binding(0) var<uniform> camera: Camera;
-@group(0) @binding(1) var<storage,read> terrain: array<vec4f>;
+@group(0) @binding(1) var terrain: texture_2d<f32>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var atlas_sampler: sampler;
 
@@ -20,7 +20,7 @@ struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
 }
 @fragment fn terrain_fs(o:TerrainOut)->@location(0) vec4f {
     let w=o.world;
-    let ij=min(vec2u(w/64.),vec2u(47u));let t=terrain[ij.y*48u+ij.x];
+    let ij=min(vec2u(w/64.),vec2u(47u));let t=textureLoad(terrain,vec2i(ij),0);
     let palette=array<u32,4>(0x253e2bu,0x233c38u,0x152d39u,0x3c2940u);
     var color=vec4f(rgb(palette[min(u32(t.w),3u)]),1.);
     if camera.layer==1. {let a=0.08+t.x*0.72;color=vec4f(rgb(0xe7cf7du)*a,a);}
