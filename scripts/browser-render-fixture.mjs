@@ -42,14 +42,15 @@ export const gpuCaptureSource = `    // Read the rendered GPU texture as well as
 
 export async function verifyRenderFixtures({evaluate, delay}) {
   // Exercise real GPU bond geometry independently of cell-body occlusion.
+  // Keep the fixture at the dish center; square-world corners are now masked.
   await evaluate(`(async()=>{
     const mod=await import('/frontend/rust-wasm/cellhub_frontend.js');await mod.default();
     const canvas=document.createElement('canvas');canvas.id='gpu-fixture';
     canvas.style.cssText='position:fixed;left:0;top:0;width:200px;height:200px;z-index:10000';document.body.appendChild(canvas);
     const renderer=await mod.WorldRenderer.create(canvas,"auto");
-    const cells=new Float32Array([2,60,100,10,0,1,0,0,0,0,-1,0,9,140,100,10,2,1,0,0,0,0,-1,0]);
+    const cells=new Float32Array([2,1496,1536,10,0,1,0,0,0,0,-1,0,9,1576,1536,10,2,1,0,0,0,0,-1,0]);
     const terrain=new Float32Array(48*48*4);
-    renderer.set_view(100,100,1,0,-1);renderer.set_frame(cells,terrain,new Uint32Array([2,9]));window.__captureGPU='gpu-fixture';renderer.render();
+    renderer.set_view(1536,1536,1,0,-1);renderer.set_frame(cells,terrain,new Uint32Array([2,9]));window.__captureGPU='gpu-fixture';renderer.render();
     window.__gpuFixture={renderer,cells,terrain,canvas};
   })()`);
   await delay(250);
@@ -59,15 +60,19 @@ export async function verifyRenderFixtures({evaluate, delay}) {
     await writeFile(path,Buffer.from(result.png,"base64"));return result.pixel;
   };
   const normal=await gpuImage("work/cellhub-bond-normal.png");
-  await evaluate("window.__captureGPU='gpu-fixture';__gpuFixture.renderer.set_view(100,100,1,0,9);__gpuFixture.renderer.render()");
+  await evaluate("window.__captureGPU='gpu-fixture';__gpuFixture.renderer.set_view(1536,1536,1,0,9);__gpuFixture.renderer.render()");
   await delay(100);
   const selected=await gpuImage("work/cellhub-bond-selected.png");
   await evaluate("window.__captureGPU='gpu-fixture';__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.render()");
   await delay(100);
   const removed=await gpuImage("work/cellhub-bond-removed.png");
-  assert.deepEqual(removed,[37,62,43,255]);
-  assert(normal.slice(0,3).reduce((sum,v,i)=>sum+Math.abs(v-removed[i]),0)>100);
-  assert(selected.slice(0,3).reduce((sum,v,i)=>sum+Math.abs(v-normal[i]),0)>30);
+  assert.deepEqual(removed,[240,245,235,255],"removing the bond reveals the light dish background");
+  assert.equal(normal[3],255,"the bond remains opaque over the dish");
+  assert.equal(selected[3],255,"selection remains opaque over the dish");
+  assert(normal.slice(0,3).every((v,i)=>v<removed[i]),"the green bond is darker than the dish");
+  assert(normal.slice(0,3).reduce((sum,v,i)=>sum+Math.abs(v-removed[i]),0)>100,"the bond is visibly distinct from the dish");
+  assert(selected.slice(0,3).every((v,i)=>v<normal[i]),"selection darkens the bond instead of turning it white");
+  assert(selected.slice(0,3).reduce((sum,v,i)=>sum+Math.abs(v-normal[i]),0)>30,"selection visibly changes the bond");
   console.log(JSON.stringify({gpuPixels:{normal,selected,removed}}));
   assert(await evaluate(`(() => {try {__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array([2]));return false;}catch(e){return String(e).includes('bond snapshot');}})()`));
   await evaluate("__gpuFixture.renderer.destroy();__gpuFixture.renderer.free();__gpuFixture.canvas.remove();delete window.__gpuFixture");

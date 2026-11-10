@@ -13,6 +13,7 @@ fn rgb(v:u32)->vec3f {return vec3f(f32((v>>16u)&255u),f32((v>>8u)&255u),f32(v&25
 // Premultiplied alpha compositing, matching the separate original shapes.
 fn over(base:vec4f,color:vec3f,a:f32)->vec4f {return vec4f(color*a,a)+base*(1.-a);}
 fn coverage(distance:f32)->f32 {let aa=max(fwidth(distance),0.001);return 1.-smoothstep(-aa*0.5,aa*0.5,distance);}
+fn dish_distance(world:vec2f)->f32 {return length(world-vec2f(1536.))-1536.;}
 
 struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
 @vertex fn terrain_vs(@builtin(vertex_index) i:u32)->TerrainOut {
@@ -20,19 +21,18 @@ struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
 }
 @fragment fn terrain_fs(o:TerrainOut)->@location(0) vec4f {
     let w=o.world;
-    let ij=min(vec2u(w/64.),vec2u(47u));let t=textureLoad(terrain,vec2i(ij),0);
-    let palette=array<u32,4>(0x253e2bu,0x233c38u,0x152d39u,0x3c2940u);
-    var color=vec4f(rgb(palette[min(u32(t.w),3u)]),1.);
-    if camera.layer==1. {let a=0.08+t.x*0.72;color=vec4f(rgb(0xe7cf7du)*a,a);}
-    if camera.layer==2. {let a=0.08+t.y*0.72;color=vec4f(rgb(0xd28ce9u)*a,a);}
-    if camera.layer==3. {let a=0.08+t.z*0.72;color=vec4f(rgb(0x75d5bdu)*a,a);}
+    let distance=dish_distance(w);
+    let mask=coverage(distance);
+    let ij=vec2u(clamp(w/64.,vec2f(0.),vec2f(47.)));let t=textureLoad(terrain,vec2i(ij),0);
+    var color=vec4f(rgb(0xf0f5ebu),1.);
+    if camera.layer==1. {color=vec4f(mix(rgb(0xf0f5ebu),rgb(0xc1b45fu),clamp(t.x*0.65,0.,1.)),1.);}
+    if camera.layer==2. {color=vec4f(mix(rgb(0xf0f5ebu),rgb(0xb385bau),clamp(t.y*0.65,0.,1.)),1.);}
+    if camera.layer==3. {color=vec4f(mix(rgb(0xf0f5ebu),rgb(0x669e7eu),clamp(t.z*0.65,0.,1.)),1.);}
     let food_center=vec2f(ij)*64.+vec2f(17.+f32(ij.y%3u)*9.,27.+f32(ij.x%3u)*7.);
     let food=coverage(length(w-food_center)-1.8);
-    if t.z>0.15 {color=over(color,rgb(0xa5cf9bu),food*t.z*0.5);}
-    let edge=min(min(w.x,w.y),min(3072.-w.x,3072.-w.y));
-    color=over(color,rgb(0x7b9889u),coverage(edge-1.));
-    if any(w<vec2f(0.)) || any(w>vec2f(3072.)) {discard;}
-    return color;
+    if t.z>0.15 {color=over(color,rgb(0x7e9c72u),food*t.z*0.35*smoothstep(0.2,0.65,camera.zoom));}
+    color=over(color,rgb(0x809779u),coverage(abs(distance+0.65/camera.zoom)-0.65/camera.zoom));
+    return color*mask;
 }
 
 struct LabelOut {@builtin(position) pos:vec4f,@location(0) uv:vec2f}
@@ -40,7 +40,7 @@ struct LabelOut {@builtin(position) pos:vec4f,@location(0) uv:vec2f}
     let origins=array<vec2f,4>(vec2f(470.,650.),vec2f(1750.,1550.),vec2f(1250.,2600.),vec2f(2330.,680.));
     let uv=corner(v)*0.5+0.5;var o:LabelOut;o.pos=project(origins[i]+uv*vec2f(512.,32.));o.uv=vec2f(uv.x,(f32(i)+uv.y)*0.25);return o;
 }
-@fragment fn label_fs(o:LabelOut)->@location(0) vec4f {let a=textureSample(atlas,atlas_sampler,o.uv).a*0.5;return vec4f(rgb(0xa4bbaeu)*a,a);}
+@fragment fn label_fs(o:LabelOut)->@location(0) vec4f {return vec4f(0.);}
 
 struct CellOut {
     @builtin(position) pos:vec4f,
@@ -51,11 +51,12 @@ struct CellOut {
     @location(4) @interpolate(flat) mutations:f32,
     @location(5) @interpolate(flat) selected:u32,
     @location(6) @interpolate(flat) custom_color:f32,
+    @location(7) world:vec2f,
 }
 @vertex fn cell_vs(@builtin(vertex_index) v:u32,@location(0) a:vec4f,@location(1) b:vec4f,@location(2) c:vec4f)->CellOut {
     // id,x,y,radius, kind,mass,age,generation, mutations,angle,RGB,mirrored.
-    var o:CellOut;let extent=max(a.w*2.+2.,a.w+9.);o.local=corner(v)*extent;
-    o.pos=project(a.yz+o.local);o.radius=a.w;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);o.custom_color=c.z;return o;
+    var o:CellOut;let radius=a.w;let extent=max(radius*2.+2./camera.zoom,radius+9./camera.zoom);o.local=corner(v)*extent;
+    o.world=a.yz+o.local;o.pos=project(o.world);o.radius=radius;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);o.custom_color=c.z;return o;
 }
 fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a,v)/max(dot(v,v),0.0001),0.,1.);return length(p-a-v*t);}
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
@@ -63,15 +64,17 @@ fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a
     var color=rgb(palette[min(o.kind,5u)]);
     if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
     let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
-    let halo=coverage(d-r-3.);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.7);
+    let halo=coverage(d-r-1./camera.zoom);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.6/camera.zoom);
     let nucleus=coverage(length(o.local-direction*r*0.2)-r*0.29);
-    let tail=coverage(segment_distance(o.local,-direction*r,-direction*r*2.)-0.5);
+    let tail=coverage(segment_distance(o.local,-direction*r,-direction*r*2.)-0.6/camera.zoom);
     let mutation=coverage(length(o.local-vec2f(r*0.55,-r*0.55))-2.);
-    let selection=coverage(abs(d-r-7.)-0.75);
-    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*0.22);out=over(out,color,outline);out=over(out,color,nucleus*0.9);
-    if o.kind==2u {out=over(out,color,tail);}
-    if o.mutations>0. {out=over(out,vec3f(1.),mutation);}
-    if o.selected!=0u {out=over(out,vec3f(1.),selection);}
+    let selection=coverage(abs(d-r-4./camera.zoom)-0.75/camera.zoom);
+    let ink=color*0.48;
+    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*0.65);out=over(out,ink,outline);out=over(out,ink,nucleus*0.9);
+    if o.kind==2u {out=over(out,ink,tail);}
+    if o.mutations>0. {out=over(out,rgb(0x304b37u),mutation);}
+    if o.selected!=0u {out=over(out,rgb(0x23583eu),selection);}
+    out*=coverage(dish_distance(o.world));
     if out.a<0.001 {discard;}return out;
 }
 
@@ -80,6 +83,7 @@ struct LinkOut {
     @location(0) local:vec2f,
     @location(1) @interpolate(flat) length:f32,
     @location(2) @interpolate(flat) selected:u32,
+    @location(3) world:vec2f,
 }
 @vertex fn link_vs(@builtin(vertex_index) v:u32,@location(0) ends:vec4f,@location(1) ids:vec2f)->LinkOut {
     let delta=ends.zw-ends.xy;
@@ -92,12 +96,12 @@ struct LinkOut {
     let extent=half_width+1.5/camera.zoom;
     let uv=corner(v);
     let local=vec2f((uv.x+1.)*0.5*(len+2.*extent)-extent,uv.y*extent);
-    var o:LinkOut;o.pos=project(ends.xy+direction*local.x+normal*local.y);
+    var o:LinkOut;o.world=ends.xy+direction*local.x+normal*local.y;o.pos=project(o.world);
     o.local=local;o.length=len;o.selected=selected;return o;
 }
 @fragment fn link_fs(o:LinkOut)->@location(0) vec4f {
     let half_width=select(1.,1.5,o.selected!=0u);
-    let alpha=coverage(segment_distance(o.local,vec2f(0.),vec2f(o.length,0.))-half_width)*0.8;
-    let color=select(rgb(0xadc89du),rgb(0xe4f5c5u),o.selected!=0u);
+    let alpha=coverage(segment_distance(o.local,vec2f(0.),vec2f(o.length,0.))-max(half_width,0.6/camera.zoom))*0.8*coverage(dish_distance(o.world));
+    let color=select(rgb(0x6e8d64u),rgb(0x23583eu),o.selected!=0u);
     if alpha<0.001 {discard;}return vec4f(color*alpha,alpha);
 }

@@ -1,15 +1,46 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { CHALLENGES, TUTORIALS, listCompleted, listCompletedTutorials } from './challenges';
 import { Library } from './Library';
 import { Settings } from './Settings';
 import type { LibraryKind, PlateData } from './storage';
 import type { Session } from './Laboratory';
+import './home.css';
+
+type ModeIconKind = 'challenge' | 'sandbox' | 'chaos' | 'arena';
+
+function ModeIcon({ kind }: { kind: ModeIconKind }) {
+    return <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+        {kind === 'challenge' && <><circle cx="16" cy="16" r="11"/><circle cx="16" cy="16" r="5"/><path d="M16 2v5M16 25v5M2 16h5M25 16h5"/></>}
+        {kind === 'sandbox' && <><circle cx="16" cy="16" r="12"/><circle cx="12" cy="13" r="3"/><circle cx="20" cy="19" r="4"/><circle cx="11" cy="22" r="1" fill="currentColor" stroke="none"/></>}
+        {kind === 'chaos' && <><path d="m11 10 11 4M11 10l4 14M22 14l-7 10"/><circle cx="10" cy="9" r="4"/><circle cx="24" cy="14" r="4"/><circle cx="15" cy="25" r="4"/></>}
+        {kind === 'arena' && <><path d="M16 3v26"/><circle cx="10" cy="16" r="7"/><circle cx="22" cy="16" r="7"/></>}
+    </svg>;
+}
+
+function ModeCard({ kind, title, description, onClick }: {
+    kind: ModeIconKind;
+    title: string;
+    description: string;
+    onClick?: () => void;
+}) {
+    return <button className="home-mode-card" disabled={!onClick} onClick={onClick}
+        aria-labelledby={`mode-${kind}-title`} aria-describedby={`mode-${kind}-description mode-${kind}-status`}>
+        <span className="home-mode-icon"><ModeIcon kind={kind}/></span>
+        <span className="home-mode-title" id={`mode-${kind}-title`}>{title}</span>
+        <span className="home-mode-description" id={`mode-${kind}-description`}>{description}</span>
+        <span className="home-mode-status" id={`mode-${kind}-status`}>
+            {onClick ? <><span>{kind === 'sandbox' ? 'Начать' : 'Выбрать'}</span><span aria-hidden="true">→</span></> : 'Пока недоступно'}
+        </span>
+    </button>;
+}
 
 export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }) {
     const [page, setPage] = useState<'home' | 'challenges' | 'tutorials'>('home');
     const [library, setLibrary] = useState<LibraryKind | null>(null);
     const [settings, setSettings] = useState(false);
+    const heading = useRef<HTMLHeadingElement>(null);
+    const previousPage = useRef(page);
     const [progress] = useState(() => {
         try {
             return { completed: listCompleted(), tutorials: listCompletedTutorials(), error: '' };
@@ -18,42 +49,43 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
         }
     });
 
+    useEffect(() => {
+        if (previousPage.current === page) return;
+        previousPage.current = page;
+        heading.current?.focus({ preventScroll: true });
+        window.scrollTo(0, 0);
+    }, [page]);
+
     return <div className="home-shell">
         <header className="app-header">
-            <a className="brand" href="#" onClick={e => { e.preventDefault(); setPage('home'); }}>◉ <span>CellHub</span></a>
+            <a className="brand" href="#" onClick={e => { e.preventDefault(); setPage('home'); }}><span aria-hidden="true">◉</span><span>CellHub</span></a>
             <button onClick={() => setSettings(true)}>Настройки</button>
         </header>
         <main className="home-content">
             {page === 'home' ? <>
-                <div className="page-heading"><p className="eyebrow">Лаборатория</p><h1>Выберите режим</h1></div>
-                <div className="mode-grid">
-                    <button className="mode-card" onClick={() => setPage('tutorials')}>
-                        <span className="mode-icon">◎</span><h2>Обучение</h2>
-                        <p>Освойте микроскоп, редактор генома и создание многоклеточного организма.</p>
-                        <span className="card-action">Выбрать урок →</span>
-                    </button>
-                    <button className="mode-card" onClick={() => setPage('challenges')}>
-                        <span className="mode-icon">◇</span><h2>Испытания</h2>
-                        <p>Решайте задачи в заданной среде и открывайте следующие испытания.</p>
-                        <span className="card-action">Выбрать испытание →</span>
-                    </button>
-                    <button className="mode-card" onClick={() => onStart({ kind: 'sandbox' })}>
-                        <span className="mode-icon">◌</span><h2>Песочница</h2>
-                        <p>Настраивайте среду, конструируйте организмы и наблюдайте за ними.</p>
-                        <span className="card-action">Новый эксперимент →</span>
-                    </button>
+                <div className="home-heading"><h1 ref={heading} tabIndex={-1}>Выберите режим</h1></div>
+                <div className="home-mode-grid">
+                    <ModeCard kind="challenge" title="Испытания" description="Задачи с заданными условиями и целями." onClick={() => setPage('challenges')}/>
+                    <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
+                    <ModeCard kind="chaos" title="Хаос" description="Биомы, паразиты и сложные экосистемы."/>
+                    <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками."/>
                 </div>
-                <section className="saved-section"><h2>Ваши работы</h2><div className="button-row">
-                    <button onClick={() => setLibrary('plate')}>Открыть эксперимент</button>
-                    <button onClick={() => setLibrary('genome')}>Банк геномов</button>
-                </div></section>
-                <section className="future-section" aria-label="Будущие режимы"><h2>Планируемые режимы</h2><div>
-                    <p><strong>Хаос</strong><span>Биомы, паразиты и экосистемы. Запланировано.</span></p>
-                    <p><strong>Мультиплей</strong><span>Совместные эксперименты. Запланировано.</span></p>
-                </div></section>
+                <div className="home-secondary-grid">
+                    <section className="home-panel" aria-labelledby="home-tutorials">
+                        <div><h2 id="home-tutorials">Обучение</h2><p>Микроскоп, геном и первые организмы — пошагово.</p></div>
+                        <div className="home-panel-actions"><button onClick={() => setPage('tutorials')}>Выбрать урок</button></div>
+                    </section>
+                    <section className="home-panel" aria-labelledby="home-saved">
+                        <div><h2 id="home-saved">Ваши работы</h2><p>Сохранённые эксперименты и геномы.</p></div>
+                        <div className="home-panel-actions">
+                            <button onClick={() => setLibrary('plate')}>Открыть эксперимент</button>
+                            <button onClick={() => setLibrary('genome')}>Банк геномов</button>
+                        </div>
+                    </section>
+                </div>
             </> : <>
                 <div className="page-heading"><button onClick={() => setPage('home')}>← Режимы</button>
-                    <h1>{page === 'tutorials' ? 'Обучение' : 'Испытания'}</h1>
+                    <h1 ref={heading} tabIndex={-1}>{page === 'tutorials' ? 'Обучение' : 'Испытания'}</h1>
                     <p>{page === 'tutorials' ? 'Уроки можно проходить в любом порядке.' : 'Каждая задача открывает следующую.'}</p>
                 </div>
                 {progress.error && <p role="alert">{progress.error}</p>}

@@ -2,6 +2,7 @@
 
 mod bonds;
 mod biology;
+mod boundary;
 mod environment;
 mod persistence;
 mod tools;
@@ -10,9 +11,10 @@ mod step;
 #[cfg(test)]
 mod tests;
 
-use crate::components::{Cell, LIMIT, Position, SIZE, SNAPSHOT_STRIDE, radius};
+use crate::components::{Cell, LIMIT, Position, SNAPSHOT_STRIDE, radius};
 use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, map};
+use boundary::Boundary;
 use environment::Environment;
 use hecs::World;
 use spatial::SpatialGrid;
@@ -37,6 +39,7 @@ pub struct Simulation {
     // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
     bonds: BTreeSet<(u32, u32)>,
     settings: Environment,
+    boundary: Boundary,
 }
 
 #[wasm_bindgen]
@@ -58,11 +61,30 @@ impl Simulation {
             spatial: SpatialGrid::new(),
             bonds: BTreeSet::new(),
             settings: Environment::default(),
+            boundary: Boundary::default(),
         }
     }
 
     pub fn reset(&mut self) {
+        let boundary = self.boundary;
         *self = Self::new(self.seed);
+        self.boundary = boundary;
+    }
+
+    /// Opt in for the local laboratory without changing the native server map.
+    pub fn set_circular_dish(&mut self, enabled: bool) {
+        self.boundary = if enabled {
+            Boundary::Circle
+        } else {
+            Boundary::Square
+        };
+        if enabled {
+            for (_, (position, cell)) in self.world.query_mut::<(&mut Position, &Cell)>() {
+                (position.x, position.y, _) = self
+                    .boundary
+                    .constrain(position.x, position.y, cell.mass, 12.);
+            }
+        }
     }
 
     /// Remove living cells while retaining the current substrate, time and settings.
@@ -254,12 +276,9 @@ impl Simulation {
         let id = self.next_id;
         self.next_id += 1;
         let angle = self.random() * std::f32::consts::TAU;
+        let (x, y, _) = self.boundary.constrain(x, y, 1., 10.);
         let entity = self.world.spawn((
-            Position {
-                x: x.clamp(10., SIZE - 10.),
-                y: y.clamp(10., SIZE - 10.),
-                angle,
-            },
+            Position { x, y, angle },
             Cell {
                 id,
                 mode,

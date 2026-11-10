@@ -135,6 +135,7 @@ function commands() {
 try {
   await init();
   sim = new Simulation(73421);
+  sim.set_circular_dish(true);
   ctx.postMessage({ type: "ready" });
   let needFrame = true;
   setInterval(() => {

@@ -9,4 +9,5 @@ export type WorldViewProps = {
   onView: (v: ViewState) => void;
   onError: (message: string) => void;
   recenter: number;
+  zoomStep?: number;
 };

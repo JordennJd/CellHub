@@ -524,6 +524,87 @@ fn simulation_continues_after_removal_and_sterilization() {
     assert!(s.world.get::<&Cell>(entity(&s, replacement)).unwrap().age > 0.99);
 }
 
+fn assert_inside_dish(s: &Simulation) {
+    for (_, (position, cell)) in s.world.query::<(&Position, &Cell)>().iter() {
+        let distance = (position.x - SIZE / 2.).hypot(position.y - SIZE / 2.);
+        assert!(distance + crate::components::radius(cell.mass) <= SIZE / 2. + 0.001);
+    }
+}
+
+#[test]
+fn circular_dish_contains_placement_movement_division_and_bonds() {
+    let mut s = quiet_world();
+    let mut genes = modern_genes(1);
+    genes[1] = 1.;
+    genes[9] = 1.;
+    s.set_circular_dish(true);
+    let parent = s.spawn(0., 0., 0, &genes).unwrap();
+    assert_inside_dish(&s);
+    s.reposition_cell(parent, SIZE, 0.).unwrap();
+    s.boost_cell(parent).unwrap();
+    assert_inside_dish(&s);
+    mature_all(&mut s);
+    s.advance(1);
+    assert_eq!(s.world.len(), 2);
+    assert_eq!(s.bonds.len(), 1);
+    assert_inside_dish(&s);
+    for _ in 0..5 {
+        s.advance(120);
+        assert_inside_dish(&s);
+    }
+}
+
+#[test]
+fn circular_dish_edge_death_does_not_change_native_square_worlds() {
+    let mut dish = quiet_world();
+    dish.set_circular_dish(true);
+    dish.settings.kill_at_edge = true;
+    let mut genes = stationary_genes(2);
+    genes[5] = 60.;
+    let id = dish.spawn(SIZE - 12.5, SIZE / 2., 0, &genes).unwrap();
+    dish.world
+        .get::<&mut Position>(entity(&dish, id))
+        .unwrap()
+        .angle = 0.;
+    dish.advance(1);
+    assert_eq!(dish.world.len(), 0);
+
+    let mut square = quiet_world();
+    square.settings.kill_at_edge = true;
+    square.spawn(20., 20., 0, &stationary_genes(0)).unwrap();
+    square.advance(30);
+    assert_eq!(square.world.len(), 1);
+    assert_eq!(square.snapshot()[1..3], [20., 20.]);
+}
+
+#[test]
+fn circular_dish_migrates_square_saves_and_survives_reset() {
+    let mut square = quiet_world();
+    let id = square.spawn(20., 20., 0, &stationary_genes(0)).unwrap();
+    square.advance(10);
+    let mut dish = quiet_world();
+    dish.set_circular_dish(true);
+    dish.restore_checked(&square.encode_state()).unwrap();
+    assert_eq!(dish.world.len(), 1);
+    assert_eq!(dish.tick, square.tick);
+    assert_eq!(dish.genome(id), square.genome(id));
+    assert_inside_dish(&dish);
+    dish.advance(30);
+    assert_inside_dish(&dish);
+
+    let mut restored = quiet_world();
+    restored.set_circular_dish(true);
+    restored.restore_checked(&dish.encode_state()).unwrap();
+    for _ in 0..3 {
+        dish.advance(30);
+        restored.advance(30);
+        assert_eq!(dish.encode_state(), restored.encode_state());
+    }
+    dish.reset();
+    dish.spawn(0., 0., 0, &stationary_genes(0)).unwrap();
+    assert_inside_dish(&dish);
+}
+
 #[test]
 fn aging_and_edge_controls_have_distinct_effects() {
     let mut s = quiet_world();

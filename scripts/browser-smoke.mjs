@@ -19,7 +19,7 @@ const until=async expression=>{for(let i=0;i<200;i++){if(await evaluate(`Boolean
 const click=async(text,scope='document')=>{assert(await evaluate(`(()=>{const b=[...${scope}.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true;})()`),`Missing enabled button: ${text}`);await delay(80);};
 const input=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(String(value))});el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
 const screenshot=async path=>{const r=await call('Page.captureScreenshot',{format:'png'});await writeFile(path,Buffer.from(r.data,'base64'));};
-const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("[...document.querySelectorAll('.mode-card')].find(b=>b.querySelector('h2').textContent==='Песочница').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
+const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("document.querySelector('#mode-sandbox-title').closest('button').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
 const clickWorld=async(x,y,button='left')=>{const point=await evaluate(`(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();const z=Math.min(r.width,r.height)/3072*.93;return{x:r.x+r.width/2+(${x}-1536)*z,y:r.y+r.height/2+(${y}-1536)*z};})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button,clickCount:1,...point});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button,clickCount:1,...point});};
 const confirm=async()=>{if(await evaluate("!!document.querySelector('[role=dialog]')"))await click('Подтвердить',"document.querySelector('[role=dialog]')");};
 try{
@@ -32,8 +32,10 @@ try{
  constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(this===window.__mainWorker&&data.type==='frame'){window.__cellhubFrame=data;window.__cellhubFrames++;}});}
  };`});
  await call('Page.navigate',{url});await until("document.querySelector('.home-shell')");
- assert.equal(await evaluate("document.querySelectorAll('.future-section button').length"),0);
- assert(await evaluate("document.querySelector('.future-section').textContent.includes('Хаос')&&document.querySelector('.future-section').textContent.includes('Мультиплей')"));
+ assert.deepEqual(await evaluate("[...document.querySelectorAll('.home-mode-card')].map(button=>({title:button.querySelector('.home-mode-title').textContent,disabled:button.disabled}))"),[
+  {title:'Испытания',disabled:false},{title:'Песочница',disabled:false},{title:'Хаос',disabled:true},{title:'Арена',disabled:true}
+ ]);
+ assert.equal(await evaluate("document.querySelectorAll('.future-section').length"),0);
  await screenshot('work/cellhub-home.png');await openSandbox();
  const hasWebGPU=await evaluate("document.querySelector('.world canvas').dataset.renderer==='webgpu'");
  assert(await evaluate("!/(WASM|RUST|WebGPU|WebGL|SEED|experimental|Большие возможности|Маленькая жизнь)/.test(document.body.innerText)"));

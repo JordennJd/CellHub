@@ -2,7 +2,7 @@
 
 use super::Simulation;
 use super::spatial::BUCKET_SIZE;
-use crate::components::{Cell, LIMIT, MIN_DIVISION_AGE, Position, SIZE, radius};
+use crate::components::{Cell, LIMIT, MIN_DIVISION_AGE, Position, radius};
 use crate::genome::Genome;
 use crate::terrain::tile_index;
 use std::collections::{BTreeMap, HashSet};
@@ -78,10 +78,9 @@ impl Simulation {
             let next_y = p.y
                 + p.angle.sin() * speed * STEP / self.settings.viscosity
                 + vertical_drift * STEP;
-            let reached_edge =
-                !(12. ..=SIZE - 12.).contains(&next_x) || !(12. ..=SIZE - 12.).contains(&next_y);
-            p.x = next_x.clamp(12., SIZE - 12.);
-            p.y = next_y.clamp(12., SIZE - 12.);
+            let (x, y, reached_edge) = self.boundary.constrain(next_x, next_y, c.mass, 12.);
+            p.x = x;
+            p.y = y;
             if c.mass < 0.18
                 || (self.settings.aging && c.age > m.lifespan)
                 || (self.settings.kill_at_edge && reached_edge)
@@ -123,14 +122,26 @@ impl Simulation {
                 b.generation += 1;
                 let angle = p.angle + m.angle * if c.mirrored { -1. } else { 1. };
                 let distance = (radius(a.mass) + radius(b.mass) + 2.) / 2.;
+                let (ax, ay, _) = self.boundary.constrain(
+                    p.x + angle.cos() * distance,
+                    p.y + angle.sin() * distance,
+                    a.mass,
+                    12.,
+                );
+                let (bx, by, _) = self.boundary.constrain(
+                    p.x - angle.cos() * distance,
+                    p.y - angle.sin() * distance,
+                    b.mass,
+                    12.,
+                );
                 let pa = Position {
-                    x: (p.x + angle.cos() * distance).clamp(12., SIZE - 12.),
-                    y: (p.y + angle.sin() * distance).clamp(12., SIZE - 12.),
+                    x: ax,
+                    y: ay,
                     angle: angle + m.child_angle_a * if a.mirrored { -1. } else { 1. },
                 };
                 let pb = Position {
-                    x: (p.x - angle.cos() * distance).clamp(12., SIZE - 12.),
-                    y: (p.y - angle.sin() * distance).clamp(12., SIZE - 12.),
+                    x: bx,
+                    y: by,
                     angle: angle
                         + std::f32::consts::PI
                         + m.child_angle_b * if b.mirrored { -1. } else { 1. },
@@ -200,9 +211,16 @@ impl Simulation {
                             }
                             if d2 > 0.001 && d2 < 18. * 18. {
                                 let d = d2.sqrt();
-                                let mut p = self.world.get::<&mut Position>(e).unwrap();
-                                p.x = (p.x + (pos.x - op.x) / d * 0.3).clamp(12., SIZE - 12.);
-                                p.y = (p.y + (pos.y - op.y) / d * 0.3).clamp(12., SIZE - 12.);
+                                let (p, c) = self
+                                    .world
+                                    .query_one_mut::<(&mut Position, &Cell)>(e)
+                                    .unwrap();
+                                (p.x, p.y, _) = self.boundary.constrain(
+                                    p.x + (pos.x - op.x) / d * 0.3,
+                                    p.y + (pos.y - op.y) / d * 0.3,
+                                    c.mass,
+                                    12.,
+                                );
                             }
                         }
                     }

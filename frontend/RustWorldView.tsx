@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import init, { WorldRenderer } from "./rust-wasm/cellhub_frontend.js";
-import { bindCanvasControls } from "./input/canvas-controls";
+import { bindCanvasControls, fitDishCamera, resizeDishCamera, zoomDishCamera } from "./input/canvas-controls";
 import { WORLD, STRIDE, type Frame } from "./model";
 import type { BackendPreference } from "./backend";
 import type { WorldViewProps } from "./world-view-types";
@@ -26,6 +26,8 @@ export function RustWorldView(props: RustWorldViewProps) {
   const appliedFrame = useRef<Frame | null>(null);
   const appliedView = useRef("");
   const resetView = useRef<(() => void) | null>(null);
+  const zoomView = useRef<((steps: number) => void) | null>(null);
+  const previousZoomStep = useRef(props.zoomStep ?? 0);
   const lastReport = useRef(0);
 
   const viewKey = () => {
@@ -78,6 +80,12 @@ export function RustWorldView(props: RustWorldViewProps) {
   useEffect(() => {
     resetView.current?.();
   }, [props.recenter]);
+  useEffect(() => {
+    const next = props.zoomStep ?? 0;
+    const delta = next - previousZoomStep.current;
+    previousZoomStep.current = next;
+    if (delta) zoomView.current?.(delta);
+  }, [props.zoomStep]);
 
   useEffect(() => {
     const el = host.current!;
@@ -86,25 +94,46 @@ export function RustWorldView(props: RustWorldViewProps) {
       const value = document.createElement("canvas");
       value.style.width = "100%";
       value.style.height = "100%";
-      value.setAttribute("aria-label", "Субстрат CellHub: клетки и биомы");
+      value.setAttribute("aria-label", "Чашка с клетками");
       el.appendChild(value);
       return value;
     };
     const canvas = mountCanvas();
 
+    const measure = () => ({ width: el.clientWidth, height: el.clientHeight });
+    let viewport = measure();
     const reset = () => {
-      const c = camera.current;
-      c.x = WORLD / 2;
-      c.y = WORLD / 2;
-      c.zoom = Math.max(
-        0.001,
-        (Math.min(el.clientWidth, el.clientHeight) / WORLD) * 0.93,
-      );
+      viewport = measure();
+      Object.assign(camera.current, fitDishCamera(viewport, WORLD));
       applyView(true);
       reportView(true);
     };
     resetView.current = reset;
+    zoomView.current = (steps) => {
+      let anchor = { x: camera.current.x, y: camera.current.y };
+      const data = live.current.frame?.cells;
+      if (live.current.selected !== null && data) {
+        for (let i = 0; i < data.length; i += STRIDE) {
+          if (data[i] === live.current.selected) {
+            anchor = { x: data[i + 1], y: data[i + 2] };
+            break;
+          }
+        }
+      }
+      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), WORLD));
+      applyView(true);
+      reportView(true);
+    };
     reset();
+    const resizeObserver = new ResizeObserver(() => {
+      const next = measure();
+      if (!next.width || !next.height || (next.width === viewport.width && next.height === viewport.height)) return;
+      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, WORLD));
+      viewport = next;
+      applyView(true);
+      reportView(true);
+    });
+    resizeObserver.observe(el);
 
     let removeControls = () => {};
     const addControls = () => {
@@ -176,6 +205,8 @@ export function RustWorldView(props: RustWorldViewProps) {
     return () => {
       disposed = true;
       resetView.current = null;
+      zoomView.current = null;
+      resizeObserver.disconnect();
       removeControls();
       canvas.remove();
       const instance = renderer.current;

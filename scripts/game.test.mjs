@@ -188,6 +188,7 @@ test("every mechanic challenge has a measured legal solution in the real WASM si
   const frame = sim => ({type: "frame", cells: sim.snapshot(), links: sim.links(), terrain: sim.terrain(), stats: sim.stats()});
   for (const challenge of CHALLENGES) {
     const sim = new Simulation(73421);
+    sim.set_circular_dish(true);
     let inserted = 0;
     const spawn = (x,y,genome,mode=0) => {
       assert(genome.every(m=>challenge.allowedKinds.includes(m.kind)), `${challenge.id}: solution uses allowed types`);

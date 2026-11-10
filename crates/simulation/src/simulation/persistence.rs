@@ -113,7 +113,8 @@ impl Simulation {
     }
 
     pub(super) fn restore_checked(&mut self, values: &[f64]) -> Result<(), String> {
-        let replacement = Self::decode_state(values)?;
+        let mut replacement = Self::decode_state(values)?;
+        replacement.set_circular_dish(matches!(self.boundary, super::boundary::Boundary::Circle));
         *self = replacement;
         Ok(())
     }

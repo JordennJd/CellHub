@@ -1,7 +1,7 @@
 //! Laboratory interventions, independent of genome and time controls.
 
 use super::Simulation;
-use crate::components::{Cell, Position, SIZE};
+use crate::components::{Cell, Position};
 use hecs::Entity;
 
 impl Simulation {
@@ -27,8 +27,16 @@ impl Simulation {
 
     pub(super) fn boost_cell(&mut self, id: u32) -> Result<(), String> {
         let entity = self.find_cell(id)?;
-        let mut cell = self.world.get::<&mut Cell>(entity).unwrap();
+        let (cell, position) = self
+            .world
+            .query_one_mut::<(&mut Cell, &mut Position)>(entity)
+            .unwrap();
         cell.mass = (cell.mass + 1.).min(1_000_000.);
+        if matches!(self.boundary, super::boundary::Boundary::Circle) {
+            (position.x, position.y, _) = self
+                .boundary
+                .constrain(position.x, position.y, cell.mass, 12.);
+        }
         Ok(())
     }
 
@@ -37,9 +45,11 @@ impl Simulation {
             return Err("Некорректная позиция клетки".into());
         }
         let entity = self.find_cell(id)?;
-        let mut position = self.world.get::<&mut Position>(entity).unwrap();
-        position.x = x.clamp(12., SIZE - 12.);
-        position.y = y.clamp(12., SIZE - 12.);
+        let (position, cell) = self
+            .world
+            .query_one_mut::<(&mut Position, &Cell)>(entity)
+            .unwrap();
+        (position.x, position.y, _) = self.boundary.constrain(x, y, cell.mass, 12.);
         Ok(())
     }
 }

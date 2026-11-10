@@ -68,29 +68,29 @@ export const CHALLENGES: Challenge[] = [
     {
         id: "algae", title: "Водоросли", target: 16, budget: 3, allowedKinds: [0],
         description: "Вырастите не менее 16 фотоцитов, поместив не больше трёх клеток.",
-        hint: "Фотоциты получают энергию от света. Выберите освещённую область и дождитесь нескольких делений.",
-        spoiler: "Поместите исходную клетку в верхнюю левую область чашки. Включите ускорение и наблюдайте за популяцией.",
+        hint: "Фотоциты получают энергию от света. Выберите слой «Свет»: насыщенный жёлтый цвет показывает хорошо освещённые области.",
+        spoiler: "В слое «Свет» поместите исходную клетку в жёлтую область в верхней левой части чашки. Включите ускорение и наблюдайте за популяцией.",
         environment: { ...environment, light: 2 }, genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }],
     },
     {
         id: "feeding", title: "Питательная среда", target: 12, budget: 2, requires: "algae", allowedKinds: [0, 1],
         description: "В среде без света вырастите не менее 12 клеток, используя не больше двух вставок.",
         hint: "При отсутствии света фотоцитам не хватает энергии. Другой тип клеток получает её из пищи.",
-        spoiler: "Выберите для M1 фагоцит. Поместите его в питательный пояс и запустите время.",
+        spoiler: "Выберите для M1 фагоцит. Включите слой «Пища», поместите клетку в область с насыщенным зелёным цветом и запустите время.",
         environment: { ...environment, light: 0, food: 3 }, genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }],
     },
     {
         id: "colony", title: "Колония", target: 40, budget: 1, requires: "feeding", allowedKinds: [0, 1, 2],
         description: "Создайте популяцию не менее 40 клеток из одной исходной клетки.",
         hint: "Одна клетка должна дать несколько поколений потомков. Проверьте режимы обеих дочерних клеток и источник питания.",
-        spoiler: "Начните с фагоцита, задайте обеим дочерям M1 и массу деления около 1,8. Поместите клетку в питательный пояс.",
+        spoiler: "Начните с фагоцита, задайте обеим дочерям M1 и массу деления около 1,8. В слое «Пища» поместите клетку в область с насыщенным зелёным цветом.",
         environment: { ...environment, light: 2, food: 4 }, genome: [{ ...newMode(0), threshold: 1.8, speed: 8, lifespan: 1000 }],
     },
     {
         id: "adhesion", title: "Связанные потомки", target: 4, budget: 1, requires: "colony", allowedKinds: [0, 1, 2],
         description: "Из одной клетки получите не менее четырёх живых клеток, три связи и второе поколение потомков.",
         hint: "Новая связь между дочерями и наследование прежних связей — разные настройки. Для растущей колонии нужны обе.",
-        spoiler: "Выберите фагоцит, массу деления 1,8 и скорость 0. Свяжите дочерей и включите наследование связей у обеих. Поместите клетку в питательный пояс справа от центра.",
+        spoiler: "Выберите фагоцит, массу деления 1,8 и скорость 0. Свяжите дочерей и включите наследование связей у обеих. В слое «Пища» поместите клетку в насыщенную зелёную область справа от центра.",
         environment: { ...environment, food: 4 }, genome: [{ ...newMode(0), threshold: 1.8, speed: 0, lifespan: 1000 }],
         objectives: [
             { id: "population", label: "Клеток", metric: "population", target: 4 },
@@ -102,7 +102,7 @@ export const CHALLENGES: Challenge[] = [
         id: "swimmer", title: "Разделение ролей", target: 2, budget: 1, requires: "adhesion", allowedKinds: [0, 1, 2],
         description: "Из одной клетки получите связанных фотоцита и жгутикоцита. Дождитесь возраста жгутикоцита 10 секунд, сохранив обе роли.",
         hint: "Один режим делится на две разные дочерние роли. Жгутик двигает организм, а фотоцит восполняет энергию на свету.",
-        spoiler: "Создайте M1-фотоцит с массой деления 1,2: дочери M2 и M3, связать. M2 — фотоцит, M3 — жгутикоцит со скоростью 15; отключите их деление. Начальный режим M1. Поместите его в верхнюю левую светлую область.",
+        spoiler: "Создайте M1-фотоцит с массой деления 1,2: дочери M2 и M3, связать. M2 — фотоцит, M3 — жгутикоцит со скоростью 15; отключите их деление. Начальный режим M1. В слое «Свет» поместите его в жёлтую область в верхней левой части чашки.",
         environment: { ...environment, light: 2, food: 3 }, genome: [{ ...newMode(0), threshold: 1.8, speed: 0, lifespan: 1000 }],
         objectives: [
             { id: "photo", label: "Фотоцитов", metric: "typePopulation", kind: 0, target: 1 },
@@ -152,7 +152,7 @@ export type TutorialStep = { id: string; title: string; description: string; req
 export type TutorialContext = { genome: Mode[]; initialMode: number; inserted: number; running: boolean; frame: Frame | null; selected: boolean; savedGenome: boolean };
 export type Tutorial = { id: string; title: string; description: string; steps: TutorialStep[]; genome: Mode[]; environment: PlateData["environment"] };
 export const TUTORIAL_STEPS: TutorialStep[] = [
-    { id: "place", requirement: "place", title: "Поместите клетку", description: "Выберите инструмент «Поместить» и нажмите на освещённую область чашки." },
+    { id: "place", requirement: "place", title: "Поместите клетку", description: "Выберите слой «Свет» и инструмент «Поместить». Нажмите на жёлтую область в верхней левой части чашки." },
     { id: "run", requirement: "run", title: "Запустите время", description: "Снимите паузу, чтобы клетка начала расти." },
     { id: "divide", requirement: "divide", title: "Дождитесь деления", description: "Наблюдайте, как из одной клетки получаются две. При необходимости ускорьте время." },
     { id: "inspect", requirement: "inspect", title: "Изучите клетку", description: "Выберите диагностику и нажмите на клетку. Сравните её массу и возраст." },
@@ -177,7 +177,7 @@ export const TUTORIALS: Tutorial[] = [
         steps: [
             { id: "roles", requirement: "roles", title: "Задайте три клеточные роли", description: "Создайте три режима: M1-фотоцит, M2-фагоцит и M3-жгутикоцит. Для M3 отключите деление и установите скорость 15." },
             { id: "adhesion", requirement: "adhesion", title: "Свяжите дочерние клетки", description: "В M1 назначьте дочерям M2 и M3, включите «Связать дочерние клетки». Начальным режимом оставьте M1." },
-            { id: "place", requirement: "place", title: "Поместите организм", description: "Поместите M1 в верхнюю левую освещённую часть чашки и запустите время." },
+            { id: "place", requirement: "place", title: "Поместите организм", description: "Выберите слой «Свет», поместите M1 в жёлтую область в верхней левой части чашки и запустите время." },
             { id: "livingBond", requirement: "livingBond", title: "Наблюдайте связанные роли", description: "Дождитесь связанной пары: фагоцит питается, жгутикоцит двигает организм. При необходимости исправьте режимы и начните заново." },
             { id: "save", requirement: "save", title: "Сохраните организм", description: "Сохраните геном, чтобы использовать его в другом эксперименте." },
         ] },
