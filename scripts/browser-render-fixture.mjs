@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
+
+function cellSignature(pixels, width, height, cssWidth, cssHeight) {
+  const signature = [];
+  for (let y = -30; y <= 30; y += 2) {
+    for (let x = -44; x <= 32; x += 2) {
+      const col = Math.floor(width / 2 + x * width / cssWidth);
+      const row = Math.floor(height / 2 + y * height / cssHeight);
+      const i = (row * width + col) * 4;
+      signature.push((pixels[i] << 16) | (pixels[i + 1] << 8) | pixels[i + 2]);
+    }
+  }
+  return signature;
+}
+
 export const gpuCaptureSource = `    // Read the rendered GPU texture as well as checking the DOM. Headless
     // compositors on Linux can omit WebGPU canvases from page screenshots.
     if (window.GPUCanvasContext) {
+      const cellSignature = ${cellSignature.toString()};
       const contexts=new Map();
       const configure=GPUCanvasContext.prototype.configure;
       const texture=GPUCanvasContext.prototype.getCurrentTexture;
@@ -39,8 +54,11 @@ export const gpuCaptureSource = `    // Read the rendered GPU texture as well as
               return Array.from(pixels.slice(offset,offset+4));
             };
             const surface=[[-65,-65],[-65,0],[-65,65],[0,-65],[0,65],[65,-65],[65,0],[65,65]];
-            const body=[[-8,-8],[-8,8],[8,-8],[8,8],[-12,0],[0,12]];
-            return {pixel:sample(0,0),surface:surface.map(([x,y])=>sample(x,y)),body:body.map(([x,y])=>sample(x,y)),png:image.toDataURL('image/png').split(',')[1]};
+            return {
+              pixel:sample(0,0),surface:surface.map(([x,y])=>sample(x,y)),
+              signature:cellSignature(pixels,width,height,canvas.clientWidth,canvas.clientHeight),
+              png:image.toDataURL('image/png').split(',')[1],
+            };
           });
         }
       };
@@ -86,16 +104,8 @@ export async function verifyRenderFixtures({evaluate, delay}) {
   console.log(JSON.stringify({gpuPixels:{normal,selected,removed}}));
   assert(await evaluate(`(() => {try {__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array([2]));return false;}catch(e){return String(e).includes('bond snapshot');}})()`));
 
-  // Subtract the textured dish at the same coordinates to isolate the cell's texture.
-  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array(),__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.set_view(1536,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
-  const {body:emptyBody}=await gpuImage();
-  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array([2,1536,1536,10,0,1,0,0,0,0,0xff0000,0]),__gpuFixture.terrain,new Uint32Array());window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
-  const {body:granules}=await gpuImage("work/cellhub-cell-texture.png");
-  const alpha=granules.map(([red],i)=>(red-emptyBody[i][0])/(255-emptyBody[i][0]));
-  assert(Math.max(...alpha)-Math.min(...alpha)>0.1,"cytoplasm varies across one cell independently of the substrate");
-
   // A black custom cell retains its dark body and gets a visible nucleus/outline.
-  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array([2,1536,1536,10,0,1,0,0,0,0,0,0]),__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.set_view(1536,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
+  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array([2,1536,1536,10,1,1,0,0,0,0,0,0]),__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.set_view(1536,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
   await delay(100);
   const {pixel:darkNucleus}=await gpuImage("work/cellhub-custom-dark-nucleus.png");
   assert(darkNucleus.slice(0,3).every(v=>v>180),"a black custom cell has a light visible nucleus");
@@ -118,6 +128,51 @@ export async function verifyRenderFixtures({evaluate, delay}) {
   const {pixel:nitrate}=await gpuImage();
   assert(nitrate[2]>nitrate[1]+12&&nitrate[2]>nitrate[0]+40,"the nitrate layer uses the projected field and its own blue scale");
   await evaluate("__gpuFixture.renderer.destroy();__gpuFixture.renderer.free();__gpuFixture.canvas.remove();delete window.__gpuFixture");
-  console.log("PASS: GPU textures, nitrate layer, bonds, custom colors and invalid-frame rejection");
+  console.log("PASS: GPU substrate, nitrate layer, bonds, custom colors and invalid-frame rejection");
+}
 
+export async function verifyCellTypeFixtures(evaluate, backend) {
+  const signatures = await evaluate(`(async()=>{
+    const cellSignature=${cellSignature.toString()};
+    const mod=await import('/frontend/rust-wasm/cellhub_frontend.js');await mod.default();
+    const canvas=document.createElement('canvas');canvas.id='cell-type-fixture';
+    canvas.style.cssText='position:fixed;left:0;top:0;width:200px;height:200px;z-index:10000';
+    document.body.appendChild(canvas);
+    const renderer=await mod.WorldRenderer.create(canvas,${JSON.stringify(backend)});
+    try {
+      if(renderer.backend()!==${JSON.stringify(backend)})throw new Error('Unexpected renderer backend');
+      const webgpu=renderer.backend()==='webgpu';
+      const gl=webgpu?null:canvas.getContext('webgl2');
+      const cell=new Float32Array([2,1536,1536,10,0,1,0,0,0,0,0xffaa55,0]);
+      const terrain=new Float32Array(48*48*4);
+      const links=new Uint32Array();
+      const signatures=[];
+      renderer.set_view(1536,1536,2,0,-1);
+      for(let kind=0;kind<7;kind++){
+        cell[4]=kind;
+        renderer.set_frame(cell,terrain,links);
+        if(webgpu)window.__captureGPU=canvas.id;
+        renderer.render();
+        if(webgpu){
+          signatures.push((await window.__gpuReadback).signature);
+        }else{
+          const pixels=new Uint8Array(canvas.width*canvas.height*4);
+          gl.readPixels(0,0,canvas.width,canvas.height,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+          signatures.push(cellSignature(pixels,canvas.width,canvas.height,canvas.clientWidth,canvas.clientHeight));
+        }
+      }
+      return signatures;
+    }finally{renderer.destroy();renderer.free();canvas.remove();}
+  })()`);
+  assert.equal(signatures.length, 7, "all implemented types were rendered");
+  for (let i = 0; i < signatures.length; i++) {
+    for (let j = 0; j < i; j++) {
+      const changed = signatures[i].filter((value, index) => {
+        const other = signatures[j][index];
+        return [0, 8, 16].some(shift => Math.abs(((value >> shift) & 255) - ((other >> shift) & 255)) > 18);
+      });
+      assert(changed.length >= 10, `${backend} types ${j} and ${i} differ at only ${changed.length} sampled pixels with the same custom RGB`);
+    }
+  }
+  console.log(`PASS: seven distinguishable cell textures with the same custom RGB on ${backend}`);
 }

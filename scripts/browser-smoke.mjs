@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {writeFile,mkdir} from 'node:fs/promises';
 import {verifyTouchControls} from './browser-touch.mjs';
-import {gpuCaptureSource,verifyRenderFixtures} from './browser-render-fixture.mjs';
+import {gpuCaptureSource,verifyRenderFixtures,verifyCellTypeFixtures} from './browser-render-fixture.mjs';
 await mkdir('work',{recursive:true});
 const cdp=process.env.CELLHUB_CDP_URL??'http://127.0.0.1:9224';
 const url=process.env.CELLHUB_URL??'http://127.0.0.1:5175';
@@ -70,12 +70,12 @@ try{
  assert.deepEqual(await evaluate('({cells:Array.from(window.__cellhubFrame.cells),stats:Array.from(window.__cellhubFrame.stats),terrain:Array.from(window.__cellhubFrame.terrain)})'),saved);
  await screenshot('work/cellhub-reopened-experiment.png');
  console.log('PASS: named saves, reset semantics, Home library reopen and exact world restoration');
- if(hasWebGPU)await verifyRenderFixtures({evaluate,delay});else console.log('SKIP: GPU pixel fixtures; browser uses WebGL fallback');
+ if(hasWebGPU){await verifyRenderFixtures({evaluate,delay});await verifyCellTypeFixtures(evaluate,'webgpu');}else console.log('SKIP: WebGPU pixel fixtures; browser uses WebGL fallback');
  // Engine stress is isolated from the UI; no undocumented ?count entry route.
  await evaluate(`(async()=>{const m=await import('/frontend/wasm/simulation.js');await m.default();const s=new m.Simulation(42);try{const g=new Float32Array([0,8,0,0,.5,0,0,1000,1,0,0,0]);for(let i=0;i<20000;i++)s.spawn(20+(i%142)*21,20+Math.floor(i/142)*21,0,g);s.advance(1);if(s.snapshot().length!==240000||!Array.from(s.snapshot()).every(Number.isFinite))throw Error('Invalid 20000-cell fixture');}finally{s.free();}})()`);
  await click('← Меню');await confirm();
  await verifyTouchControls({call,evaluate,until,delay,screenshot,url,openSandbox,click});
  if(await evaluate("!!document.createElement('canvas').getContext('webgl2')")){
- await call('Page.navigate',{url:`${url}/?renderer=webgl`});await openSandbox();await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl'");await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');await screenshot('work/cellhub-webgl-laboratory.png');console.log('PASS: WebGL fallback through Home and laboratory');}
+ await call('Page.navigate',{url:`${url}/?renderer=webgl`});await openSandbox();await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl'");await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');await screenshot('work/cellhub-webgl-laboratory.png');await verifyCellTypeFixtures(evaluate,'webgl');console.log('PASS: WebGL fallback through Home and laboratory');}
  assert.deepEqual(errors,[]);
 }catch(error){console.error(JSON.stringify({errors,body:await evaluate('document.body.innerText')}));await screenshot('work/cellhub-integration-failure.png');throw error;}finally{ws.close();}

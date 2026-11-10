@@ -88,29 +88,41 @@ struct CellOut {
     o.handedness = select(1., -1., c.w > 0.);
     return o;
 }
-fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a,v)/max(dot(v,v),0.0001),0.,1.);return length(p-a-v*t);}
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
     let palette=array<u32,7>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,0x8ed6b3u);
     var color=rgb(palette[min(o.kind,6u)]);
     if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
     let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
     let halo=coverage(d-r-1./camera.zoom);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.6/camera.zoom);
-    let nucleus=coverage(length(o.local-direction*r*0.2)-r*0.29);
-    let tail=coverage(segment_distance(o.local,-direction*r,-direction*r*2.)-0.6/camera.zoom);
+    let nucleus=coverage(d-r*0.21);
     let mutation=coverage(length(o.local-vec2f(r*0.55,-r*0.55))-2.);
     let selection=coverage(abs(d-r-4./camera.zoom)-0.75/camera.zoom);
-    // Sampling in the cell's own basis makes granules rotate with the cell.
+    // Type markings rotate and mirror with the cell, while the custom RGB
+    // continues to tint the membrane and cytoplasm.
     let radial = o.local / max(r, 0.001);
     let side = vec2f(-direction.y, direction.x) * o.handedness;
-    let local_uv = vec2f(dot(radial, direction), dot(radial, side)) * 0.65;
-    let granules = grain(local_uv + o.material_phase);
-    let cytoplasm = clamp(0.36 + granules * 0.76 - 0.08 * min(dot(radial, radial), 1.), 0.12, 0.68);
+    let p = vec2f(dot(radial, direction), dot(radial, side));
+    let aa = clamp(0.5 * length(fwidth(radial)), 0.001, 0.5);
+    let appendages = marking_coverage(appendage_distance(o.kind, p), aa);
+    let patch_grain = grain(p * 0.68 + o.material_phase) * 0.17;
+    let cytoplasm = 0.34 - 0.08 * min(dot(radial, radial), 1.);
     // Keep custom body RGB; lift only details that fall below 3:1 against the dish.
     var ink=color;
     let minimum_ink_luminance=3.*(relative_luminance(rgb(0x253e2bu))+0.05)-0.05;
     if o.custom_color>=0. && relative_luminance(color)<minimum_ink_luminance {ink=rgb(0xdce6dcu);}
-    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*cytoplasm);out=over(out,ink,outline);out=over(out,ink,nucleus*0.9);
-    if o.kind==2u {out=over(out,ink,tail);}
+    var out = over(vec4f(0.), color, halo * 0.08);
+    out = over(out, color, body * cytoplasm);
+    if o.kind == 0u {
+        let chloroplasts = marking_coverage(chloroplast_distance(p) + patch_grain, aa);
+        out = over(out, rgb(0x57a73fu), chloroplasts * body * 0.88);
+    }
+    if o.kind == 4u {
+        let inner_membrane = marking_coverage(abs(length(radial) - 0.72) - 0.05, aa);
+        out = over(out, ink, inner_membrane * 0.8);
+    }
+    out = over(out, ink, appendages);
+    out = over(out, ink, outline);
+    out = over(out, ink, nucleus * 0.9);
     if o.mutations>0. {out=over(out,vec3f(1.),mutation);}
     if o.selected!=0u {out=over(out,vec3f(1.),selection);}
     out*=coverage(dish_distance(o.world));

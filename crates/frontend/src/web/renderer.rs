@@ -315,7 +315,14 @@ impl RendererState {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("CellHub WGSL"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../scene.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../cell_shapes.wgsl"),
+                    "\n",
+                    include_str!("../scene.wgsl")
+                )
+                .into(),
+            ),
         });
         let terrain_pipeline = pipeline(
             &device,
