@@ -1,14 +1,21 @@
 //! Cell simulation: public wasm ABI and tick orchestration.
 
 mod bonds;
+mod biology;
+mod boundary;
+mod environment;
+mod persistence;
+mod tools;
 mod spatial;
 mod step;
 #[cfg(test)]
 mod tests;
 
-use crate::components::{Cell, LIMIT, Position, SIZE, radius};
-use crate::genome::{Genome, decode};
+use crate::components::{Cell, LIMIT, Position, SNAPSHOT_STRIDE, radius};
+use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, map};
+use boundary::Boundary;
+use environment::Environment;
 use hecs::World;
 use spatial::SpatialGrid;
 use std::collections::{BTreeSet, HashMap};
@@ -31,6 +38,8 @@ pub struct Simulation {
     spatial: SpatialGrid,
     // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
     bonds: BTreeSet<(u32, u32)>,
+    settings: Environment,
+    boundary: Boundary,
 }
 
 #[wasm_bindgen]
@@ -51,11 +60,106 @@ impl Simulation {
             entities: Vec::new(),
             spatial: SpatialGrid::new(),
             bonds: BTreeSet::new(),
+            settings: Environment::default(),
+            boundary: Boundary::default(),
         }
     }
 
     pub fn reset(&mut self) {
+        let boundary = self.boundary;
         *self = Self::new(self.seed);
+        self.boundary = boundary;
+    }
+
+    /// Opt in for the local laboratory without changing the native server map.
+    pub fn set_circular_dish(&mut self, enabled: bool) {
+        self.boundary = if enabled {
+            Boundary::Circle
+        } else {
+            Boundary::Square
+        };
+        if enabled {
+            for (_, (position, cell)) in self.world.query_mut::<(&mut Position, &Cell)>() {
+                (position.x, position.y, _) = self
+                    .boundary
+                    .constrain(position.x, position.y, cell.mass, 12.);
+            }
+        }
+    }
+
+    /// Remove living cells while retaining the current substrate, time and settings.
+    pub fn sterilize(&mut self) {
+        self.deaths += self.world.len();
+        self.world.clear();
+        self.entities.clear();
+        self.spatial.clear();
+        self.bonds.clear();
+        self.frame.clear();
+    }
+
+    pub fn configure(
+        &mut self,
+        light: f32,
+        food: f32,
+        radiation: f32,
+        viscosity: f32,
+        aging: bool,
+        kill_at_edge: bool,
+        only_point_mutations: Option<bool>,
+        gravity: Option<f32>,
+        density: Option<f32>,
+    ) -> Result<(), JsError> {
+        self.configure_environment(Environment {
+            light,
+            food,
+            radiation,
+            viscosity,
+            aging,
+            kill_at_edge,
+            only_point_mutations: only_point_mutations.unwrap_or(false),
+            gravity: gravity.unwrap_or(0.),
+            density: density.unwrap_or(0.),
+        })
+        .map_err(|error| JsError::new(&error))
+    }
+
+    pub fn environment(&self) -> Vec<f32> {
+        let s = self.settings;
+        vec![
+            s.light,
+            s.food,
+            s.radiation,
+            s.viscosity,
+            s.aging as u8 as f32,
+            s.kill_at_edge as u8 as f32,
+            s.only_point_mutations as u8 as f32,
+            s.gravity,
+            s.density,
+        ]
+    }
+
+    pub fn remove(&mut self, id: u32) -> Result<(), JsError> {
+        self.remove_cell(id).map_err(|error| JsError::new(&error))
+    }
+
+    pub fn boost(&mut self, id: u32) -> Result<(), JsError> {
+        self.boost_cell(id).map_err(|error| JsError::new(&error))
+    }
+
+    pub fn move_cell(&mut self, id: u32, x: f32, y: f32) -> Result<(), JsError> {
+        self.reposition_cell(id, x, y)
+            .map_err(|error| JsError::new(&error))
+    }
+
+    /// Versioned exact numeric state; the worker provides the JSON envelope.
+    pub fn export_state(&self) -> Vec<f64> {
+        self.encode_state()
+    }
+
+    /// Validate into a new world first, then atomically replace the current world.
+    pub fn restore_state(&mut self, values: &[f64]) -> Result<(), JsError> {
+        self.restore_checked(values)
+            .map_err(|error| JsError::new(&error))
     }
 
     pub fn spawn(&mut self, x: f32, y: f32, mode: usize, values: &[f32]) -> Result<u32, JsError> {
@@ -94,7 +198,7 @@ impl Simulation {
 
     pub fn snapshot(&mut self) -> Vec<f32> {
         self.frame.clear();
-        let mut rows: Vec<_> = self
+        let mut rows: Vec<[f32; SNAPSHOT_STRIDE]> = self
             .world
             .query::<(&Position, &Cell, &Genome)>()
             .iter()
@@ -110,6 +214,13 @@ impl Simulation {
                     c.generation as f32,
                     c.mutations as f32,
                     p.angle,
+                    if g.mode(c.mode).color[0] < 0. {
+                        -1.
+                    } else {
+                        let [r, green, b] = g.mode(c.mode).color.map(|v| (v * 255.).round() as u32);
+                        ((r << 16) | (green << 8) | b) as f32
+                    },
+                    c.mirrored as u8 as f32,
                 ]
             })
             .collect();
@@ -155,7 +266,7 @@ impl Simulation {
         if !x.is_finite() || !y.is_finite() {
             return Err("Invalid spawn".to_owned());
         }
-        let genome = decode(values)?;
+        let genome = decode_checked(values)?;
         if mode >= genome.len() {
             return Err("Invalid spawn archetype".to_owned());
         }
@@ -165,12 +276,9 @@ impl Simulation {
         let id = self.next_id;
         self.next_id += 1;
         let angle = self.random() * std::f32::consts::TAU;
+        let (x, y, _) = self.boundary.constrain(x, y, 1., 10.);
         let entity = self.world.spawn((
-            Position {
-                x: x.clamp(10., SIZE - 10.),
-                y: y.clamp(10., SIZE - 10.),
-                angle,
-            },
+            Position { x, y, angle },
             Cell {
                 id,
                 mode,
@@ -179,6 +287,7 @@ impl Simulation {
                 generation: 0,
                 mutations: 0,
                 cooldown: 0.,
+                mirrored: false,
             },
             genome,
         ));
@@ -188,7 +297,7 @@ impl Simulation {
     }
 
     pub fn edit_checked(&mut self, id: u32, mode: usize, values: &[f32]) -> Result<(), String> {
-        let genome = decode(values)?;
+        let genome = decode_checked(values)?;
         if mode >= genome.len() {
             return Err("Invalid mode".to_owned());
         }
@@ -213,7 +322,7 @@ impl Simulation {
 
     /// Native-only region export used by the authoritative server.
     ///
-    /// Cells are emitted with stride 12: the public render stride 10 plus the
+    /// Cells are emitted with stride 12: the original ten render fields plus the
     /// effective speed used for client-side prediction and a flag bit for
     /// adhesion. Each bond is emitted once, in the chunk of its lower ID, so a
     /// client can replace chunk-local links without duplicates.

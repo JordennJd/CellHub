@@ -1,6 +1,41 @@
 export type Point = { x: number; y: number };
 export type Camera = Point & { zoom: number };
 export type CanvasAction = "place" | "select";
+export type Viewport = { width: number; height: number };
+
+export function isPointInDish(point: Point, worldSize: number): boolean {
+  const radius = worldSize / 2;
+  return (point.x - radius) ** 2 + (point.y - radius) ** 2 <= radius ** 2;
+}
+
+export function fitDishCamera(viewport: Viewport, worldSize: number): Camera {
+  return {
+    x: worldSize / 2,
+    y: worldSize / 2,
+    zoom: Math.max(0.001, Math.min(viewport.width, viewport.height) / worldSize * 0.93),
+  };
+}
+
+export function resizeDishCamera(camera: Camera, previous: Viewport, next: Viewport, worldSize: number): Camera {
+  const fitted = fitDishCamera(previous, worldSize);
+  const wasFitted = Math.abs(camera.x - fitted.x) < 0.0001
+    && Math.abs(camera.y - fitted.y) < 0.0001
+    && Math.abs(camera.zoom - fitted.zoom) < 0.000001;
+  return wasFitted ? fitDishCamera(next, worldSize) : { ...camera };
+}
+
+export function clampCameraZoom(zoom: number, viewport: Viewport, worldSize: number): number {
+  return Math.max(Math.min(0.12, fitDishCamera(viewport, worldSize).zoom), Math.min(4, zoom));
+}
+
+export function zoomDishCamera(camera: Camera, factor: number, anchor: Point, viewport: Viewport, worldSize: number): Camera {
+  const zoom = clampCameraZoom(camera.zoom * factor, viewport, worldSize);
+  return {
+    x: anchor.x - (anchor.x - camera.x) * camera.zoom / zoom,
+    y: anchor.y - (anchor.y - camera.y) * camera.zoom / zoom,
+    zoom,
+  };
+}
 
 type Options = {
   camera: Camera;
@@ -37,18 +72,18 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
     x: (point.x - canvas.clientWidth / 2) / camera.zoom + camera.x,
     y: (point.y - canvas.clientHeight / 2) / camera.zoom + camera.y,
   });
+  const pointOnDish = (point: Point): Point | null => {
+    if (point.x < 0 || point.y < 0 || point.x > canvas.clientWidth || point.y > canvas.clientHeight) return null;
+    const result = world(point);
+    return isPointInDish(result, worldSize) ? result : null;
+  };
   const placeAtCursor = () => {
     if (!mousePosition || !start || start.action !== "place") return;
-    const p = mousePosition;
-    if (p.x < 0 || p.y < 0 || p.x > canvas.clientWidth || p.y > canvas.clientHeight) return;
-    const point = world(p);
-    if (point.x >= 0 && point.y >= 0 && point.x <= worldSize && point.y <= worldSize)
-      options.onPoint(point, "place");
+    const point = pointOnDish(mousePosition);
+    if (point) options.onPoint(point, "place");
   };
-  const clampZoom = (zoom: number) => Math.max(
-    Math.min(0.12, Math.min(canvas.clientWidth, canvas.clientHeight) / worldSize * 0.93),
-    Math.min(4, zoom),
-  );
+  const clampZoom = (zoom: number) => clampCameraZoom(zoom,
+    { width: canvas.clientWidth, height: canvas.clientHeight }, worldSize);
   const pair = () => {
     const [a, b] = [...pointers.values()];
     return { center: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, distance: Math.hypot(a.x - b.x, a.y - b.y) };
@@ -68,10 +103,10 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
       return;
     }
     start = { ...point, camera: { ...camera }, id: event.pointerId, pointerType: event.pointerType,
-      action: touch ? options.tool() : event.button === 1 ? "pan" : event.button === 2 ? "select" : "place" };
+      action: touch ? options.tool() : event.button === 1 ? "pan" : event.button === 2 ? "select" : options.tool() };
     moved = false;
     repeated = false;
-    if (event.pointerType === "mouse" && event.button === 0) {
+    if (event.pointerType === "mouse" && event.button === 0 && start.action === "place") {
       mousePosition = point;
       holdTimer = setTimeout(() => {
         repeated = true;
@@ -111,9 +146,8 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
     stopRepeating();
     const movingMouseClick = start?.pointerType === "mouse" && start.action === "place";
     if (!cancelled && start?.id === event.pointerId && (!moved || movingMouseClick) && !repeated && !multiTouch && start.action !== "pan") {
-      const point = world(local(event));
-      if (point.x >= 0 && point.y >= 0 && point.x <= worldSize && point.y <= worldSize)
-        options.onPoint(point, start.action === "select" ? "select" : "place");
+      const point = pointOnDish(local(event));
+      if (point) options.onPoint(point, start.action === "place" ? "place" : "select");
     }
     pointers.delete(event.pointerId);
     pinch = null;
@@ -135,6 +169,12 @@ export function bindCanvasControls(canvas: HTMLCanvasElement, options: Options) 
   const cancel = (event: PointerEvent) => finish(event, true);
   const wheel = (event: WheelEvent) => {
     event.preventDefault();
+    // Zooming ends an active placement stroke, including its delayed repeats.
+    // Releasing the pointer after zoom must not place a cell at a new scale.
+    if (start) {
+      stopRepeating();
+      repeated = true;
+    }
     const point = local(event), before = world(point);
     const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? canvas.clientHeight : 1);
     camera.zoom = clampZoom(camera.zoom * Math.exp(-delta * 0.001));

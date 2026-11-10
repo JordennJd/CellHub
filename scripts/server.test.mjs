@@ -173,7 +173,12 @@ try {
   await waitFor(() => second.chunks.length >= 3, "second client chunks");
 
   const inspected = await second.command({ type: "inspect", id: cellId }, 4);
-  assert.deepEqual(inspected.genome, genome, "genome is shared through the scene");
+  // Legacy input is normalized to the shared v3 genome ABI by the simulation.
+  assert.deepEqual(inspected.genome.slice(0, 2), [-3, 1]);
+  assert.equal(inspected.genome.length, 21);
+  genome.forEach((value, index) => assert(Math.abs(inspected.genome[index + 2] - value) < 1e-6,
+    `shared genome field ${index} survives legacy normalization`));
+  assert.deepEqual(inspected.genome.slice(14), [0, 0, 0, 0, -1, -1, -1]);
   const otherGenome = Array.from({ length: 1 }, () => [
     1, 2.4, 0, 0, 0.5, 0, 0.8, 1000, 1, 0, 0, 0,
   ]).flat();

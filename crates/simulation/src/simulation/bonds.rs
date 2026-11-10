@@ -1,7 +1,7 @@
 //! Adhesion graph maintenance and positional constraints.
 
 use super::Simulation;
-use crate::components::{Cell, Position, SIZE, radius};
+use crate::components::{Cell, Position, radius};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 impl Simulation {
@@ -75,10 +75,18 @@ impl Simulation {
                 let error = distance - (radius(*ma) + radius(*mb) + 2.);
                 let share_a = *mb / (*ma + *mb);
                 let share_b = 1. - share_a;
-                pa.x = (pa.x + nx * error * share_a).clamp(12., SIZE - 12.);
-                pa.y = (pa.y + ny * error * share_a).clamp(12., SIZE - 12.);
-                pb.x = (pb.x - nx * error * share_b).clamp(12., SIZE - 12.);
-                pb.y = (pb.y - ny * error * share_b).clamp(12., SIZE - 12.);
+                (pa.x, pa.y, _) = self.boundary.constrain(
+                    pa.x + nx * error * share_a,
+                    pa.y + ny * error * share_a,
+                    *ma,
+                    12.,
+                );
+                (pb.x, pb.y, _) = self.boundary.constrain(
+                    pb.x - nx * error * share_b,
+                    pb.y - ny * error * share_b,
+                    *mb,
+                    12.,
+                );
             }
         }
         for (entity, _, position, _) in bodies {

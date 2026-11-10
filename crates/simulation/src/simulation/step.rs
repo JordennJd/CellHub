@@ -2,7 +2,7 @@
 
 use super::Simulation;
 use super::spatial::BUCKET_SIZE;
-use crate::components::{Cell, LIMIT, Position, SIZE, radius};
+use crate::components::{Cell, LIMIT, MIN_DIVISION_AGE, Position, radius};
 use crate::genome::Genome;
 use crate::terrain::tile_index;
 use std::collections::{BTreeMap, HashSet};
@@ -12,6 +12,7 @@ const STEP: f32 = 1. / 30.;
 impl Simulation {
     pub(super) fn step(&mut self) {
         self.tick += 1;
+        self.exchange_bond_energy(STEP as f64 * 1.5);
         for t in &mut self.tiles {
             t.food = (t.food + STEP * 0.018 * t.capacity).min(t.capacity);
         }
@@ -24,6 +25,7 @@ impl Simulation {
         let mut inheritors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         let mut new_bonds = Vec::new();
         let bonded = self.linked_ids();
+        let vertical_drift = self.settings.vertical_drift();
         let mut spatial = std::mem::take(&mut self.spatial);
         spatial.clear();
         for &(_, e) in &entities {
@@ -40,17 +42,21 @@ impl Simulation {
             let t = &mut self.tiles[tile_index(p.x, p.y)];
             let gain = if m.kind == 0 {
                 t.light * 0.14 * STEP
-            } else {
+            } else if m.kind == 1 {
                 let eaten = (0.18 * STEP).min(t.food);
                 t.food -= eaten;
-                eaten * if m.kind == 1 { 1.6 } else { 0.65 }
+                eaten * 1.6
+            } else {
+                0.
             };
             c.mass += gain - STEP * (if m.kind == 4 { 0.014 } else { 0.025 } + m.speed * 0.0003);
             if mutation_roll < t.radiation * STEP * 0.035 {
                 let modes = g.modes_mut();
                 let index = ((mutation_gene * modes.len() as f32) as usize).min(modes.len() - 1);
                 let target = &mut modes[index];
-                target.kind = (target.kind + 1) % 6;
+                if !self.settings.only_point_mutations {
+                    target.kind = (target.kind + 1) % 6;
+                }
                 target.threshold = (target.threshold + (noise - 0.5) * 0.8).clamp(1., 8.);
                 c.mutations += 1;
             }
@@ -68,13 +74,25 @@ impl Simulation {
             } else {
                 m.speed * 0.15
             };
-            p.x = (p.x + p.angle.cos() * speed * STEP).clamp(12., SIZE - 12.);
-            p.y = (p.y + p.angle.sin() * speed * STEP).clamp(12., SIZE - 12.);
-            if c.mass < 0.18 || c.age > m.lifespan {
+            let next_x = p.x + p.angle.cos() * speed * STEP / self.settings.viscosity;
+            let next_y = p.y
+                + p.angle.sin() * speed * STEP / self.settings.viscosity
+                + vertical_drift * STEP;
+            let (x, y, reached_edge) = self.boundary.constrain(next_x, next_y, c.mass, 12.);
+            p.x = x;
+            p.y = y;
+            if c.mass < 0.18
+                || (self.settings.aging && c.age > m.lifespan)
+                || (self.settings.kill_at_edge && reached_edge)
+            {
                 dead.push(e);
                 continue;
             }
-            if m.can_divide && c.mass >= m.threshold && population + children.len() / 2 < LIMIT {
+            if m.can_divide
+                && c.age + 0.000001 >= MIN_DIVISION_AGE
+                && c.mass >= m.threshold
+                && population + children.len() / 2 < LIMIT
+            {
                 // parent is replaced by two daughters
                 let total = c.mass;
                 let mut a = c.clone();
@@ -98,19 +116,35 @@ impl Simulation {
                 b.mode = m.child_b;
                 a.age = 0.;
                 b.age = 0.;
+                a.mirrored = c.mirrored ^ m.mirror_a;
+                b.mirrored = c.mirrored ^ m.mirror_b;
                 a.generation += 1;
                 b.generation += 1;
-                let angle = p.angle + m.angle;
+                let angle = p.angle + m.angle * if c.mirrored { -1. } else { 1. };
                 let distance = (radius(a.mass) + radius(b.mass) + 2.) / 2.;
+                let (ax, ay, _) = self.boundary.constrain(
+                    p.x + angle.cos() * distance,
+                    p.y + angle.sin() * distance,
+                    a.mass,
+                    12.,
+                );
+                let (bx, by, _) = self.boundary.constrain(
+                    p.x - angle.cos() * distance,
+                    p.y - angle.sin() * distance,
+                    b.mass,
+                    12.,
+                );
                 let pa = Position {
-                    x: (p.x + angle.cos() * distance).clamp(12., SIZE - 12.),
-                    y: (p.y + angle.sin() * distance).clamp(12., SIZE - 12.),
-                    angle,
+                    x: ax,
+                    y: ay,
+                    angle: angle + m.child_angle_a * if a.mirrored { -1. } else { 1. },
                 };
                 let pb = Position {
-                    x: (p.x - angle.cos() * distance).clamp(12., SIZE - 12.),
-                    y: (p.y - angle.sin() * distance).clamp(12., SIZE - 12.),
-                    angle: angle + std::f32::consts::PI,
+                    x: bx,
+                    y: by,
+                    angle: angle
+                        + std::f32::consts::PI
+                        + m.child_angle_b * if b.mirrored { -1. } else { 1. },
                 };
                 children.push((pa, a, g.clone()));
                 children.push((pb, b, g.clone()));
@@ -120,6 +154,7 @@ impl Simulation {
             spatial.insert(*p, e, m.kind);
         }
         let removed: HashSet<_> = dead.iter().copied().collect();
+        let protected = self.keratin_protection(&removed);
         let mut infections = Vec::new();
         let mut infected = HashSet::new();
         // Stable traversal and local spatial grid bound the interaction search.
@@ -150,8 +185,10 @@ impl Simulation {
                             if d2 > 24. * 24. {
                                 continue;
                             }
+                            let other_id = self.world.get::<&Cell>(other).unwrap().id;
                             if kind == 3
                                 && okind != 3
+                                && !protected.contains(&other_id)
                                 && !infected.contains(&other)
                                 && cooldown <= 0.
                                 && self.world.get::<&Cell>(e).unwrap().cooldown <= 0.
@@ -163,7 +200,7 @@ impl Simulation {
                                 self.infections += 1;
                                 break;
                             }
-                            if kind == 5 && okind != 4 {
+                            if kind == 5 && okind != 5 && !protected.contains(&other_id) {
                                 let taken = {
                                     let mut c = self.world.get::<&mut Cell>(other).unwrap();
                                     let amount = (0.08 * STEP).min((c.mass - 0.1).max(0.));
@@ -174,9 +211,16 @@ impl Simulation {
                             }
                             if d2 > 0.001 && d2 < 18. * 18. {
                                 let d = d2.sqrt();
-                                let mut p = self.world.get::<&mut Position>(e).unwrap();
-                                p.x = (p.x + (pos.x - op.x) / d * 0.3).clamp(12., SIZE - 12.);
-                                p.y = (p.y + (pos.y - op.y) / d * 0.3).clamp(12., SIZE - 12.);
+                                let (p, c) = self
+                                    .world
+                                    .query_one_mut::<(&mut Position, &Cell)>(e)
+                                    .unwrap();
+                                (p.x, p.y, _) = self.boundary.constrain(
+                                    p.x + (pos.x - op.x) / d * 0.3,
+                                    p.y + (pos.y - op.y) / d * 0.3,
+                                    c.mass,
+                                    12.,
+                                );
                             }
                         }
                     }

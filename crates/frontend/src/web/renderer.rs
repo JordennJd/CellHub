@@ -4,7 +4,7 @@ use super::backend::Backend;
 use super::error::error;
 use super::gpu::{ATTRIBUTES, CELL_STRIDE, LINK_ATTRIBUTES, LINK_STRIDE, buffer, pipeline};
 use super::labels::{ATLAS_HEIGHT, ATLAS_WIDTH, rasterize_labels};
-use crate::scene_data::pack_links;
+use crate::scene_data::{CELL_VALUES, pack_links};
 use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
@@ -370,7 +370,7 @@ impl RendererState {
         if self.destroyed {
             return Err(error("Renderer destroyed"));
         }
-        if cells.len() % 10 != 0
+        if cells.len() % CELL_VALUES != 0
             || terrain.len() != 48 * 48 * 4
             || cells.iter().chain(terrain).any(|v| !v.is_finite())
         {
@@ -432,7 +432,7 @@ impl RendererState {
                 depth_or_array_layers: 1,
             },
         );
-        self.count = (cells.len() / 10) as u32;
+        self.count = (cells.len() / CELL_VALUES) as u32;
         self.link_count = (links.len() / 2) as u32;
         self.dirty = true;
         Ok(())
@@ -507,9 +507,9 @@ impl RendererState {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 9. / 255.,
-                            g: 20. / 255.,
-                            b: 17. / 255.,
+                            r: 226. / 255.,
+                            g: 233. / 255.,
+                            b: 223. / 255.,
                             a: 1.,
                         }),
                         store: wgpu::StoreOp::Store,

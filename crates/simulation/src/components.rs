@@ -4,6 +4,9 @@
 pub const SIZE: f32 = 3072.;
 /// Hard population cap.
 pub const LIMIT: usize = 20_000;
+pub(crate) const SNAPSHOT_STRIDE: usize = 12;
+/// Accelerated lifecycle: one original-game hour corresponds to one web second.
+pub(crate) const MIN_DIVISION_AGE: f32 = 0.5;
 
 #[derive(Clone, Copy)]
 pub(crate) struct Position {
@@ -21,6 +24,7 @@ pub(crate) struct Cell {
     pub(crate) generation: u32,
     pub(crate) mutations: u32,
     pub(crate) cooldown: f32,
+    pub(crate) mirrored: bool,
 }
 
 /// Drawing and collision radius derived from mass.
