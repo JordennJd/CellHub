@@ -103,20 +103,31 @@ deploy host port="2223" user="root" remote_dir="/var/lib/cellhub" serve_port="80
       fi
     fi
 
-    # На microVM нет caddy в PATH, но бинарник есть в общем /nix/store.
-    caddy_bin=$(ls -d /nix/store/*-caddy-*/bin/caddy 2>/dev/null | sort -V | tail -1 || true)
-    if [ -z "$caddy_bin" ]; then
-      echo "✗ caddy не найден в /nix/store" >&2
-      exit 1
-    fi
+    # Если в microVM уже объявлен постоянный systemd-сервис — перезапускаем его.
+    # Иначе (например, на чистой microVM) поднимаем временный через systemd-run.
+    if systemctl cat cellhub.service >/dev/null 2>&1; then
+      svc_user=$(systemctl show cellhub.service -p User --value || true)
+      svc_group=$(systemctl show cellhub.service -p Group --value || true)
+      if [ "$(id -u)" -eq 0 ] && [ -n "$svc_user" ] && [ "$svc_user" != root ]; then
+        chown -R "$svc_user:${svc_group:-$svc_user}" "$remote_dir"
+      fi
+      systemctl restart cellhub.service
+    else
+      # На microVM нет caddy в PATH, но бинарник есть в общем /nix/store.
+      caddy_bin=$(ls -d /nix/store/*-caddy-*/bin/caddy 2>/dev/null | sort -V | tail -1 || true)
+      if [ -z "$caddy_bin" ]; then
+        echo "✗ caddy не найден в /nix/store" >&2
+        exit 1
+      fi
 
-    systemctl stop cellhub.service 2>/dev/null || true
-    systemctl reset-failed cellhub.service 2>/dev/null || true
-    systemd-run --unit=cellhub --collect \
-      --property=Restart=on-failure \
-      --property=WorkingDirectory="$remote_dir" \
-      --setenv=HOME=/tmp \
-      "$caddy_bin" file-server --root "$remote_dir" --listen ":$serve_port" >/dev/null
+      systemctl stop cellhub.service 2>/dev/null || true
+      systemctl reset-failed cellhub.service 2>/dev/null || true
+      systemd-run --unit=cellhub --collect \
+        --property=Restart=on-failure \
+        --property=WorkingDirectory="$remote_dir" \
+        --setenv=HOME=/tmp \
+        "$caddy_bin" file-server --root "$remote_dir" --listen ":$serve_port" >/dev/null
+    fi
 
     ready=0
     for _ in {1..20}; do
