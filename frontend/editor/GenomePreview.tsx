@@ -1,6 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { flatten, STRIDE, TYPES, type Frame, type Mode } from "../model";
 
+function relativeLuminance(color: number) {
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear((color >> 16) & 255)
+    + 0.7152 * linear((color >> 8) & 255) + 0.0722 * linear(color & 255);
+}
+// Same 3:1 dark-dish detail threshold as scene.wgsl; body RGB stays user-defined.
+const minimumInkLuminance = 3 * (relativeLuminance(0x253e2b) + 0.05) - 0.05;
+
 /** Preview owns a separate laboratory: its clock and cells never affect the game. */
 export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initialMode: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -63,7 +74,7 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
       const scale = Math.min((width - 40) / Math.max(right - left, 80), (height - 40) / Math.max(bottom - top, 80));
       const x = (index: number) => width / 2 + (cells[index + 1] - (left + right) / 2) * scale;
       const y = (index: number) => height / 2 + (cells[index + 2] - (top + bottom) / 2) * scale;
-      ctx.strokeStyle = "#769f7d";
+      ctx.strokeStyle = "#adc89d";
       ctx.lineWidth = 2;
       for (let i = 0; i < frame.links.length; i += 2) {
         const a = positions.get(frame.links[i]), b = positions.get(frame.links[i + 1]);
@@ -73,12 +84,19 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
       for (let i = 0; i < cells.length; i += STRIDE) {
         const radius = Math.max(2, cells[i + 3] * scale);
         const color = cells[i + 10] >= 0 ? cells[i + 10] : TYPES[cells[i + 4]]?.color ?? 0xa4db71;
-        ctx.fillStyle = `#${color.toString(16).padStart(6, "0")}`;
-        ctx.strokeStyle = "#315d43";
+        const cellColor = `#${color.toString(16).padStart(6, "0")}`;
+        const ink = cells[i + 10] >= 0 && relativeLuminance(color) < minimumInkLuminance
+          ? "#dce6dc" : cellColor;
+        ctx.fillStyle = cellColor;
+        ctx.strokeStyle = ink;
         ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x(i), y(i), radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = "#315d43";
+        ctx.beginPath(); ctx.arc(x(i), y(i), radius, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.22; ctx.fill();
+        ctx.globalAlpha = 1; ctx.stroke();
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = ink;
         ctx.beginPath(); ctx.arc(x(i), y(i), Math.max(1, radius * 0.23), 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
         const angle = cells[i + 9], handedness = cells[i + 11] ? -1 : 1;
         ctx.beginPath();
         ctx.moveTo(x(i), y(i));

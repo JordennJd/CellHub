@@ -66,16 +66,30 @@ export async function verifyRenderFixtures({evaluate, delay}) {
   await evaluate("window.__captureGPU='gpu-fixture';__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.render()");
   await delay(100);
   const removed=await gpuImage("work/cellhub-bond-removed.png");
-  assert.deepEqual(removed,[240,245,235,255],"removing the bond reveals the light dish background");
+  assert.deepEqual(removed,[37,62,43,255],"removing the bond reveals the dark green dish background");
   assert.equal(normal[3],255,"the bond remains opaque over the dish");
   assert.equal(selected[3],255,"selection remains opaque over the dish");
-  assert(normal.slice(0,3).every((v,i)=>v<removed[i]),"the green bond is darker than the dish");
+  assert(normal.slice(0,3).every((v,i)=>v>removed[i]),"the light green bond is brighter than the dish");
   assert(normal.slice(0,3).reduce((sum,v,i)=>sum+Math.abs(v-removed[i]),0)>100,"the bond is visibly distinct from the dish");
-  assert(selected.slice(0,3).every((v,i)=>v<normal[i]),"selection darkens the bond instead of turning it white");
+  assert(selected.slice(0,3).every((v,i)=>v>normal[i]),"selection brightens the bond against the dark dish");
   assert(selected.slice(0,3).reduce((sum,v,i)=>sum+Math.abs(v-normal[i]),0)>30,"selection visibly changes the bond");
   console.log(JSON.stringify({gpuPixels:{normal,selected,removed}}));
   assert(await evaluate(`(() => {try {__gpuFixture.renderer.set_frame(__gpuFixture.cells,__gpuFixture.terrain,new Uint32Array([2]));return false;}catch(e){return String(e).includes('bond snapshot');}})()`));
+
+  // A black custom cell retains its dark body and gets a visible nucleus/outline.
+  await evaluate("__gpuFixture.renderer.set_frame(new Float32Array([2,1536,1536,10,0,1,0,0,0,0,0,0]),__gpuFixture.terrain,new Uint32Array());__gpuFixture.renderer.set_view(1536,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
+  await delay(100);
+  const darkNucleus=await gpuImage("work/cellhub-custom-dark-nucleus.png");
+  assert(darkNucleus.slice(0,3).every(v=>v>180),"a black custom cell has a light visible nucleus");
+  await evaluate("__gpuFixture.renderer.set_view(1545.75,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
+  await delay(100);
+  const darkOutline=await gpuImage("work/cellhub-custom-dark-outline.png");
+  assert(darkOutline.slice(0,3).every(v=>v>150),"a black custom cell has a light visible outline");
+  await evaluate("__gpuFixture.renderer.set_view(1531,1536,2,0,-1);window.__captureGPU='gpu-fixture';__gpuFixture.renderer.render()");
+  await delay(100);
+  const darkBody=await gpuImage("work/cellhub-custom-dark-body.png");
+  assert(darkBody.slice(0,3).every((v,i)=>v<removed[i]),"contrast fallback preserves the custom black body");
   await evaluate("__gpuFixture.renderer.destroy();__gpuFixture.renderer.free();__gpuFixture.canvas.remove();delete window.__gpuFixture");
-  console.log("PASS: GPU bond fixtures and invalid-frame rejection");
+  console.log("PASS: GPU bond/custom-color fixtures and invalid-frame rejection");
 
 }

@@ -23,7 +23,7 @@
 }
 
 .arena-status.online {
-  border-color: #9bb49f;
+  border-color: var(--border-strong);
   color: var(--accent);
 }
 
@@ -37,12 +37,12 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #9aa79a;
+  background: #63755f;
 }
 
 .arena-status.online .arena-status-dot {
-  background: #3e8f5f;
-  box-shadow: 0 0 8px #3e8f5f66;
+  background: #bde18f;
+  box-shadow: 0 0 8px #bde18f66;
 }
 
 .arena-room-metrics {
