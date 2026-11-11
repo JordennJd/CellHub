@@ -296,11 +296,15 @@ def build_level(entry: dict, data: dict) -> dict:
     cells = []
     for cell in substrate["cells"]:
         x = round(clamp(float(cell["pos"][0]) / radius * 0.5 + 0.5, 0.0, 1.0), 6)
-        y = round(clamp(float(cell["pos"][1]) / radius * 0.5 + 0.5, 0.0, 1.0), 6)
+        # The original renders world coordinates with +Y pointing up
+        # (CellWorld's orthographic matrix keeps +Y in NDC), while CellHub's
+        # world/screen coordinates grow downwards. Mirror Y and negate the
+        # angle so the substrate layout keeps its original orientation.
+        y = round(clamp(0.5 - float(cell["pos"][1]) / radius * 0.5, 0.0, 1.0), 6)
         cells.append({
             "x": x,
             "y": y,
-            "angle": round(float(cell.get("angle", 0.0)), 6),
+            "angle": round(-float(cell.get("angle", 0.0)), 6),
             "mass": round(clamp(float(cell.get("mass", 0.3)) * MASS_SCALE, 0.2, 1000.0), 6),
             "mode": int(cell.get("primary_mode", 0)),
             "genome": int(cell.get("genome", 0)),
@@ -318,7 +322,7 @@ def build_level(entry: dict, data: dict) -> dict:
     food = []
     for particle in substrate["food"]:
         x = round(clamp(float(particle[0]) / radius * 0.5 + 0.5, 0.0, 1.0), 6)
-        y = round(clamp(float(particle[1]) / radius * 0.5 + 0.5, 0.0, 1.0), 6)
+        y = round(clamp(0.5 - float(particle[1]) / radius * 0.5, 0.0, 1.0), 6)
         size = round(clamp(float(particle[2]), 0.0001, 5.0), 6) if len(particle) > 2 else 0.05
         food.append([x, y, size])
     allowed = [KIND[name] for name in environment.get("allowed_cell_types", []) if name in KIND]
