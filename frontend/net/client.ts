@@ -1,5 +1,6 @@
 //! Thin browser WebSocket transport around `PredictionWorld`.
 
+import { NetworkProfiler } from "./profiling";
 import type { Command, Frame } from "../model";
 import { PredictionWorld, type SyncState } from "./prediction";
 import {
@@ -27,6 +28,7 @@ export type NetCallbacks = {
 };
 
 export class MultiplayerClient {
+  private readonly profiler = new NetworkProfiler();
   private socket: WebSocket | null = null;
   private world: PredictionWorld | null = null;
   private sequence = 0;
@@ -220,31 +222,42 @@ export class MultiplayerClient {
       this.callbacks.onError("Повреждённый чанк сцены.");
       return;
     }
+    const started = performance.now();
     this.world?.applyChunk(chunk);
+    this.profiler.chunk(buffer.byteLength, performance.now() - started);
   }
 
   private startLoop() {
     if (this.loop !== null) return;
     this.lastFrame = performance.now();
     this.lastPing = this.lastFrame;
-    this.loop = window.setInterval(() => {
+    const runFrame = () => {
       const now = performance.now();
       const world = this.world;
       if (world) {
+        const started = performance.now();
         world.tick((now - this.lastFrame) / 1000, now);
         this.callbacks.onFrame(world.frame(), world.syncState());
+        this.profiler.frame(performance.now() - started, world.cellCount);
       }
       this.lastFrame = now;
       if (now - this.lastPing > 20_000) {
         this.lastPing = now;
         this.send({ type: "ping", t: Date.now() });
       }
-    }, 1000 / 30);
+      const workMs = performance.now() - now;
+      // Keep time for input/rendering on weak devices. At most 30 scene frames
+      // per second, with at least as much idle time as prediction/frame work.
+      if (this.loop !== null) {
+        this.loop = window.setTimeout(runFrame, Math.max(1000 / 30 - workMs, workMs));
+      }
+    };
+    this.loop = window.setTimeout(runFrame, 1000 / 30);
   }
 
   private stopLoop() {
     if (this.loop !== null) {
-      window.clearInterval(this.loop);
+      window.clearTimeout(this.loop);
       this.loop = null;
     }
   }

@@ -16,7 +16,9 @@
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:model": "node --experimental-strip-types --test scripts/model.test.mjs scripts/controls.test.mjs scripts/prediction.test.mjs",
     "test:game": "npm run build:wasm && node scripts/game.test.mjs && npm run test:server",
-    "test": "npm run test:rust && npm run test:model && npm run test:wasm && node scripts/game.test.mjs && npm run test:server"
+    "test": "npm run test:rust && npm run test:model && npm run test:wasm && node scripts/game.test.mjs && npm run test:server",
+    "profile:server": "node scripts/profile-server.mjs",
+    "test:parity": "node scripts/parity.test.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",

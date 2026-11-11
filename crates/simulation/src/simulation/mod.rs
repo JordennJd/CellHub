@@ -12,6 +12,7 @@ mod specialized;
 mod persistence;
 mod tools;
 mod step;
+mod metabolism;
 #[cfg(test)]
 mod tests;
 
@@ -48,6 +49,7 @@ pub struct Simulation {
     // Reused per-tick scratch storage: no heap churn at the population limit.
     entities: Vec<(u32, hecs::Entity)>,
     spatial: SpatialGrid,
+    metabolism: metabolism::MetabolismScratch,
     // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
     bonds: BTreeSet<(u32, u32)>,
     settings: Environment,
@@ -71,6 +73,7 @@ impl Simulation {
             frame: Vec::new(),
             entities: Vec::new(),
             spatial: SpatialGrid::new(),
+            metabolism: metabolism::MetabolismScratch::default(),
             bonds: BTreeSet::new(),
             settings: Environment::default(),
             boundary: Boundary::default(),
@@ -370,12 +373,7 @@ impl Simulation {
     }
 
     fn random(&mut self) -> f32 {
-        let mut x = self.rng;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.rng = x;
-        (x as f64 / u32::MAX as f64) as f32
+        draw_random(&mut self.rng)
     }
 
     /// Native-only region export used by the authoritative server.
@@ -487,4 +485,13 @@ pub struct ChunkSnapshot {
     pub cells: Vec<f32>,
     pub links: Vec<u32>,
     pub terrain: Vec<f32>,
+}
+
+fn draw_random(rng: &mut u32) -> f32 {
+    let mut x = *rng;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *rng = x;
+    (x as f64 / u32::MAX as f64) as f32
 }

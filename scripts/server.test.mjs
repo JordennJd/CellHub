@@ -49,18 +49,25 @@ const waitFor = async (predicate, label, timeout = 10_000) => {
 
 function decodeChunk(buffer) {
   const view = new DataView(buffer);
-  assert.equal(view.getUint8(0), 1, "binary chunk tag");
+  assert.equal(view.getUint8(0), 2, "binary chunk tag");
   const cellCount = view.getUint16(23, true);
   const linkCount = view.getUint16(25, true);
   const tileCount = view.getUint16(27, true);
-  assert.equal(
-    buffer.byteLength,
-    31 + cellCount * CELL_STRIDE * 4 + linkCount * 8 + tileCount * TERRAIN_STRIDE * 4,
-    "chunk length",
-  );
   const cells = new Float32Array(cellCount * CELL_STRIDE);
-  for (let i = 0; i < cells.length; i++) cells[i] = view.getFloat32(31 + i * 4, true);
-  const terrainOffset = 31 + cells.byteLength + linkCount * 8;
+  let offset = 31;
+  const sparse = view.getUint8(29) === 1;
+  for (let row = 0; row < cellCount; row++) {
+    const mask = sparse ? view.getUint32(offset, true) : (1 << CELL_STRIDE) - 1;
+    if (sparse) offset += 4;
+    for (let i = 0; i < CELL_STRIDE; i++) {
+      if (mask & (1 << i)) {
+        cells[row * CELL_STRIDE + i] = view.getFloat32(offset, true);
+        offset += 4;
+      }
+    }
+  }
+  const terrainOffset = offset + linkCount * 8;
+  assert.equal(buffer.byteLength, terrainOffset + tileCount * TERRAIN_STRIDE * 4);
   return {
     tick: view.getUint32(1, true),
     population: view.getUint32(5, true),
@@ -147,7 +154,7 @@ try {
     () => first.messages.find((m) => m.type === "welcome"),
     "welcome",
   );
-  assert.equal(welcome.protocol, 3);
+  assert.equal(welcome.protocol, 4);
   assert.equal(welcome.host, true);
   const room = welcome.room.id;
 

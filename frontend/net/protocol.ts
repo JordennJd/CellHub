@@ -1,6 +1,6 @@
 //! Wire constants and binary chunk decoding for the optional server mode.
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 export const CHUNK_SIZE = 512;
 export const CHUNKS_PER_AXIS = 6;
 export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
@@ -10,7 +10,7 @@ export const CELL_STRIDE = 28;
 export const TERRAIN_STRIDE = 6;
 /** Client frame layout matches the renderer and the local model: 12 floats. */
 export const RENDER_STRIDE = 12;
-const BIN_CHUNK = 1;
+const BIN_CHUNK = 2;
 
 export type RoomInfo = {
   id: string;
@@ -75,20 +75,33 @@ export function decodeChunk(buffer: ArrayBuffer): ChunkFrame | null {
   const cellCount = view.getUint16(23, true);
   const linkCount = view.getUint16(25, true);
   const tileCount = view.getUint16(27, true);
-  const expected =
-    31 +
-    cellCount * CELL_STRIDE * 4 +
-    linkCount * 2 * 4 +
-    tileCount * TERRAIN_STRIDE * 4;
-  if (buffer.byteLength !== expected) return null;
+  const sparse = view.getUint8(29) === 1;
+  if (chunkX >= CHUNKS_PER_AXIS || chunkY >= CHUNKS_PER_AXIS ||
+      view.getUint8(29) > 1 || view.getUint8(30) !== 0) return null;
+  let offset = 31;
+  if (buffer.byteLength < offset + cellCount * (sparse ? 4 : CELL_STRIDE * 4)) return null;
+  const cells = new Float32Array(cellCount * CELL_STRIDE);
+  for (let row = 0; row < cellCount; row++) {
+    if (sparse && offset + 4 > buffer.byteLength) return null;
+    const mask = sparse ? view.getUint32(offset, true) : (1 << CELL_STRIDE) - 1;
+    if (sparse) offset += 4;
+    if (mask >>> CELL_STRIDE) return null;
+    for (let i = 0; i < CELL_STRIDE; i++) {
+      if (mask & (1 << i)) {
+        if (offset + 4 > buffer.byteLength) return null;
+        cells[row * CELL_STRIDE + i] = view.getFloat32(offset, true);
+        offset += 4;
+      }
+    }
+  }
+  const linksStart = offset;
+  const terrainStart = linksStart + linkCount * 2 * 4;
+  if (buffer.byteLength !== terrainStart + tileCount * TERRAIN_STRIDE * 4) return null;
   const readFloats = (offset: number, count: number) => {
     const out = new Float32Array(count);
     for (let i = 0; i < count; i++) out[i] = view.getFloat32(offset + i * 4, true);
     return out;
   };
-  const cellsStart = 31;
-  const linksStart = cellsStart + cellCount * CELL_STRIDE * 4;
-  const terrainStart = linksStart + linkCount * 2 * 4;
   const links = new Uint32Array(linkCount * 2);
   for (let i = 0; i < links.length; i++)
     links[i] = view.getUint32(linksStart + i * 4, true);
@@ -100,7 +113,7 @@ export function decodeChunk(buffer: ArrayBuffer): ChunkFrame | null {
     infections,
     chunkX,
     chunkY,
-    cells: readFloats(cellsStart, cellCount * CELL_STRIDE),
+    cells,
     links,
     terrain: readFloats(terrainStart, tileCount * TERRAIN_STRIDE),
   };
