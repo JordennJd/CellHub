@@ -162,6 +162,7 @@ impl Simulation {
         if values[0] < 4. || is_main_v4(values) {
             replacement.set_circular_dish(matches!(self.boundary, Boundary::Circle));
         }
+        replacement.set_division_event_tracking(self.division_events.is_some());
         *self = replacement;
         Ok(())
     }

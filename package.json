@@ -14,7 +14,7 @@
     "test:wasm": "npm run build:wasm && node --test scripts/simulation.test.mjs",
     "test:server": "bash scripts/rust.sh build -p cellhub-server && node scripts/server.test.mjs",
     "test:browser": "node scripts/browser-smoke.mjs",
-    "test:model": "node --experimental-strip-types --test scripts/model.test.mjs scripts/controls.test.mjs scripts/prediction.test.mjs",
+    "test:model": "node --experimental-strip-types --test scripts/model.test.mjs scripts/controls.test.mjs scripts/prediction.test.mjs scripts/division-animation.test.mjs",
     "test:game": "npm run build:wasm && node scripts/game.test.mjs && npm run test:server",
     "test": "npm run test:rust && npm run test:model && npm run test:wasm && node scripts/game.test.mjs && npm run test:server"
   },

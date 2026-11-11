@@ -143,11 +143,27 @@ impl Simulation {
                 a.id = self.next_id;
                 b.id = self.next_id + 1;
                 self.next_id += 2;
+                let parent_radius = radius(total);
+                if let Some(events) = &mut self.division_events {
+                    if events.len() == LIMIT {
+                        events.pop_front();
+                    }
+                    events.push_back([
+                        self.tick as f32,
+                        c.id as f32,
+                        a.id as f32,
+                        b.id as f32,
+                        p.x,
+                        p.y,
+                        parent_radius,
+                        p.angle,
+                    ]);
+                }
                 divisions.insert(
                     c.id,
                     BondDivision {
                         parent: *p,
-                        parent_radius: radius(c.mass),
+                        parent_radius,
                         daughters: [a.id, b.id],
                         keep: [m.keep_a, m.keep_b],
                         bind_children: m.bind_children,

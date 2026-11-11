@@ -4,7 +4,7 @@ use super::Simulation;
 use super::boundary::Boundary;
 use super::interactions::{Components, for_each_island};
 use super::program::{BENDING_TARGET, CONTRACTION_TARGET, LIFT_TARGET, controlled_value};
-use crate::cell_types::MYOCYTE;
+use crate::cell_types::{BUOYOCYTE, MYOCYTE, is_motile};
 use crate::components::{Cell, Position, radius};
 use crate::genome::Genome;
 use hecs::Entity;
@@ -347,6 +347,8 @@ impl Simulation {
                     mass: cell.mass,
                     anchored: cell.anchored,
                     muscle,
+                    driven: is_motile(mode.kind)
+                        || (mode.kind == BUOYOCYTE && self.settings.gravity != 0.),
                 }
             })
             .collect::<Vec<_>>();
@@ -393,10 +395,14 @@ struct BondBody {
     mass: f32,
     anchored: bool,
     muscle: [f32; 3],
+    driven: bool,
 }
 
 impl BondIsland {
     fn solve(&mut self, boundary: Boundary) {
+        if self.solve_straight_path(boundary) {
+            return;
+        }
         // Retain Gauss-Seidel order within an island. Disjoint islands can run
         // in any order because no constraint changes another island's positions.
         for _ in 0..12 {
@@ -445,6 +451,97 @@ impl BondIsland {
                 );
             }
         }
+    }
+
+    /// Solve a passive, already straight path along its division axis. A
+    /// distance-only solver can buckle under the compression of a new split:
+    /// its tiny lateral error becomes the direction of the next correction.
+    fn solve_straight_path(&mut self, boundary: Boundary) -> bool {
+        const POSITION_TOLERANCE: f64 = 0.03;
+        const ANGLE_TOLERANCE: f64 = 0.001;
+        let count = self.bodies.len();
+        if count < 3 || self.edges.len() + 1 != count {
+            return false;
+        }
+        let origin = self.bodies[0].position;
+        let angle = f64::from(origin.angle);
+        let (sin, cos) = libm::sincos(angle);
+        let mut total_mass = 0.;
+        let mut center = [0.; 2];
+        for body in &self.bodies {
+            if body.anchored || body.driven || body.muscle != [0.; 3] {
+                return false;
+            }
+            let p = body.position;
+            let dx = f64::from(p.x) - f64::from(origin.x);
+            let dy = f64::from(p.y) - f64::from(origin.y);
+            let turn = f64::from(p.angle) - angle;
+            let pi = std::f64::consts::PI;
+            let tilt = turn - (turn / pi).round() * pi;
+            if (dy * cos - dx * sin).abs() > POSITION_TOLERANCE || tilt.abs() > ANGLE_TOLERANCE {
+                return false;
+            }
+            let mass = f64::from(body.mass);
+            total_mass += mass;
+            center[0] += f64::from(p.x) * mass;
+            center[1] += f64::from(p.y) * mass;
+        }
+
+        let mut neighbors = vec![[count; 2]; count];
+        for &(a, b) in &self.edges {
+            for (index, neighbor) in [(a, b), (b, a)] {
+                let Some(slot) = neighbors[index].iter_mut().find(|slot| **slot == count) else {
+                    return false;
+                };
+                *slot = neighbor;
+            }
+        }
+        let first = neighbors.iter().position(|ends| ends[1] == count).unwrap();
+        let mut offsets = vec![0.; count];
+        let mut weighted_offset = 0.;
+        let (mut previous, mut current) = (count, first);
+        loop {
+            let next = neighbors[current]
+                .iter()
+                .copied()
+                .find(|&id| id != previous);
+            let Some(next) = next.filter(|&id| id != count) else {
+                break;
+            };
+            let current_radius = radius(self.bodies[current].mass);
+            let next_radius = radius(self.bodies[next].mass);
+            offsets[next] =
+                offsets[current] + f64::from(current_radius + next_radius + ADHESION_GAP);
+            weighted_offset += offsets[next] * f64::from(self.bodies[next].mass);
+            previous = current;
+            current = next;
+        }
+
+        let start = self.bodies[first].position;
+        let finish = self.bodies[current].position;
+        let span = (f64::from(finish.x) - f64::from(start.x)) * cos
+            + (f64::from(finish.y) - f64::from(start.y)) * sin;
+        if span.abs() < POSITION_TOLERANCE {
+            return false;
+        }
+        let (ux, uy) = (cos * span.signum(), sin * span.signum());
+        let center_offset = weighted_offset / total_mass;
+        let (cx, cy) = (center[0] / total_mass, center[1] / total_mass);
+        let place = |offset: f64| {
+            let distance = offset - center_offset;
+            ((cx + ux * distance) as f32, (cy + uy * distance) as f32)
+        };
+        // Fall back to the flexible solver when the whole line cannot fit.
+        for (body, &offset) in self.bodies.iter().zip(&offsets) {
+            let (x, y) = place(offset);
+            if boundary.constrain(x, y, body.mass, 12.).2 {
+                return false;
+            }
+        }
+        for (body, offset) in self.bodies.iter_mut().zip(offsets) {
+            (body.position.x, body.position.y) = place(offset);
+        }
+        true
     }
 }
 

@@ -412,13 +412,37 @@ impl RendererState {
         terrain: &[f32],
         links: &[u32],
     ) -> Result<(), JsValue> {
+        if terrain.len() != 48 * 48 * 4 || terrain.iter().any(|v| !v.is_finite()) {
+            return Err(error("Invalid render snapshot"));
+        }
+        self.set_geometry(cells, links)?;
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.terrain,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(terrain),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(TERRAIN_STRIDE),
+                rows_per_image: Some(TERRAIN_SIZE),
+            },
+            wgpu::Extent3d {
+                width: TERRAIN_SIZE,
+                height: TERRAIN_SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn set_geometry(&mut self, cells: &[f32], links: &[u32]) -> Result<(), JsValue> {
         if self.destroyed {
             return Err(error("Renderer destroyed"));
         }
-        if cells.len() % CELL_VALUES != 0
-            || terrain.len() != 48 * 48 * 4
-            || cells.iter().chain(terrain).any(|v| !v.is_finite())
-        {
+        if cells.len() % CELL_VALUES != 0 || cells.iter().any(|v| !v.is_finite()) {
             return Err(error("Invalid render snapshot"));
         }
         let link_instances = pack_links(cells, links).map_err(error)?;
@@ -458,25 +482,6 @@ impl RendererState {
         if !link_bytes.is_empty() {
             self.queue.write_buffer(&self.links, 0, link_bytes);
         }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.terrain,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(terrain),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(TERRAIN_STRIDE),
-                rows_per_image: Some(TERRAIN_SIZE),
-            },
-            wgpu::Extent3d {
-                width: TERRAIN_SIZE,
-                height: TERRAIN_SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
         self.count = (cells.len() / CELL_VALUES) as u32;
         self.link_count = (links.len() / 2) as u32;
         self.dirty = true;

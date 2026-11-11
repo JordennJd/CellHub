@@ -2,6 +2,7 @@ export const WORLD = 3072;
 export const POPULATION_LIMIT = 20_000;
 export const MAX_MODES = 1000;
 export const STRIDE = 12;
+export const DIVISION_STRIDE = 8;
 export const MODE_STRIDE = 102;
 export const CELL_DETAILS_STRIDE = 13;
 export const SIGNAL_COUNT = 8;
@@ -456,7 +457,7 @@ export type Command = WorldCommand
   | { type: "reset"; requestId?: string }
   | { type: "export"; requestId: string }
   | { type: "restore"; state: string; requestId?: string }
-  | { type: "preview"; genome: Float32Array; mode: number; steps: number }
+  | { type: "preview"; genome: Float32Array; mode: number; steps: number; requestId?: number }
   | { type: "step" };
 export type Environment = {
   light: number;
@@ -484,4 +485,7 @@ export type Frame = {
   nitrates?: Float32Array;
   details?: Float32Array;
   coveredFood?: Float32Array;
+  /** Rows: tick, parent ID, daughter A/B IDs, parent x/y/radius/angle. */
+  divisions?: Float32Array;
+  previewRequestId?: number;
 };

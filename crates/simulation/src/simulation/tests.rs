@@ -1087,6 +1087,96 @@ fn both_daughters_can_inherit_without_creating_diagonal_bonds() {
     }
 }
 
+#[test]
+fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
+    let mut s = Simulation::new(73421);
+    s.set_circular_dish(true);
+    s.configure_environment(super::environment::Environment {
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    // The same founder and conditions as the preview. Each generation grows
+    // to division mass on its own, and the fourth generation stops dividing.
+    let modes = (0..=4)
+        .map(|mode| Mode {
+            threshold: 1.,
+            angle: 0.,
+            speed: 0.,
+            lifespan: 1000.,
+            child_a: (mode + 1).min(4),
+            child_b: (mode + 1).min(4),
+            can_divide: mode < 4,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        })
+        .collect();
+    s.spawn(600., 600., 0, &Genome::from_modes(modes).values())
+        .unwrap();
+
+    let advance_to = |sim: &mut Simulation, tick| {
+        while sim.tick < tick {
+            sim.advance((tick - sim.tick).min(120));
+        }
+    };
+    let assert_straight_path = |sim: &Simulation, count| {
+        assert_eq!(sim.world.len() as usize, count, "tick {}", sim.tick);
+        assert_eq!(sim.bonds.len(), count - 1, "tick {}", sim.tick);
+        let mut neighbors = BTreeMap::<u32, Vec<u32>>::new();
+        for &(a, b) in &sim.bonds {
+            neighbors.entry(a).or_default().push(b);
+            neighbors.entry(b).or_default().push(a);
+        }
+        assert_eq!(neighbors.len(), count);
+        assert!(neighbors.values().all(|ends| ends.len() <= 2));
+        let (&first, _) = neighbors.iter().find(|(_, ends)| ends.len() == 1).unwrap();
+        let mut order = vec![first];
+        let (mut previous, mut current) = (None, first);
+        while let Some(&next) = neighbors[&current].iter().find(|&&id| Some(id) != previous) {
+            assert!(!order.contains(&next), "a path cannot revisit a cell");
+            order.push(next);
+            previous = Some(current);
+            current = next;
+        }
+        assert_eq!(order.len(), count, "one path must reach all cells");
+
+        let position = |id| *sim.world.get::<&Position>(entity(sim, id)).unwrap();
+        let origin = position(first);
+        let end = position(current);
+        let (dx, dy) = (f64::from(end.x - origin.x), f64::from(end.y - origin.y));
+        let length = libm::hypot(dx, dy);
+        assert!(length > 0.);
+        let (ux, uy) = (dx / length, dy / length);
+        let mut previous_projection = f64::NEG_INFINITY;
+        for id in order {
+            let p = position(id);
+            let (x, y) = (f64::from(p.x - origin.x), f64::from(p.y - origin.y));
+            let projection = x * ux + y * uy;
+            let deviation = y * ux - x * uy;
+            assert!(
+                projection > previous_projection && deviation.abs() < 0.05,
+                "tick {}, cell {id}: along {previous_projection:.4}→{projection:.4}, across {deviation:.4}",
+                sim.tick
+            );
+            previous_projection = projection;
+        }
+    };
+
+    advance_to(&mut s, 150);
+    assert_straight_path(&s, 4);
+    advance_to(&mut s, 300);
+    assert_straight_path(&s, 8);
+
+    let mut restored = Simulation::new(999);
+    restored.restore_checked(&s.export_state()).unwrap();
+    advance_to(&mut s, 450);
+    advance_to(&mut restored, 450);
+    assert_straight_path(&s, 16);
+    assert_eq!(s.export_state(), restored.export_state());
+}
+
 fn right_angle_growth() -> Simulation {
     let mut s = quiet_world();
     let genes = Genome::from_modes(vec![Mode {
