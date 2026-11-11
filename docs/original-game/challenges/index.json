@@ -1,0 +1,1133 @@
+{
+ "source": "cell_lab_103_android_patched.apk",
+ "challenges": [
+  {
+   "order": 0,
+   "id": "tuto0",
+   "name": "Обучение I",
+   "substrate_file": "tut1.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 10000
+   },
+   "environment_format_version": 2,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 1,
+   "id": "tuto1",
+   "name": "Обучение II",
+   "substrate_file": "level1.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 10000
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 2,
+   "id": "1",
+   "name": "Водоросли",
+   "substrate_file": "level1.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Phagocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 100
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 3,
+   "id": "2",
+   "name": "Водоросли II",
+   "substrate_file": "level1.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 150
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 4,
+   "id": "4",
+   "name": "Водоросли III",
+   "substrate_file": "level2.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 120
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 5,
+   "id": "3",
+   "name": "Макрофаги",
+   "substrate_file": "mac2.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Flagellocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 300
+   },
+   "environment_format_version": 24,
+   "cell_count": 0,
+   "food_count": 1798
+  },
+  {
+   "order": 6,
+   "id": "3.2",
+   "name": "Макрофаги II",
+   "substrate_file": "mac2.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 650
+   },
+   "environment_format_version": 24,
+   "cell_count": 0,
+   "food_count": 1798
+  },
+  {
+   "order": 7,
+   "id": "3.3",
+   "name": "Цвета",
+   "substrate_file": "colch.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells": 10,
+    "level-cells-min": 10,
+    "red-level-cells": 5,
+    "red-level-cells-min": 5,
+    "yellow-level-cells": 5,
+    "yellow-level-cells-min": 5,
+    "max-time": 100
+   },
+   "environment_format_version": 23,
+   "cell_count": 1,
+   "food_count": 0
+  },
+  {
+   "order": 8,
+   "id": "3.4",
+   "name": "Разведение",
+   "substrate_file": "breed1.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 0,
+    "red-level-cells-min": 100
+   },
+   "environment_format_version": 20,
+   "cell_count": 270,
+   "food_count": 102
+  },
+  {
+   "order": 9,
+   "id": "3.5",
+   "name": "Сосуществование",
+   "substrate_file": "mutual1.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 400,
+    "win-time": 50
+   },
+   "environment_format_version": 2,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 10,
+   "id": "tuto2",
+   "name": "Обучение III",
+   "substrate_file": "level5.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 10000
+   },
+   "environment_format_version": 3,
+   "cell_count": 0,
+   "food_count": 1969
+  },
+  {
+   "order": 11,
+   "id": "5",
+   "name": "Макрофаги III",
+   "substrate_file": "level5.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Lipocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 420
+   },
+   "environment_format_version": 3,
+   "cell_count": 0,
+   "food_count": 1969
+  },
+  {
+   "order": 12,
+   "id": "5.5",
+   "name": "Макрофаги IV",
+   "substrate_file": "hardSwimmer.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 300
+   },
+   "environment_format_version": 2,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 13,
+   "id": "6",
+   "name": "Солнечный свет",
+   "substrate_file": "level3.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 130
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 14,
+   "id": "6.2",
+   "name": "Падальщик",
+   "substrate_file": "scav.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 25,
+    "win-time": 100
+   },
+   "environment_format_version": 23,
+   "cell_count": 613,
+   "food_count": 487
+  },
+  {
+   "order": 15,
+   "id": "6.5",
+   "name": "Зерно",
+   "substrate_file": "lip1.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Devorocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 16,
+    "win-time": 50
+   },
+   "environment_format_version": 10,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 16,
+   "id": "7",
+   "name": "Солнечный свет II",
+   "substrate_file": "lip.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 500
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 17,
+   "id": "8",
+   "name": "Макрофаги V",
+   "substrate_file": "mac5fix.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 150,
+    "win-time": 100
+   },
+   "environment_format_version": 12,
+   "cell_count": 0,
+   "food_count": 1278
+  },
+  {
+   "order": 18,
+   "id": "9",
+   "name": "децимация",
+   "substrate_file": "dense2.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Keratinocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "level-cells": 300
+   },
+   "environment_format_version": 13,
+   "cell_count": 640,
+   "food_count": 235
+  },
+  {
+   "order": 19,
+   "id": "9.7",
+   "name": "Разведение II",
+   "substrate_file": "breed2.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 0,
+    "red-level-cells-min": 100
+   },
+   "environment_format_version": 20,
+   "cell_count": 271,
+   "food_count": 100
+  },
+  {
+   "order": 20,
+   "id": "10",
+   "name": "Заражение",
+   "substrate_file": "inf5.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells": 0,
+    "max-time": 50
+   },
+   "environment_format_version": 3,
+   "cell_count": 192,
+   "food_count": 0
+  },
+  {
+   "order": 21,
+   "id": "11",
+   "name": "Противодействие",
+   "substrate_file": "keratinosyt.substrate",
+   "difficulty": 2,
+   "unlocks": [
+    "Buoyocyte"
+   ],
+   "feature": 0,
+   "conditions": {
+    "user-cells": 420
+   },
+   "environment_format_version": 3,
+   "cell_count": 283,
+   "food_count": 662
+  },
+  {
+   "order": 22,
+   "id": "12",
+   "name": "Завоевание",
+   "substrate_file": "conquering.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 50,
+    "level-cells": 0,
+    "win-time": 30,
+    "max-time": 220
+   },
+   "environment_format_version": 13,
+   "cell_count": 620,
+   "food_count": 231
+  },
+  {
+   "order": 23,
+   "id": "13",
+   "name": "Поплавки",
+   "substrate_file": "buoy1.substrate",
+   "difficulty": 1,
+   "unlocks": [
+    "Glueocyte",
+    "Ciliocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 350
+   },
+   "environment_format_version": 13,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 24,
+   "id": "14",
+   "name": "Поплавки II",
+   "substrate_file": "floater2.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 400
+   },
+   "environment_format_version": 95,
+   "cell_count": 0,
+   "food_count": 1798
+  },
+  {
+   "order": 25,
+   "id": "14.5",
+   "name": "Паразит",
+   "substrate_file": "parasite.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 1,
+    "win-time": 500
+   },
+   "environment_format_version": 24,
+   "cell_count": 198,
+   "food_count": 490
+  },
+  {
+   "order": 26,
+   "id": "15",
+   "name": "Стерилизация",
+   "substrate_file": "ster2.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 2,
+   "cell_count": 115,
+   "food_count": 315
+  },
+  {
+   "order": 27,
+   "id": "15.5",
+   "name": "Вечеринка",
+   "substrate_file": "mosh.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 300,
+    "level-cells": 50,
+    "max-time": 100
+   },
+   "environment_format_version": 24,
+   "cell_count": 557,
+   "food_count": 1
+  },
+  {
+   "order": 28,
+   "id": "16",
+   "name": "Скользкий склон",
+   "substrate_file": "slippery.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Nitrocyte"
+   ],
+   "feature": 1,
+   "conditions": {
+    "user-cells": 400
+   },
+   "environment_format_version": 1,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 29,
+   "id": "17",
+   "name": "Стерилизация II",
+   "substrate_file": "worm3.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 2,
+   "cell_count": 32,
+   "food_count": 5
+  },
+  {
+   "order": 30,
+   "id": "17.5",
+   "name": "Оплодотворение мха",
+   "substrate_file": "obst.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells-min": 450
+   },
+   "environment_format_version": 23,
+   "cell_count": 281,
+   "food_count": 65
+  },
+  {
+   "order": 31,
+   "id": "18.5",
+   "name": "Поплавки III",
+   "substrate_file": "floaters3nolip.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 450
+   },
+   "environment_format_version": 13,
+   "cell_count": 0,
+   "food_count": 1366
+  },
+  {
+   "order": 32,
+   "id": "19",
+   "name": "Жёсткие условия",
+   "substrate_file": "non1.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Virocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 200
+   },
+   "environment_format_version": 2,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 33,
+   "id": "20",
+   "name": "Жёсткие условия II",
+   "substrate_file": "non.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 400
+   },
+   "environment_format_version": 2,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 34,
+   "id": "18.2",
+   "name": "Симбиоз",
+   "substrate_file": "sym3.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells-min": 38
+   },
+   "environment_format_version": 12,
+   "cell_count": 12,
+   "food_count": 0
+  },
+  {
+   "order": 35,
+   "id": "21",
+   "name": "Скользкий склон II",
+   "substrate_file": "hard.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 700
+   },
+   "environment_format_version": 2,
+   "cell_count": 0,
+   "food_count": 324
+  },
+  {
+   "order": 36,
+   "id": "22",
+   "name": "Инфицирование",
+   "substrate_file": "vir2.substrate",
+   "difficulty": 0,
+   "unlocks": [
+    "Secrocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 3,
+   "cell_count": 306,
+   "food_count": 1983
+  },
+  {
+   "order": 37,
+   "id": "22.5",
+   "name": "Лабиринт",
+   "substrate_file": "maze2.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "yellow-level-cells-min": 12
+   },
+   "environment_format_version": 24,
+   "cell_count": 1107,
+   "food_count": 0
+  },
+  {
+   "order": 38,
+   "id": "23",
+   "name": "Инфицирование II",
+   "substrate_file": "vir3nolip.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 13,
+   "cell_count": 426,
+   "food_count": 100
+  },
+  {
+   "order": 39,
+   "id": "23.5",
+   "name": "Некоммутативные вирусы",
+   "substrate_file": "vir6.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells-min": 300
+   },
+   "environment_format_version": 23,
+   "cell_count": 7,
+   "food_count": 249
+  },
+  {
+   "order": 40,
+   "id": "25",
+   "name": "Инфицирование III",
+   "substrate_file": "nonitrovirusfixednolip.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 13,
+   "cell_count": 489,
+   "food_count": 196
+  },
+  {
+   "order": 41,
+   "id": "26",
+   "name": "Генная терапия",
+   "substrate_file": "ugly.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "infected-level-cells": 200,
+    "win-time": 200
+   },
+   "environment_format_version": 3,
+   "cell_count": 448,
+   "food_count": 184
+  },
+  {
+   "order": 42,
+   "id": "26.5",
+   "name": "Пищеварение",
+   "substrate_file": "digestion.substrate",
+   "difficulty": 3,
+   "unlocks": [
+    "Gamete"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 150
+   },
+   "environment_format_version": 23,
+   "cell_count": 0,
+   "food_count": 1699
+  },
+  {
+   "order": 43,
+   "id": "26.57",
+   "name": "Пищеварение II",
+   "substrate_file": "dig3.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 50,
+    "win-time": 100
+   },
+   "environment_format_version": 23,
+   "cell_count": 500,
+   "food_count": 3481
+  },
+  {
+   "order": 44,
+   "id": "26.6",
+   "name": "Бутылочное горлышко",
+   "substrate_file": "agamchal3.substrate",
+   "difficulty": 1,
+   "unlocks": [
+    "Neurocyte"
+   ],
+   "feature": 2,
+   "conditions": {
+    "total-cells-min": 750
+   },
+   "environment_format_version": 23,
+   "cell_count": 502,
+   "food_count": 1436
+  },
+  {
+   "order": 45,
+   "id": "26.8",
+   "name": "Адаптация",
+   "substrate_file": "adaptation.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "total-cells-min": 400,
+    "win-time": 500
+   },
+   "environment_format_version": 24,
+   "cell_count": 378,
+   "food_count": 1846
+  },
+  {
+   "order": 46,
+   "id": "26.9",
+   "name": "Палеогенетика",
+   "substrate_file": "prot.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "hybrid-cells-min": 400
+   },
+   "environment_format_version": 24,
+   "cell_count": 139,
+   "food_count": 1286
+  },
+  {
+   "order": 47,
+   "id": "27",
+   "name": "Нарушение баланса",
+   "substrate_file": "balansnolip.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 24,
+   "cell_count": 1330,
+   "food_count": 900
+  },
+  {
+   "order": 48,
+   "id": "29",
+   "name": "Сохранение баланса",
+   "substrate_file": "balans2.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 40,
+    "level-cells-min": 200,
+    "win-time": 2000
+   },
+   "environment_format_version": 13,
+   "cell_count": 466,
+   "food_count": 323
+  },
+  {
+   "order": 49,
+   "id": "tuto3",
+   "name": "Обучение IV",
+   "substrate_file": "tutoNeuro.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 10000
+   },
+   "environment_format_version": 10,
+   "cell_count": 0,
+   "food_count": 0
+  },
+  {
+   "order": 50,
+   "id": "30",
+   "name": "Воздушные шары",
+   "substrate_file": "balloons2.substrate",
+   "difficulty": 1,
+   "unlocks": [
+    "Myocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 200,
+    "win-time": 100
+   },
+   "environment_format_version": 12,
+   "cell_count": 0,
+   "food_count": 953
+  },
+  {
+   "order": 51,
+   "id": "31",
+   "name": "Трение",
+   "substrate_file": "easyworms2.substrate",
+   "difficulty": 2,
+   "unlocks": [
+    "Senseocyte",
+    "Stereocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 300
+   },
+   "environment_format_version": 11,
+   "cell_count": 0,
+   "food_count": 2037
+  },
+  {
+   "order": 52,
+   "id": "30.5",
+   "name": "Нервный",
+   "substrate_file": "nervous2.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells-min": 680
+   },
+   "environment_format_version": 23,
+   "cell_count": 1,
+   "food_count": 0
+  },
+  {
+   "order": 53,
+   "id": "31.5",
+   "name": "Трение II",
+   "substrate_file": "fric2.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 600
+   },
+   "environment_format_version": 23,
+   "cell_count": 0,
+   "food_count": 1255
+  },
+  {
+   "order": 54,
+   "id": "32",
+   "name": "Скудные условия",
+   "substrate_file": "nekton4.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 250
+   },
+   "environment_format_version": 11,
+   "cell_count": 0,
+   "food_count": 298
+  },
+  {
+   "order": 55,
+   "id": "32.5",
+   "name": "Скудные условия II",
+   "substrate_file": "dualflag.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 300
+   },
+   "environment_format_version": 11,
+   "cell_count": 0,
+   "food_count": 370
+  },
+  {
+   "order": 56,
+   "id": "32.6",
+   "name": "Плоская Земля",
+   "substrate_file": "wallavoid.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 300,
+    "win-time": 100
+   },
+   "environment_format_version": 23,
+   "cell_count": 0,
+   "food_count": 267
+  },
+  {
+   "order": 57,
+   "id": "32.7",
+   "name": "Скудные условия III",
+   "substrate_file": "scarce3.substrate",
+   "difficulty": 0,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 600
+   },
+   "environment_format_version": 12,
+   "cell_count": 0,
+   "food_count": 370
+  },
+  {
+   "order": 58,
+   "id": "32.75",
+   "name": "Пищеварение III",
+   "substrate_file": "dig22.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 470
+   },
+   "environment_format_version": 24,
+   "cell_count": 0,
+   "food_count": 204
+  },
+  {
+   "order": 59,
+   "id": "32.8",
+   "name": "Хищник",
+   "substrate_file": "hunt.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 50,
+    "level-cells": 300
+   },
+   "environment_format_version": 13,
+   "cell_count": 624,
+   "food_count": 177
+  },
+  {
+   "order": 60,
+   "id": "33",
+   "name": "Обман",
+   "substrate_file": "last2.substrate",
+   "difficulty": 3,
+   "unlocks": [
+    "Stemocyte"
+   ],
+   "feature": null,
+   "conditions": {
+    "user-cells": 50,
+    "level-cells": 150
+   },
+   "environment_format_version": 13,
+   "cell_count": 503,
+   "food_count": 283
+  },
+  {
+   "order": 61,
+   "id": "33.2",
+   "name": "Доставка еды.",
+   "substrate_file": "feed.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "red-level-cells-min": 60
+   },
+   "environment_format_version": 24,
+   "cell_count": 777,
+   "food_count": 73
+  },
+  {
+   "order": 62,
+   "id": "33.3",
+   "name": "Полный вперёд!",
+   "substrate_file": "moveit.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 50,
+    "win-time": 1000
+   },
+   "environment_format_version": 13,
+   "cell_count": 0,
+   "food_count": 115
+  },
+  {
+   "order": 63,
+   "id": "33.5",
+   "name": "Истребление",
+   "substrate_file": "extermination.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells": 0
+   },
+   "environment_format_version": 13,
+   "cell_count": 323,
+   "food_count": 828
+  },
+  {
+   "order": 64,
+   "id": "34",
+   "name": "Дискриминация",
+   "substrate_file": "redyellow.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells-max": 0,
+    "level-cells-min": 300,
+    "red-level-cells": 0
+   },
+   "environment_format_version": 13,
+   "cell_count": 442,
+   "food_count": 149
+  },
+  {
+   "order": 65,
+   "id": "35",
+   "name": "Уклонение",
+   "substrate_file": "avoidfix.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 150,
+    "level-cells": 5,
+    "level-cells-min": 3,
+    "win-time": 100
+   },
+   "environment_format_version": 24,
+   "cell_count": 3,
+   "food_count": 326
+  },
+  {
+   "order": 66,
+   "id": "36",
+   "name": "Уклонение II",
+   "substrate_file": "avoidtwo.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 200,
+    "level-cells": 20,
+    "level-cells-min": 10,
+    "win-time": 200
+   },
+   "environment_format_version": 24,
+   "cell_count": 16,
+   "food_count": 520
+  },
+  {
+   "order": 67,
+   "id": "36.51",
+   "name": "Нанобот",
+   "substrate_file": "melanoma.substrate",
+   "difficulty": 1,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "level-cells-min": 314,
+    "infected-level-cells-max": 13,
+    "black-level-cells": 0
+   },
+   "environment_format_version": 24,
+   "cell_count": 314,
+   "food_count": 2442
+  },
+  {
+   "order": 68,
+   "id": "37",
+   "name": "Пустыня",
+   "substrate_file": "desert.substrate",
+   "difficulty": 3,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 200
+   },
+   "environment_format_version": 13,
+   "cell_count": 0,
+   "food_count": 529
+  },
+  {
+   "order": 69,
+   "id": "38",
+   "name": "Пустыня II",
+   "substrate_file": "desert.substrate",
+   "difficulty": 2,
+   "unlocks": [],
+   "feature": null,
+   "conditions": {
+    "user-cells": 600
+   },
+   "environment_format_version": 13,
+   "cell_count": 0,
+   "food_count": 529
+  }
+ ]
+}
