@@ -10,8 +10,11 @@ use crate::genome::Genome;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) const ADHESION_GAP: f32 = 2.;
+
 pub(super) struct BondDivision {
     pub(super) parent: Position,
+    pub(super) parent_radius: f32,
     pub(super) daughters: [u32; 2],
     pub(super) keep: [bool; 2],
     pub(super) bind_children: bool,
@@ -21,6 +24,7 @@ pub(super) struct BondDivision {
 struct BondEnd {
     id: u32,
     position: Position,
+    radius: f32,
 }
 
 impl BondEnd {
@@ -39,82 +43,172 @@ impl BondEnd {
     fn edge(self, other: Self) -> (u32, u32) {
         (self.id.min(other.id), self.id.max(other.id))
     }
+
+    fn side_of(self, to: Self, point: Self) -> f64 {
+        let (dx, dy) = self.displacement(to);
+        let (px, py) = self.displacement(point);
+        dx * py - dy * px
+    }
 }
 
 struct DividedBondEnds<'a> {
     division: &'a BondDivision,
     daughters: [BondEnd; 2],
-    neighbors: Vec<BondEnd>,
+    neighbors: Vec<(u32, [f64; 2])>,
 }
 
 impl DividedBondEnds<'_> {
-    fn candidates(&self, neighbor: u32) -> &[BondEnd] {
+    fn candidates(&self) -> [Option<BondEnd>; 2] {
+        std::array::from_fn(|i| self.division.keep[i].then_some(self.daughters[i]))
+    }
+
+    fn sibling_blocks(&self, daughter: BondEnd, other: BondEnd) -> bool {
         let [a, b] = self.daughters;
-        match (self.division.keep, self.neighbors.as_slice()) {
-            ([true, true], [first, second]) => {
-                // Replace a vertex with two connected daughters. Assign one old
-                // bond to each daughter so a path or loop stays continuous.
-                let direct = a.distance_squared(*first) + b.distance_squared(*second);
-                let swapped = a.distance_squared(*second) + b.distance_squared(*first);
-                let a_neighbor = if direct <= swapped { first } else { second };
-                if a_neighbor.id == neighbor {
-                    &self.daughters[..1]
-                } else {
-                    &self.daughters[1..]
+        let sibling = if daughter.id == a.id { b } else { a };
+        let (dx, dy) = daughter.displacement(other);
+        let (sx, sy) = daughter.displacement(sibling);
+        let length_squared = dx * dx + dy * dy;
+        let projection = dx * sx + dy * sy;
+        let cross = dx * sy - dy * sx;
+        let radius = f64::from(sibling.radius);
+        // The inner daughter intercepts a connection to the outer daughter
+        // when the line between centers runs through her membrane.
+        projection > 0.
+            && projection < length_squared
+            && cross * cross < radius * radius * length_squared
+    }
+
+    fn preferred_daughter(&self, neighbor: u32) -> Option<u32> {
+        let [(first, first_cost), (second, second_cost)] = self.neighbors.as_slice() else {
+            return None;
+        };
+        // If both neighbors can be reached on different sides, pass one old
+        // edge to each sister. This keeps an existing path or loop continuous.
+        let direct = first_cost[0] + second_cost[1];
+        let swapped = first_cost[1] + second_cost[0];
+        if !direct.is_finite() && !swapped.is_finite() {
+            return None;
+        }
+        let a_neighbor = if direct <= swapped { *first } else { *second };
+        Some(self.daughters[usize::from(a_neighbor != neighbor)].id)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BondContact {
+    ends: [BondEnd; 2],
+    gap: f64,
+}
+
+impl BondContact {
+    fn edge(self) -> (u32, u32) {
+        self.ends[0].edge(self.ends[1])
+    }
+
+    fn crosses(self, other: Self) -> bool {
+        let [a, b] = self.ends;
+        let [c, d] = other.ends;
+        a.side_of(b, c) * a.side_of(b, d) < 0. && c.side_of(d, a) * c.side_of(d, b) < 0.
+    }
+}
+
+struct BondTransfer {
+    previous: [u32; 2],
+    contacts: [Option<BondContact>; 4],
+}
+
+impl BondTransfer {
+    fn new(old: [BondEnd; 2], splits: [Option<&DividedBondEnds<'_>>; 2]) -> Self {
+        let candidates: [[Option<BondEnd>; 2]; 2] = std::array::from_fn(|side| {
+            splits[side].map_or([Some(old[side]), None], DividedBondEnds::candidates)
+        });
+        let former_span = f64::from(old[0].radius + old[1].radius + ADHESION_GAP);
+        let contacts = std::array::from_fn(|i| {
+            let a = candidates[0][i / 2]?;
+            let b = candidates[1][i % 2]?;
+            let membranes = f64::from(a.radius + b.radius);
+            let new_span = membranes + f64::from(ADHESION_GAP);
+            // An old joint can still reach across the daughters' smaller
+            // membranes and the sideways displacement of a single split.
+            // Use the nominal old span so a stretched bond cannot add reach.
+            let shift_squared = old[0].distance_squared(a).max(old[1].distance_squared(b));
+            let reach_squared =
+                (former_span * former_span + shift_squared).max(new_span * new_span);
+            let distance_squared = a.distance_squared(b);
+            if distance_squared > reach_squared + 0.001
+                || splits[0].is_some_and(|split| split.sibling_blocks(a, b))
+                || splits[1].is_some_and(|split| split.sibling_blocks(b, a))
+            {
+                return None;
+            }
+            Some(BondContact {
+                ends: [a, b],
+                gap: libm::sqrt(distance_squared) - membranes,
+            })
+        });
+        Self {
+            previous: [old[0].id, old[1].id],
+            contacts,
+        }
+    }
+
+    fn costs(&self, side: usize, daughters: [BondEnd; 2]) -> [f64; 2] {
+        daughters.map(|daughter| {
+            self.contacts
+                .iter()
+                .flatten()
+                .filter(|contact| contact.ends[side].id == daughter.id)
+                .map(|contact| contact.gap)
+                .fold(f64::INFINITY, f64::min)
+        })
+    }
+
+    fn retain(&self, splits: [Option<&DividedBondEnds<'_>>; 2], bonds: &mut BTreeSet<(u32, u32)>) {
+        let preferred: [Option<u32>; 2] = std::array::from_fn(|side| {
+            splits[side].and_then(|split| split.preferred_daughter(self.previous[1 - side]))
+        });
+        let preferred_contacts = self.contacts.map(|contact| {
+            contact.filter(|contact| {
+                preferred
+                    .iter()
+                    .zip(contact.ends)
+                    .all(|(&id, end)| id.is_none_or(|id| id == end.id))
+            })
+        });
+        // Preferences at opposite ends can disagree. In that case use a real
+        // contact even if it means one sister inherits more than one edge.
+        let contacts = if preferred_contacts.iter().any(Option::is_some) {
+            preferred_contacts
+        } else {
+            self.contacts
+        };
+
+        if splits.iter().any(Option::is_none) {
+            bonds.extend(contacts.into_iter().flatten().map(BondContact::edge));
+            return;
+        }
+        let mut closest_pair = None;
+        // A simultaneous division can keep two side-by-side connections,
+        // with each daughter participating at most once in the old joint.
+        for (i, j) in [(0, 3), (1, 2)] {
+            if let (Some(a), Some(b)) = (contacts[i], contacts[j])
+                && !a.crosses(b)
+            {
+                let candidate = (a.gap + b.gap, a.edge(), b.edge());
+                if closest_pair.is_none_or(|best| candidate < best) {
+                    closest_pair = Some(candidate);
                 }
             }
-            ([true, true], _) => &self.daughters,
-            ([true, false], _) => &self.daughters[..1],
-            ([false, true], _) => &self.daughters[1..],
-            ([false, false], _) => &[],
         }
-    }
-}
-
-fn is_crosswise(candidates: &[BondEnd], bond: (f64, f64)) -> bool {
-    let [a, b] = candidates else { return false };
-    let (dx, dy) = a.displacement(*b);
-    let (bx, by) = bond;
-    let dot = dx * bx + dy * by;
-    let norm_squared = (dx * dx + dy * dy) * (bx * bx + by * by);
-    // A bond within about 11.5° of the cleavage line can reach both daughters.
-    norm_squared > 0. && dot * dot <= norm_squared * (0.2 * 0.2)
-}
-
-fn inherit_bond(
-    bonds: &mut BTreeSet<(u32, u32)>,
-    left: &[BondEnd],
-    right: &[BondEnd],
-    crosswise: bool,
-) {
-    if crosswise {
-        match (left, right) {
-            ([a, b], [c, d]) => {
-                let direct = a.distance_squared(*c) + b.distance_squared(*d);
-                let swapped = a.distance_squared(*d) + b.distance_squared(*c);
-                let (first, second) = if direct <= swapped { (c, d) } else { (d, c) };
-                bonds.extend([a.edge(*first), b.edge(*second)]);
-                return;
-            }
-            ([a, b], [c]) | ([c], [a, b]) => {
-                bonds.extend([a.edge(*c), b.edge(*c)]);
-                return;
-            }
-            _ => {}
+        if let Some((_, a, b)) = closest_pair {
+            bonds.extend([a, b]);
+        } else if let Some(contact) = contacts.into_iter().flatten().min_by(|a, b| {
+            a.gap
+                .total_cmp(&b.gap)
+                .then_with(|| a.edge().cmp(&b.edge()))
+        }) {
+            bonds.insert(contact.edge());
         }
-    }
-
-    let mut closest = None;
-    for &a in left {
-        for &b in right {
-            let candidate = (a.distance_squared(b), a.edge(b));
-            if closest.is_none_or(|best| candidate < best) {
-                closest = Some(candidate);
-            }
-        }
-    }
-    if let Some((_, edge)) = closest {
-        bonds.insert(edge);
     }
 }
 
@@ -136,15 +230,19 @@ impl Simulation {
         };
         let end_for = |id| {
             let entity = entity_for(id)?;
+            let mut query = self.world.query_one::<(&Position, &Cell)>(entity).unwrap();
+            let (position, cell) = query.get().unwrap();
             Some(BondEnd {
                 id,
-                position: *self.world.get::<&Position>(entity).unwrap(),
+                position: *position,
+                radius: radius(cell.mass),
             })
         };
         let former_end = |id| match divisions.get(&id) {
             Some(division) => division.keep.contains(&true).then_some(BondEnd {
                 id,
                 position: division.parent,
+                radius: division.parent_radius,
             }),
             None => end_for(id),
         };
@@ -168,24 +266,10 @@ impl Simulation {
                 );
             }
         }
-        if !divided.is_empty() {
-            for &(a, b) in &self.bonds {
-                for (parent, neighbor) in [(a, b), (b, a)] {
-                    if let Some(split) = divided.get_mut(&parent)
-                        && split.division.bind_children
-                        && split.division.keep == [true; 2]
-                        && degrees[&parent] == 2
-                        && let Some(neighbor) = former_end(neighbor)
-                    {
-                        split.neighbors.push(neighbor);
-                    }
-                }
-            }
-        }
+        let mut transfers = Vec::new();
         for &(a, b) in &self.bonds {
-            let next_a = divided.get(&a);
-            let next_b = divided.get(&b);
-            if next_a.is_none() && next_b.is_none() {
+            let splits = [divided.get(&a), divided.get(&b)];
+            if splits.iter().all(Option::is_none) {
                 if entity_for(a).is_some() && entity_for(b).is_some() {
                     bonds.insert((a, b));
                 }
@@ -195,16 +279,25 @@ impl Simulation {
             let (Some(old_a), Some(old_b)) = (former_end(a), former_end(b)) else {
                 continue;
             };
-            let left = next_a.map_or(std::slice::from_ref(&old_a), |split| split.candidates(b));
-            let right = next_b.map_or(std::slice::from_ref(&old_b), |split| split.candidates(a));
-            let bond = old_a.displacement(old_b);
-            // A transverse cut of an isolated pair can retain the connection
-            // on both sides. If only one cell divides, the two sides share its neighbor.
-            let crosswise = degrees[&a] == 1
-                && degrees[&b] == 1
-                && next_a.is_none_or(|_| is_crosswise(left, bond))
-                && next_b.is_none_or(|_| is_crosswise(right, bond));
-            inherit_bond(&mut bonds, left, right, crosswise);
+            let transfer = BondTransfer::new([old_a, old_b], splits);
+            if transfer.contacts.iter().all(Option::is_none) {
+                continue;
+            }
+            for (side, (parent, neighbor)) in [(a, b), (b, a)].into_iter().enumerate() {
+                if let Some(split) = divided.get_mut(&parent)
+                    && split.division.bind_children
+                    && split.division.keep == [true; 2]
+                    && degrees[&parent] == 2
+                {
+                    split
+                        .neighbors
+                        .push((neighbor, transfer.costs(side, split.daughters)));
+                }
+            }
+            transfers.push(transfer);
+        }
+        for transfer in transfers {
+            transfer.retain(transfer.previous.map(|id| divided.get(&id)), &mut bonds);
         }
         self.bonds = bonds;
         self.solve_bonds();
@@ -322,7 +415,7 @@ impl BondIsland {
                     (1., 0.)
                 };
                 let contraction = (a.muscle[0] + b.muscle[0]) * 0.5;
-                let rest = (radius(a.mass) + radius(b.mass) + 2.)
+                let rest = (radius(a.mass) + radius(b.mass) + ADHESION_GAP)
                     * (1. - contraction * 0.35).clamp(0.6, 1.4);
                 let error = distance - rest;
                 let (share_a, share_b) = match (a.anchored, b.anchored) {

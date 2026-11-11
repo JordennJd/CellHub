@@ -948,33 +948,33 @@ fn mature_all(s: &mut Simulation) {
 }
 #[test]
 fn all_three_adhesion_flags_are_independent() {
-    for bits in 0..8 {
-        let mut s = quiet_world();
-        let mut g = modern_genes(1);
-        g[1] = 1.;
-        g[9] = (bits & 1 != 0) as u8 as f32;
-        g[10] = (bits & 2 != 0) as u8 as f32;
-        g[11] = (bits & 4 != 0) as u8 as f32;
-        let parent = s.spawn(500., 500., 0, &g).unwrap();
-        let neighbor = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
-        s.world
-            .get::<&mut Position>(entity(&s, parent))
-            .unwrap()
-            .angle = 0.;
-        s.bonds.insert((parent, neighbor));
-        mature_all(&mut s);
-        s.advance(1);
-        let mut expected = BTreeSet::new();
-        if bits & 1 != 0 {
-            expected.insert((3, 4));
+    for (angle, near_flag, near_daughter) in [(0., 2, 3), (std::f32::consts::PI, 4, 4)] {
+        for bits in 0..8 {
+            let mut s = quiet_world();
+            let mut g = modern_genes(1);
+            g[1] = 1.;
+            g[9] = (bits & 1 != 0) as u8 as f32;
+            g[10] = (bits & 2 != 0) as u8 as f32;
+            g[11] = (bits & 4 != 0) as u8 as f32;
+            let parent = s.spawn(500., 500., 0, &g).unwrap();
+            let neighbor = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
+            s.world
+                .get::<&mut Position>(entity(&s, parent))
+                .unwrap()
+                .angle = angle;
+            s.bonds.insert((parent, neighbor));
+            mature_all(&mut s);
+            s.advance(1);
+            let mut expected = BTreeSet::new();
+            if bits & 1 != 0 {
+                expected.insert((3, 4));
+            }
+            if bits & near_flag != 0 {
+                expected.insert((neighbor, near_daughter));
+            }
+            assert_eq!(s.bonds, expected, "angle={angle}, flags={bits}");
+            assert_eq!(s.world.len(), 3);
         }
-        if bits & 2 != 0 {
-            expected.insert((neighbor, 3));
-        } else if bits & 4 != 0 {
-            expected.insert((neighbor, 4));
-        }
-        assert_eq!(s.bonds, expected, "flags={bits}");
-        assert_eq!(s.world.len(), 3);
     }
 }
 #[test]
@@ -985,11 +985,46 @@ fn adjacent_parents_can_divide_on_the_same_tick() {
     g[10] = 1.;
     let a = s.spawn(500., 500., 0, &g).unwrap();
     let b = s.spawn(522., 500., 0, &g).unwrap();
+    s.world.get::<&mut Position>(entity(&s, a)).unwrap().angle = 0.;
+    s.world.get::<&mut Position>(entity(&s, b)).unwrap().angle = std::f32::consts::PI;
     s.bonds.insert((a, b));
     mature_all(&mut s);
     s.advance(1);
     assert_eq!(s.links(), vec![3, 5]);
     assert_eq!(s.world.len(), 4);
+}
+
+#[test]
+fn inheritance_depends_on_candidate_contact_at_the_same_oblique_angle() {
+    for (separation, in_contact) in [(26., true), (100., false)] {
+        let mut s = quiet_world();
+        let genes = Genome::from_modes(vec![Mode {
+            threshold: 1.,
+            angle: 0.,
+            speed: 0.,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        }])
+        .values();
+        let a = s.spawn(500., 500., 0, &genes).unwrap();
+        let b = s.spawn(500. + separation, 500., 0, &genes).unwrap();
+        for id in [a, b] {
+            let entity = entity(&s, id);
+            s.world.get::<&mut Cell>(entity).unwrap().mass = 2.;
+            s.world.get::<&mut Position>(entity).unwrap().angle = std::f32::consts::FRAC_PI_3;
+        }
+        s.bonds.insert((a, b));
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.world.len(), 4);
+        let mut expected = BTreeSet::from([(3, 4), (5, 6)]);
+        if in_contact {
+            expected.extend([(3, 5), (4, 6)]);
+        }
+        assert_eq!(s.bonds, expected, "parent separation {separation}");
+    }
 }
 
 #[test]
@@ -1162,9 +1197,9 @@ fn organism_keeps_flagellum_and_releases_photo_offspring() {
     g[12 + 8] = 0.;
     g[24] = 1.;
     g[24 + 1] = 2.4;
-    g[24 + 2] = 2.;
-    g[24 + 3] = 0.;
-    g[24 + 10] = 1.;
+    g[24 + 2] = 0.;
+    g[24 + 3] = 2.;
+    g[24 + 11] = 1.;
     s.spawn(500., 500., 0, &g).unwrap();
     mature_all(&mut s);
     s.advance(1);
@@ -1175,10 +1210,10 @@ fn organism_keeps_flagellum_and_releases_photo_offspring() {
     s.world.get::<&mut Cell>(phagocyte).unwrap().mass = 3.;
     mature_all(&mut s);
     s.advance(1);
-    assert_eq!(s.links(), vec![2, 4]);
+    assert_eq!(s.links(), vec![2, 5]);
     assert_eq!(s.cell_mode(2), 1); // non-dividing flagellum survives above its threshold
-    assert_eq!(s.cell_mode(4), 2); // continuing phagocyte inherits the bond
-    assert_eq!(s.cell_mode(5), 0); // detached photo offspring
+    assert_eq!(s.cell_mode(4), 0); // detached photo offspring
+    assert_eq!(s.cell_mode(5), 2); // nearer phagocyte inherits the bond
     assert_eq!(s.world.len(), 3);
     assert_eq!(s.deaths, 0);
 }

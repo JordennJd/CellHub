@@ -1,7 +1,7 @@
 //! One simulation tick: metabolism, interactions, death, division and bonds.
 
 use super::Simulation;
-use super::bonds::BondDivision;
+use super::bonds::{ADHESION_GAP, BondDivision};
 use super::program::{SPEED_TARGET, controlled_value};
 use super::specialized::{buoyant_drift, corpse_food, differentiate};
 use crate::cell_types::{
@@ -147,6 +147,7 @@ impl Simulation {
                     c.id,
                     BondDivision {
                         parent: *p,
+                        parent_radius: radius(c.mass),
                         daughters: [a.id, b.id],
                         keep: [m.keep_a, m.keep_b],
                         bind_children: m.bind_children,
@@ -171,7 +172,7 @@ impl Simulation {
                 a.generation += 1;
                 b.generation += 1;
                 let angle = p.angle + m.angle * if c.mirrored { -1. } else { 1. };
-                let distance = (radius(a.mass) + radius(b.mass) + 2.) / 2.;
+                let distance = (radius(a.mass) + radius(b.mass) + ADHESION_GAP) / 2.;
                 let (sin, cos) = libm::sincosf(angle);
                 let (ax, ay, _) = self.boundary.constrain(
                     p.x + cos * distance,
