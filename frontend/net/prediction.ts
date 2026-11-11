@@ -77,6 +77,7 @@ export class PredictionWorld {
   private terrain = new Float32Array(TERRAIN_SIZE * TERRAIN_SIZE * 4);
   private nitrates = new Float32Array(TERRAIN_SIZE * TERRAIN_SIZE);
   private coveredFood = new Float32Array(TERRAIN_SIZE * TERRAIN_SIZE);
+  private terrainRevision = 0;
   private stats = new Float32Array(5);
 
   applyChunk(chunk: ChunkFrame, now = performance.now()) {
@@ -154,17 +155,24 @@ export class PredictionWorld {
     const startX = chunk.chunkX * TERRAIN_TILES_PER_CHUNK;
     const startY = chunk.chunkY * TERRAIN_TILES_PER_CHUNK;
     let source = 0;
+    let changed = false;
     for (let y = 0; y < TERRAIN_TILES_PER_CHUNK; y++) {
       for (let x = 0; x < TERRAIN_TILES_PER_CHUNK; x++) {
-        const target = ((startY + y) * TERRAIN_SIZE + startX + x) * 4;
-        this.terrain[target] = terrain[source++];
-        this.terrain[target + 1] = terrain[source++];
-        this.terrain[target + 2] = terrain[source++];
-        this.terrain[target + 3] = terrain[source++];
-        this.nitrates[target / 4] = terrain[source++];
-        this.coveredFood[target / 4] = terrain[source++];
+        const tile = (startY + y) * TERRAIN_SIZE + startX + x;
+        const target = tile * 4;
+        for (let field = 0; field < 4; field++) {
+          const value = terrain[source++];
+          changed ||= this.terrain[target + field] !== value;
+          this.terrain[target + field] = value;
+        }
+        const nitrate = terrain[source++];
+        const coveredFood = terrain[source++];
+        changed ||= this.nitrates[tile] !== nitrate || this.coveredFood[tile] !== coveredFood;
+        this.nitrates[tile] = nitrate;
+        this.coveredFood[tile] = coveredFood;
       }
     }
+    if (changed) this.terrainRevision++;
   }
 
   private replaceChunkLinks(key: number, endpoints: Uint32Array) {
@@ -334,6 +342,7 @@ export class PredictionWorld {
       cells,
       links: Uint32Array.from(links),
       terrain: this.terrain,
+      terrainRevision: this.terrainRevision,
       nitrogen,
       nitrates: this.nitrates,
       details,
@@ -368,6 +377,7 @@ export class PredictionWorld {
     this.stats.fill(0);
     this.nitrates.fill(0);
     this.coveredFood.fill(0);
+    this.terrainRevision++;
   }
 
   get cellCount() {

@@ -23,6 +23,7 @@ impl Simulation {
         degrees: &BTreeMap<u32, usize>,
     ) -> MetabolismScratch {
         let population = entities.len();
+        let can_grow = population < self.population_limit;
         let settings = self.settings;
         let boundary = self.boundary;
         let chaos = self.chaos.is_some();
@@ -164,8 +165,14 @@ impl Simulation {
                 } else {
                     passive_drift
                 };
-                let drive_x = libm::cosf(p.angle) * speed * STEP / settings.viscosity;
-                let drive_y = libm::sinf(p.angle) * speed * STEP / settings.viscosity;
+                let (drive_x, drive_y) = if speed == 0. {
+                    (0., 0.)
+                } else {
+                    (
+                        libm::cosf(p.angle) * speed * STEP / settings.viscosity,
+                        libm::sinf(p.angle) * speed * STEP / settings.viscosity,
+                    )
+                };
                 let mut next_x = p.x + drive_x;
                 let mut next_y = p.y + drive_y + vertical_drift * STEP;
                 if c.recoil != [0.; 2] {
@@ -204,7 +211,8 @@ impl Simulation {
                     },
                 };
                 item.result.died = died;
-                if !died
+                if can_grow
+                    && !died
                     && m.can_divide
                     && m.kind != GAMETE
                     && !differentiated

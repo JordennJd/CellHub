@@ -4,12 +4,13 @@ use super::boundary::Boundary;
 use crate::components::{MAX_RECOIL_MOMENTUM, Position, radius};
 
 pub(super) const CONTACT_TRAVEL: f32 = 6.;
-pub(super) const CONTACT_PASSES: usize = 5;
+pub(super) const CONTACT_PASSES: usize = 7;
 
 const CONTACT_SLOP: f32 = 0.005;
-const RESTITUTION: f32 = 0.15;
-const PENETRATION_BIAS: f32 = 0.2;
-const MAX_BIAS_SPEED: f32 = 12.;
+const RESTITUTION: f32 = 0.28;
+const PENETRATION_BIAS: f32 = 0.34;
+const MAX_BIAS_SPEED: f32 = 18.;
+const TENSILE_STIFFNESS: f32 = 0.9;
 
 pub(super) struct CollisionBody {
     pub(super) position: Position,
@@ -79,7 +80,13 @@ impl CollisionBody {
             if penetration >= 0. {
                 let restitution = if elastic { RESTITUTION } else { 0. };
                 changed |= self.impulse(other, impact.normal, inverse_mass, 0., restitution);
-                changed |= self.separate(other, impact.normal, penetration, inverse_mass, boundary);
+                changed |= self.project_distance(
+                    other,
+                    impact.normal,
+                    penetration,
+                    inverse_mass,
+                    boundary,
+                );
                 if self.projected_distance(other, impact.normal) < separation - CONTACT_SLOP {
                     // A lateral travel bound can prevent plane projection.
                     // The impact poses themselves stay on the original paths.
@@ -112,8 +119,32 @@ impl CollisionBody {
             (0., 0.)
         };
         changed |= self.impulse(other, normal, inverse_mass, bias, restitution);
-        changed |= self.separate(other, normal, penetration, inverse_mass, boundary);
+        changed |= self.project_distance(other, normal, penetration, inverse_mass, boundary);
         changed
+    }
+
+    pub(super) fn relax_tension(
+        &mut self,
+        other: &mut Self,
+        rest: f32,
+        boundary: Boundary,
+    ) -> bool {
+        let inverse_mass = self.inverse_mass + other.inverse_mass;
+        let dx = other.position.x - self.position.x;
+        let dy = other.position.y - self.position.y;
+        let limit = rest + CONTACT_SLOP;
+        let distance_squared = dx * dx + dy * dy;
+        if inverse_mass == 0. || distance_squared <= limit * limit {
+            return false;
+        }
+        let distance = libm::sqrtf(distance_squared);
+        self.project_distance(
+            other,
+            [dx / distance, dy / distance],
+            (limit - distance) * TENSILE_STIFFNESS,
+            inverse_mass,
+            boundary,
+        )
     }
 
     pub(super) fn within_contact_range(&self, other: &Self, fraction: f32) -> bool {
@@ -165,19 +196,19 @@ impl CollisionBody {
         self.momentum[axis] != previous
     }
 
-    fn separate(
+    fn project_distance(
         &mut self,
         other: &mut Self,
         [nx, ny]: [f32; 2],
-        penetration: f32,
+        adjustment: f32,
         inverse_mass: f32,
         boundary: Boundary,
     ) -> bool {
-        if penetration <= 0. {
+        if adjustment == 0. {
             return false;
         }
-        let a = penetration * (self.inverse_mass / inverse_mass);
-        let b = penetration * (other.inverse_mass / inverse_mass);
+        let a = adjustment * (self.inverse_mass / inverse_mass);
+        let b = adjustment * (other.inverse_mass / inverse_mass);
         let moved = self.place(self.position.x - nx * a, self.position.y - ny * a, boundary);
         other.place(
             other.position.x + nx * b,

@@ -6,14 +6,24 @@ import { fileURLToPath } from "node:url";
 const players = Number(process.env.PLAYERS ?? 40);
 const population = Number(process.env.CELLS ?? 10_000);
 const seconds = Number(process.env.SECONDS ?? 10);
+const layout = process.env.LAYOUT ?? "grid";
 assert(players > 0 && players <= 40 && population > 0 && population <= 20_000 && seconds > 0);
-const server = spawn(fileURLToPath(new URL("../target/release/cellhub-server", import.meta.url)),
+assert(["grid", "colony", "piles"].includes(layout), `Unknown layout: ${layout}`);
+const server = spawn(process.env.SERVER_BIN ?? fileURLToPath(new URL("../target/release/cellhub-server", import.meta.url)),
   ["--bind", "127.0.0.1:0", "--max-players", String(players)],
   { env: { ...process.env, NO_COLOR: "1", RUST_LOG: "cellhub_server=info" } });
 const sockets = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 let output = "", address, failure;
 let joined = 0, acks = 0, bytes = 0, chunks = 0;
+function position(i) {
+  if (layout === "colony") return { x: 650 + (i % 140) * 12, y: 650 + Math.floor(i / 140) * 12 };
+  if (layout === "piles") {
+    const group = Math.floor(i / 200);
+    return { x: 160 + (group % 10) * 280, y: 160 + Math.floor(group / 10) * 280 };
+  }
+  return { x: 30 + (i % 140) * 21.5, y: 30 + Math.floor(i / 140) * 21 };
+}
 for (const stream of [server.stdout, server.stderr]) stream.on("data", data => {
   output += data;
   address ??= output.match(/address=(127\.0\.0\.1:\d+)/)?.[1];
@@ -55,7 +65,7 @@ try {
   const genome = Array.from({ length: 8 }, () => [0, 8, 0, 0, .5, 0, 0, 240]).flat();
   for (let i = 0; i < population; i++) {
     sockets[i % players].send(JSON.stringify({ type: "spawn", seq: i + 1,
-      x: 30 + (i % 140) * 21.5, y: 30 + Math.floor(i / 140) * 21, mode: 0, genome }));
+      ...position(i), mode: 0, genome }));
     if (i % 80 === 79) await until(() => acks >= i + 1, "spawn acknowledgements");
   }
   await until(() => acks === population, "all spawns");
@@ -72,10 +82,13 @@ try {
   }
   const elapsed = (performance.now() - started) / 1000;
   const timings = samples.map(sample => sample.tickUs / 1000).sort((a, b) => a - b);
+  const percentile = key => samples.map(sample => sample[key] / 1000).sort((a, b) => a - b)[Math.floor(samples.length * .95)];
   assert(chunks > initialChunks && sockets.every(socket => socket.readyState === WebSocket.OPEN));
-  console.log(JSON.stringify({ players, requestedCells: population, seconds: elapsed,
+  console.log(JSON.stringify({ layout, players, requestedCells: population, seconds: elapsed,
     p50TickMs: timings[Math.floor(timings.length / 2)],
     p95TickMs: timings[Math.floor(timings.length * .95)], maxTickMs: timings.at(-1),
+    p95StepMs: percentile("stepUs"), p95StreamMs: percentile("streamUs"),
+    overrunsDuringMeasurement: samples.at(-1).overruns - samples[0].overruns,
     aggregateBytesPerSecond: (bytes - initialBytes) / elapsed,
     chunksPerPlayerPerSecond: (chunks - initialChunks) / elapsed / players,
     latest: samples.at(-1) }, null, 2));
