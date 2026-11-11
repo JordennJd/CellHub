@@ -120,12 +120,12 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
         {m.kind !== 9 && connectionLimit}
         <div className="genome-children">{(["childA", "childB"] as const).map((key, index) => <section key={key}>
           <label>Дочерняя клетка {index === 0 ? "A" : "B"}<select value={m[key]} onChange={e => update(key, Number(e.target.value))}>{genome.map((g, i) => <option key={i} value={i}>{g.name} · {TYPES[g.kind].name}</option>)}</select></label>
-          <label className="genome-check"><input type="checkbox" checked={index === 0 ? m.keepAdhesionA : m.keepAdhesionB} onChange={e => update(index === 0 ? "keepAdhesionA" : "keepAdhesionB", e.target.checked)} />Наследует связи родителя</label>
+          <label className="genome-check"><input type="checkbox" checked={index === 0 ? m.keepAdhesionA : m.keepAdhesionB} onChange={e => update(index === 0 ? "keepAdhesionA" : "keepAdhesionB", e.target.checked)} />Может унаследовать связи родителя</label>
           <label className="genome-check"><input type="checkbox" checked={index === 0 ? m.mirrorA : m.mirrorB} onChange={e => update(index === 0 ? "mirrorA" : "mirrorB", e.target.checked)} />Зеркально отразить</label>
           {orientation(`Направление дочери ${index === 0 ? 'A' : 'B'}`,index === 0 ? 'childAngleA' : 'childAngleB','Поворачивает дочь относительно направления от родителя вдоль оси деления. Зеркальное отражение меняет знак поворотов этой клетки и её дальнейшего развития.')}
         </section>)}</div>
         <label className="genome-check"><input type="checkbox" checked={m.bindChildren} onChange={e => update("bindChildren", e.target.checked)} />Связать дочерние клетки</label>
-        <details><summary>Как работают связи</summary><p>Связь между новыми дочерними клетками создаётся отдельно от наследования прежних связей родителя. Каждая дочь наследует весь геном и начинает работать в указанном режиме.</p></details>
+        <details><summary>Как работают связи</summary><p>Каждая прежняя связь переносится один раз. Из дочерей с включённым наследованием выбирается ближайшая к соседу. Если сосед тоже делится, связь получает ближайшая пара подходящих дочерей. Когда ни одна дочь не может унаследовать связь, она исчезает. Связь между дочерьми включается отдельно. Каждая дочь наследует весь геном и начинает работать в указанном режиме.</p></details>
         {setting("Доля массы дочери A", "ratio", 0.2, 0.8, 0.01, "Дочь A получает указанную долю массы, дочь B — оставшуюся. Например, 0,5 означает равное распределение.")}
         {orientation("Угол деления","angle","Поворачивает ось, вдоль которой располагаются дочерние клетки, относительно направления родителя. Зеркально отражённая клетка поворачивает её в обратную сторону.")}
       </fieldset>

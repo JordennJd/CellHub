@@ -957,6 +957,10 @@ fn all_three_adhesion_flags_are_independent() {
         g[11] = (bits & 4 != 0) as u8 as f32;
         let parent = s.spawn(500., 500., 0, &g).unwrap();
         let neighbor = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
+        s.world
+            .get::<&mut Position>(entity(&s, parent))
+            .unwrap()
+            .angle = 0.;
         s.bonds.insert((parent, neighbor));
         mature_all(&mut s);
         s.advance(1);
@@ -966,8 +970,7 @@ fn all_three_adhesion_flags_are_independent() {
         }
         if bits & 2 != 0 {
             expected.insert((neighbor, 3));
-        }
-        if bits & 4 != 0 {
+        } else if bits & 4 != 0 {
             expected.insert((neighbor, 4));
         }
         assert_eq!(s.bonds, expected, "flags={bits}");
@@ -988,6 +991,67 @@ fn adjacent_parents_can_divide_on_the_same_tick() {
     assert_eq!(s.links(), vec![3, 5]);
     assert_eq!(s.world.len(), 4);
 }
+
+#[test]
+fn both_daughters_can_inherit_without_creating_diagonal_bonds() {
+    for turn in [0., std::f32::consts::FRAC_PI_2] {
+        let mut s = quiet_world();
+        let genes = Genome::from_modes(vec![Mode {
+            threshold: 1.,
+            angle: 0.,
+            speed: 0.,
+            child_angle_a: turn,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        }])
+        .values();
+        let founder = s.spawn(500., 500., 0, &genes).unwrap();
+        let founder = entity(&s, founder);
+        s.world.get::<&mut Cell>(founder).unwrap().mass = 4.;
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.bonds, BTreeSet::from([(2, 3)]));
+
+        let position = |sim: &Simulation, id| *sim.world.get::<&Position>(entity(sim, id)).unwrap();
+        let (a, b) = (position(&s, 2), position(&s, 3));
+        let (dx, dy) = (a.x - b.x, a.y - b.y);
+        let length = libm::hypotf(dx, dy);
+        let (ux, uy) = (dx / length, dy / length);
+        let displacement = |from: Position, to: Position| {
+            let (x, y) = (to.x - from.x, to.y - from.y);
+            (x * ux + y * uy, y * ux - x * uy)
+        };
+
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.world.len(), 4);
+        assert_eq!(s.bonds.len(), 3);
+        assert!(s.bonds.contains(&(4, 5)));
+        assert!(s.bonds.contains(&(6, 7)));
+        assert!(s.bonds.iter().any(|&(a, b)| a <= 5 && b >= 6));
+
+        if turn == 0. {
+            assert!(s.bonds.contains(&(5, 7)));
+            let chain = [6, 7, 5, 4].map(|id| position(&s, id));
+            for pair in chain.windows(2) {
+                let (along, across) = displacement(pair[0], pair[1]);
+                assert!(
+                    along > 0. && across.abs() < along * 0.001,
+                    "along={along}, across={across}"
+                );
+            }
+        } else {
+            let [a, b, c, d] = [4, 5, 6, 7].map(|id| position(&s, id));
+            let (along, across) = displacement(a, b);
+            assert!(across.abs() > 2. * along.abs());
+            let (along, across) = displacement(c, d);
+            assert!(along.abs() > 2. * across.abs());
+        }
+    }
+}
+
 #[test]
 fn organism_keeps_flagellum_and_releases_photo_offspring() {
     let mut s = quiet_world();

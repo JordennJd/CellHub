@@ -20,22 +20,48 @@ impl Simulation {
         if self.bonds.is_empty() && new_bonds.is_empty() {
             return;
         }
-        let living = |id| {
+        let entity_for = |id| {
             self.entities
                 .binary_search_by_key(&id, |&(key, _)| key)
-                .is_ok()
+                .ok()
+                .map(|index| self.entities[index].1)
+        };
+        let position_for = |id| {
+            let entity = entity_for(id)?;
+            Some(*self.world.get::<&Position>(entity).unwrap())
         };
         let mut bonds = BTreeSet::new();
-        // Replace both endpoints together, including neighbors dividing on the same tick.
-        for (a, b) in &self.bonds {
-            let old_a = std::slice::from_ref(a);
-            let old_b = std::slice::from_ref(b);
-            for &next_a in inheritors.get(a).map_or(old_a, Vec::as_slice) {
-                for &next_b in inheritors.get(b).map_or(old_b, Vec::as_slice) {
-                    if next_a != next_b && living(next_a) && living(next_b) {
-                        bonds.insert((next_a.min(next_b), next_a.max(next_b)));
+        for &(a, b) in &self.bonds {
+            let next_a = inheritors.get(&a);
+            let next_b = inheritors.get(&b);
+            if next_a.is_none() && next_b.is_none() {
+                if entity_for(a).is_some() && entity_for(b).is_some() {
+                    bonds.insert((a, b));
+                }
+                continue;
+            }
+
+            // Transfer each old bond once, using the nearest eligible pair
+            // before the solver moves any cells. IDs break ties consistently.
+            let mut closest = None;
+            for &id_a in next_a.map_or(std::slice::from_ref(&a), Vec::as_slice) {
+                let Some(pa) = position_for(id_a) else {
+                    continue;
+                };
+                for &id_b in next_b.map_or(std::slice::from_ref(&b), Vec::as_slice) {
+                    let Some(pb) = position_for(id_b) else {
+                        continue;
+                    };
+                    let dx = f64::from(pb.x) - f64::from(pa.x);
+                    let dy = f64::from(pb.y) - f64::from(pa.y);
+                    let candidate = (dx * dx + dy * dy, (id_a.min(id_b), id_a.max(id_b)));
+                    if closest.is_none_or(|best| candidate < best) {
+                        closest = Some(candidate);
                     }
                 }
+            }
+            if let Some((_, edge)) = closest {
+                bonds.insert(edge);
             }
         }
         bonds.extend(new_bonds);
