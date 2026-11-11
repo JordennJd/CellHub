@@ -647,6 +647,102 @@ fn collision_processing_preserves_direct_bond_rest_distance() {
 }
 
 #[test]
+fn perpendicular_chains_keep_bonds_short_under_driven_contact() {
+    use super::bonds::ADHESION_GAP;
+    use crate::cell_types::{FLAGELLOCYTE, PHOTOCYTE};
+
+    let mut sim = quiet_world();
+    sim.set_circular_dish(true);
+    sim.configure_environment(super::environment::Environment {
+        light: 0.,
+        food: 0.,
+        radiation: 0.,
+        viscosity: 0.25,
+        aging: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let rest = 2. * radius(1.) + ADHESION_GAP;
+    let mut spawn_chain = |origin: [f32; 2], step: [f32; 2], count, angle, genes: &[f32]| {
+        let mut chain = Vec::with_capacity(count);
+        let mut previous = None;
+        for i in 0..count {
+            let x = origin[0] + step[0] * i as f32;
+            let y = origin[1] + step[1] * i as f32;
+            let id = sim.spawn(x, y, 0, genes).unwrap();
+            let body = entity(&sim, id);
+            sim.world.get::<&mut Position>(body).unwrap().angle = angle;
+            if let Some(previous) = previous {
+                sim.bonds.insert((previous, id));
+            }
+            previous = Some(id);
+            chain.push(body);
+        }
+        chain
+    };
+    let wall = spawn_chain(
+        [1536., 1426.],
+        [0., rest],
+        11,
+        std::f32::consts::FRAC_PI_2,
+        &stationary_genes(PHOTOCYTE),
+    );
+    let mut driven_genes = stationary_genes(FLAGELLOCYTE);
+    driven_genes[5] = 60.;
+    let train = spawn_chain([1500., 1503.], [-rest, 0.], 8, 0., &driven_genes);
+    for &end in [&wall[0], wall.last().unwrap()] {
+        sim.world.get::<&mut Cell>(end).unwrap().anchored = true;
+    }
+
+    let sample = |sim: &Simulation, chain: &[Entity]| -> Vec<_> {
+        chain
+            .iter()
+            .map(|&body| {
+                let position = *sim.world.get::<&Position>(body).unwrap();
+                let mass = sim.world.get::<&Cell>(body).unwrap().mass;
+                (position, radius(mass))
+            })
+            .collect()
+    };
+    let distance = |a: Position, b: Position| libm::hypotf(b.x - a.x, b.y - a.y);
+    let side = |a: Position, b: Position, c: Position| {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    };
+    let mut closest_clearance = f32::INFINITY;
+    let mut peak_extension = 0_f32;
+    for tick in 1..=180 {
+        sim.advance(1);
+        let barrier = sample(&sim, &wall);
+        let moving = sample(&sim, &train);
+        for &(a, ar) in &barrier {
+            for &(b, br) in &moving {
+                closest_clearance = closest_clearance.min(distance(a, b) - ar - br);
+            }
+        }
+        for edge in barrier.windows(2).chain(moving.windows(2)) {
+            let [(a, ar), (b, br)] = [edge[0], edge[1]];
+            peak_extension = peak_extension.max(distance(a, b) - ar - br - ADHESION_GAP);
+        }
+        for edge in barrier.windows(2) {
+            let (a, b) = (edge[0].0, edge[1].0);
+            for edge in moving.windows(2) {
+                let (c, d) = (edge[0].0, edge[1].0);
+                assert!(
+                    side(a, b, c) * side(a, b, d) >= 0. || side(c, d, a) * side(c, d, b) >= 0.,
+                    "bond segments crossed at tick {tick}"
+                );
+            }
+        }
+    }
+    assert_eq!(sim.bonds.len(), wall.len() + train.len() - 2);
+    assert!(
+        closest_clearance < 0.5,
+        "the chains must reach contact, closest clearance {closest_clearance}"
+    );
+    assert!(peak_extension < 3., "peak bond extension {peak_extension}");
+}
+
+#[test]
 fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mut s = quiet_world();
     let mut genes = crate::genome::decode_checked(&modern_genes(1))

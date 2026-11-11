@@ -132,6 +132,11 @@ struct ContactBody {
     gamete: Option<GameteContact>,
 }
 
+struct ContactIsland {
+    bodies: Vec<ContactBody>,
+    tension: Vec<(usize, usize, f32)>,
+}
+
 pub(super) struct ContactMotion {
     pub(super) path: [Position; 2],
     pub(super) drive: [f32; 2],
@@ -191,20 +196,31 @@ fn segment_distance_squared(a: &[Position; 3], b: &[Position; 3], start: usize) 
 }
 
 fn solve_collisions(
-    bodies: &mut [ContactBody],
+    island: &mut ContactIsland,
     slots: &[Option<Slot>],
     spatial: &SpatialGrid,
     bonds: &BTreeSet<(u32, u32)>,
     boundary: Boundary,
     step: f32,
 ) {
-    let island = slots[bodies[0].index].unwrap().island;
+    let bodies = &mut island.bodies;
+    let island_index = slots[bodies[0].index].unwrap().island;
     for pass in 0..CONTACT_PASSES {
         let mut changed = false;
+        // Restore joints stretched by the previous pass, then give membrane
+        // contacts the last correction in this pass.
+        if pass > 0 {
+            for &(a, b, rest) in &island.tension {
+                let (left, right) = bodies.split_at_mut(b);
+                changed |= left[a]
+                    .collision
+                    .relax_tension(&mut right[0].collision, rest, boundary);
+            }
+        }
         for index in 0..bodies.len() {
             let source = bodies[index].index;
             for other in spatial.candidates(source).filter(|&other| other > source) {
-                let Some(slot) = slots[other].filter(|slot| slot.island == island) else {
+                let Some(slot) = slots[other].filter(|slot| slot.island == island_index) else {
                     continue;
                 };
                 let (left, right) = bodies.split_at_mut(slot.index);
@@ -340,14 +356,19 @@ impl Simulation {
             })
             .collect();
 
+        let index = |id| {
+            self.entities
+                .binary_search_by_key(&id, |&(key, _)| key)
+                .unwrap()
+        };
+        let edges: Vec<_> = self
+            .bonds
+            .iter()
+            .map(|&(a, b)| (index(a), index(b)))
+            .collect();
         let mut graph = Components::new(bodies.len());
-        for &(a, b) in &self.bonds {
-            let index = |id| {
-                self.entities
-                    .binary_search_by_key(&id, |&(key, _)| key)
-                    .unwrap()
-            };
-            graph.join(index(a), index(b));
+        for &(a, b) in &edges {
+            graph.join(a, b);
         }
         for body in &bodies {
             for other in self
@@ -358,18 +379,36 @@ impl Simulation {
                 graph.join(body.index, other);
             }
         }
-        let (mut islands, slots) = graph.islands(bodies);
+        let (islands, slots) = graph.islands(bodies);
         let active = islands.iter().map(Vec::len).sum();
+        let mut islands: Vec<_> = islands
+            .into_iter()
+            .map(|bodies| ContactIsland {
+                bodies,
+                tension: Vec::new(),
+            })
+            .collect();
+        for (a, b) in edges {
+            let a = slots[a].unwrap();
+            let b = slots[b].unwrap();
+            let island = &mut islands[a.island];
+            // Preserve the length already solved by adhesion, including any
+            // muscle contraction, without applying bend or lift again.
+            let from = island.bodies[a.index].collision.position;
+            let to = island.bodies[b.index].collision.position;
+            let rest = libm::hypotf(to.x - from.x, to.y - from.y);
+            island.tension.push((a.index, b.index, rest));
+        }
         let spatial = &self.spatial;
         let bonds = &self.bonds;
         let boundary = self.boundary;
-        for_each_island(&mut islands, active, |bodies| {
-            solve_collisions(bodies, &slots, spatial, bonds, boundary, step);
-            solve_biology(bodies, &slots, spatial, 0.08 * step);
+        for_each_island(&mut islands, active, |island| {
+            solve_collisions(island, &slots, spatial, bonds, boundary, step);
+            solve_biology(&mut island.bodies, &slots, spatial, 0.08 * step);
         });
 
         // No job mutates ECS storage. Commit in stable island and cell order.
-        for body in islands.into_iter().flatten() {
+        for body in islands.into_iter().flat_map(|island| island.bodies) {
             let infection = body.infected_by.map(|donor| {
                 let (source, genome) = self.world.query_one_mut::<(&Cell, &Genome)>(donor).unwrap();
                 let root = genome.mode(source.mode).virus_copy_from;

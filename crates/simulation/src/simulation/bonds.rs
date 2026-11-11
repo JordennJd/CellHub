@@ -470,9 +470,13 @@ impl BondIsland {
         if self.solve_passive_path(boundary) {
             return;
         }
-        // Retain Gauss-Seidel order within an island. Disjoint islands can run
-        // in any order because no constraint changes another island's positions.
-        for _ in 0..12 {
+        const BOND_PASSES: usize = 12;
+        const TENSION_PASSES: usize = 6;
+        // Additional sweeps let tension propagate along driven chains while
+        // preserving the existing response to compression and muscle bending.
+        for pass in 0..BOND_PASSES + TENSION_PASSES {
+            let tension_only = pass >= BOND_PASSES;
+            let mut pulled = false;
             for &(a, b) in &self.edges {
                 let (left, right) = self.bodies.split_at_mut(b);
                 let a = &mut left[a];
@@ -491,6 +495,9 @@ impl BondIsland {
                 let rest = (radius(a.mass) + radius(b.mass) + ADHESION_GAP)
                     * (1. - contraction * 0.35).clamp(0.6, 1.4);
                 let error = distance - rest;
+                if tension_only && error <= 0.001 {
+                    continue;
+                }
                 let (share_a, share_b) = match (a.anchored, b.anchored) {
                     (true, true) => continue,
                     (true, false) => (0., 1.),
@@ -500,8 +507,12 @@ impl BondIsland {
                         (share, 1. - share)
                     }
                 };
-                // Each of twelve iterations contributes a bounded turn.
-                let bend = (a.muscle[1] - b.muscle[1]) * rest * (0.012 / 12.);
+                let bend = if tension_only {
+                    pulled = true;
+                    0.
+                } else {
+                    (a.muscle[1] - b.muscle[1]) * rest * (0.012 / BOND_PASSES as f32)
+                };
                 let correction_x = nx * error - ny * bend;
                 let correction_y = ny * error + nx * bend;
                 (pa.x, pa.y, _) = boundary.constrain(
@@ -516,6 +527,9 @@ impl BondIsland {
                     b.mass,
                     12.,
                 );
+            }
+            if tension_only && !pulled {
+                break;
             }
         }
     }
