@@ -4,8 +4,8 @@ use super::Simulation;
 use super::boundary::Boundary;
 use super::interactions::{Components, for_each_island};
 use super::program::{BENDING_TARGET, CONTRACTION_TARGET, LIFT_TARGET, controlled_value};
-use crate::cell_types::MYOCYTE;
-use crate::components::{Cell, Position, radius};
+use crate::cell_types::{BUOYOCYTE, MYOCYTE, is_motile};
+use crate::components::{Cell, MAX_RECOIL_MOMENTUM, Position, radius};
 use crate::genome::Genome;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet};
@@ -300,13 +300,21 @@ impl Simulation {
             transfer.retain(transfer.previous.map(|id| divided.get(&id)), &mut bonds);
         }
         self.bonds = bonds;
-        self.solve_bonds();
+        self.solve_bonds(divisions);
     }
 
-    fn solve_bonds(&mut self) {
+    fn solve_bonds(&mut self, divisions: &BTreeMap<u32, BondDivision>) {
         if self.bonds.is_empty() {
             return;
         }
+        let parents: BTreeMap<_, _> = divisions
+            .iter()
+            .flat_map(|(&id, division)| {
+                division
+                    .daughters
+                    .map(|daughter| (daughter, (id, division.parent)))
+            })
+            .collect();
         let mut bonded_ids: Vec<_> = self.bonds.iter().flat_map(|&(a, b)| [a, b]).collect();
         bonded_ids.sort_unstable();
         bonded_ids.dedup();
@@ -344,9 +352,13 @@ impl Simulation {
                 BondBody {
                     entity,
                     position: p,
+                    parent: parents.get(id).copied(),
                     mass: cell.mass,
+                    recoil: cell.recoil,
                     anchored: cell.anchored,
                     muscle,
+                    driven: is_motile(mode.kind)
+                        || (mode.kind == BUOYOCYTE && self.settings.gravity != 0.),
                 }
             })
             .collect::<Vec<_>>();
@@ -375,9 +387,17 @@ impl Simulation {
             islands[a.island].edges.push((a.index, b.index));
         }
         let boundary = self.boundary;
-        for_each_island(&mut islands, active, |island| island.solve(boundary));
+        for_each_island(&mut islands, active, |island| {
+            island.solve(boundary);
+            island.share_recoil();
+        });
         for body in islands.into_iter().flat_map(|island| island.bodies) {
-            *self.world.get::<&mut Position>(body.entity).unwrap() = body.position;
+            let (position, cell) = self
+                .world
+                .query_one_mut::<(&mut Position, &mut Cell)>(body.entity)
+                .unwrap();
+            *position = body.position;
+            cell.recoil = body.recoil;
         }
     }
 }
@@ -390,13 +410,66 @@ struct BondIsland {
 struct BondBody {
     entity: Entity,
     position: Position,
+    parent: Option<(u32, Position)>,
     mass: f32,
+    recoil: [f32; 2],
     anchored: bool,
     muscle: [f32; 3],
+    driven: bool,
+}
+
+impl BondBody {
+    fn joint_direction(&self, other: &Self) -> (f64, f64) {
+        // Sisters start on their new division axis. Inherited joints keep
+        // their pre-division direction even when newborns initially overlap.
+        let (from, to) = match (self.parent, other.parent) {
+            (Some((a, _)), Some((b, _))) if a == b => (self.position, other.position),
+            (a, b) => (
+                a.map_or(self.position, |(_, p)| p),
+                b.map_or(other.position, |(_, p)| p),
+            ),
+        };
+        (
+            f64::from(to.x) - f64::from(from.x),
+            f64::from(to.y) - f64::from(from.y),
+        )
+    }
 }
 
 impl BondIsland {
+    fn share_recoil(&mut self) {
+        if !self.bodies.iter().any(|body| body.recoil != [0.; 2]) {
+            return;
+        }
+        // Adhesion transmits translational recoil across the whole organism.
+        // An anchor absorbs that momentum into the dish.
+        let mut momentum = [0.; 2];
+        let mut mass = 0.;
+        for body in &self.bodies {
+            if body.anchored {
+                momentum = [0.; 2];
+                break;
+            }
+            mass += f64::from(body.mass);
+            momentum[0] += f64::from(body.recoil[0]);
+            momentum[1] += f64::from(body.recoil[1]);
+        }
+        let velocity = if mass > 0. {
+            momentum.map(|value| value / mass)
+        } else {
+            [0.; 2]
+        };
+        let limit = f64::from(MAX_RECOIL_MOMENTUM);
+        for body in &mut self.bodies {
+            body.recoil =
+                velocity.map(|value| (value * f64::from(body.mass)).clamp(-limit, limit) as f32);
+        }
+    }
+
     fn solve(&mut self, boundary: Boundary) {
+        if self.solve_passive_path(boundary) {
+            return;
+        }
         // Retain Gauss-Seidel order within an island. Disjoint islands can run
         // in any order because no constraint changes another island's positions.
         for _ in 0..12 {
@@ -445,6 +518,81 @@ impl BondIsland {
                 );
             }
         }
+    }
+
+    /// Every joint in an open path can reach its rest length along its own
+    /// direction. Translate the result to preserve the center of mass.
+    fn solve_passive_path(&mut self, boundary: Boundary) -> bool {
+        let count = self.bodies.len();
+        if count < 3 || self.edges.len() + 1 != count {
+            return false;
+        }
+        let mut total_mass = 0.;
+        let mut center = [0.; 2];
+        for body in &self.bodies {
+            if body.anchored || body.driven || body.muscle != [0.; 3] {
+                return false;
+            }
+            let mass = f64::from(body.mass);
+            total_mass += mass;
+            center[0] += f64::from(body.position.x) * mass;
+            center[1] += f64::from(body.position.y) * mass;
+        }
+
+        let mut neighbors = vec![[count; 2]; count];
+        for &(a, b) in &self.edges {
+            for (index, neighbor) in [(a, b), (b, a)] {
+                let Some(slot) = neighbors[index].iter_mut().find(|slot| **slot == count) else {
+                    return false;
+                };
+                *slot = neighbor;
+            }
+        }
+        let first = neighbors.iter().position(|ends| ends[1] == count).unwrap();
+        let mut offsets = vec![[0.; 2]; count];
+        let mut weighted_offset = [0.; 2];
+        let (mut previous, mut current) = (count, first);
+        loop {
+            let next = neighbors[current]
+                .iter()
+                .copied()
+                .find(|&id| id != previous);
+            let Some(next) = next.filter(|&id| id != count) else {
+                break;
+            };
+            let from = &self.bodies[current];
+            let to = &self.bodies[next];
+            let (dx, dy) = from.joint_direction(to);
+            let span = libm::hypot(dx, dy);
+            if span == 0. {
+                return false;
+            }
+            let scale = f64::from(radius(from.mass) + radius(to.mass) + ADHESION_GAP) / span;
+            offsets[next] = [
+                offsets[current][0] + dx * scale,
+                offsets[current][1] + dy * scale,
+            ];
+            let mass = f64::from(to.mass);
+            weighted_offset[0] += offsets[next][0] * mass;
+            weighted_offset[1] += offsets[next][1] * mass;
+            previous = current;
+            current = next;
+        }
+
+        let cx = (center[0] - weighted_offset[0]) / total_mass;
+        let cy = (center[1] - weighted_offset[1]) / total_mass;
+        let place = |[x, y]: [f64; 2]| ((cx + x) as f32, (cy + y) as f32);
+        // Let the general constraints resolve contacts with the dish rim.
+        for (body, &offset) in self.bodies.iter().zip(&offsets) {
+            let (x, y) = place(offset);
+            if boundary.constrain(x, y, body.mass, 12.).2 {
+                return false;
+            }
+        }
+        for (body, offset) in self.bodies.iter_mut().zip(offsets) {
+            (body.position.x, body.position.y) = place(offset);
+        }
+        true
     }
 }
 
@@ -537,7 +685,7 @@ mod tests {
         let anchor = anchored.entities[0].1;
         anchored.world.get::<&mut Cell>(anchor).unwrap().anchored = true;
         let before = *anchored.world.get::<&Position>(anchor).unwrap();
-        anchored.solve_bonds();
+        anchored.solve_bonds(&BTreeMap::new());
         let after = *anchored.world.get::<&Position>(anchor).unwrap();
         assert_eq!([before.x, before.y], [after.x, after.y]);
     }

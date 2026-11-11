@@ -6,6 +6,7 @@ let sim: Simulation;
 let speed = 0;
 let debt = 0;
 let last = performance.now();
+let previewRequestId: number | undefined;
 type ScheduledCommand = WorldCommand & { atTick: number };
 let scheduled: ScheduledCommand[] = [];
 const MAX_SCHEDULED_COMMANDS = 1024;
@@ -21,8 +22,12 @@ function frame() {
     nitrogen = sim.nitrogen_reserves(),
     nitrates = sim.nitrates(),
     details = sim.cell_details(),
-    coveredFood = sim.covered_food();
-  ctx.postMessage({ type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood }, [
+    coveredFood = sim.covered_food(),
+    divisions = sim.take_division_events();
+  ctx.postMessage({
+    type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, divisions,
+    ...(previewRequestId === undefined ? {} : { previewRequestId }),
+  }, [
     cells.buffer,
     links.buffer,
     terrain.buffer,
@@ -31,7 +36,9 @@ function frame() {
     nitrates.buffer,
     details.buffer,
     coveredFood.buffer,
+    divisions.buffer,
   ]);
+  previewRequestId = undefined;
 }
 const pending: Command[] = [];
 ctx.onmessage = ({ data }: MessageEvent<Command>) => {
@@ -158,6 +165,7 @@ function apply(c: Command) {
         }
         const nextScheduled = readScheduled(state.scheduled, state.values[3]);
         sim.restore_state(new Float64Array(state.values));
+        previewRequestId = undefined;
         scheduled = nextScheduled;
         speed = 0;
         debt = 0;
@@ -172,6 +180,7 @@ function apply(c: Command) {
       case "preview": {
         if (!Number.isFinite(c.steps)) throw new Error("Некорректный возраст предпросмотра");
         // Preview owns a separate worker; never share this instance with a live laboratory.
+        previewRequestId = undefined;
         sim.reset();
         scheduled = [];
         sim.configure(1, 1, 0, 1, true, false);
@@ -184,11 +193,13 @@ function apply(c: Command) {
           sim.advance(chunk);
           remaining -= chunk;
         }
+        previewRequestId = "requestId" in c && typeof c.requestId === "number" ? c.requestId : undefined;
         changed = true;
         break;
       }
       case "reset":
         sim.reset();
+        previewRequestId = undefined;
         scheduled = [];
         speed = 0;
         debt = 0;
@@ -242,6 +253,7 @@ try {
   const initialized = await createSimulation();
   sim = initialized.sim;
   sim.set_circular_dish(true);
+  sim.set_division_event_tracking(true);
   ctx.postMessage({ type: "ready", threaded: initialized.threaded });
   let needFrame = true;
   setInterval(() => {

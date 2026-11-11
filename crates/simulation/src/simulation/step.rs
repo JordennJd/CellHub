@@ -2,11 +2,12 @@
 
 use super::Simulation;
 use super::bonds::{ADHESION_GAP, BondDivision};
-use crate::components::{Cell, LIMIT, Position, radius};
+use crate::components::{Cell, LIMIT, MAX_RECOIL_MOMENTUM, Position, radius};
 use crate::genome::Genome;
 use std::collections::{BTreeMap, HashSet};
 
 pub(super) const STEP: f32 = 1. / 30.;
+const DIVISION_SEPARATION_SPEED: f32 = 100.;
 
 impl Simulation {
     pub(super) fn step(&mut self) {
@@ -47,11 +48,27 @@ impl Simulation {
                 a.id = self.next_id;
                 b.id = self.next_id + 1;
                 self.next_id += 2;
+                let parent_radius = radius(total);
+                if let Some(events) = &mut self.division_events {
+                    if events.len() == LIMIT {
+                        events.pop_front();
+                    }
+                    events.push_back([
+                        self.tick as f32,
+                        c.id as f32,
+                        a.id as f32,
+                        b.id as f32,
+                        p.x,
+                        p.y,
+                        parent_radius,
+                        p.angle,
+                    ]);
+                }
                 divisions.insert(
                     c.id,
                     BondDivision {
                         parent: *p,
-                        parent_radius: radius(c.mass),
+                        parent_radius,
                         daughters: [a.id, b.id],
                         keep: [m.keep_a, m.keep_b],
                         bind_children: m.bind_children,
@@ -59,6 +76,8 @@ impl Simulation {
                 );
                 a.mass = total * m.ratio;
                 b.mass = total * (1. - m.ratio);
+                a.recoil = c.recoil.map(|momentum| momentum * m.ratio);
+                b.recoil = c.recoil.map(|momentum| momentum * (1. - m.ratio));
                 a.nitrogen = c.nitrogen * 0.5;
                 b.nitrogen = a.nitrogen;
                 a.mode = m.child_a;
@@ -75,32 +94,48 @@ impl Simulation {
                 b.mirrored = c.mirrored ^ m.mirror_b;
                 a.generation += 1;
                 b.generation += 1;
-                let angle = p.angle + m.angle * if c.mirrored { -1. } else { 1. };
-                let distance = (radius(a.mass) + radius(b.mass) + ADHESION_GAP) / 2.;
+                // Both newborn directions are set in the parent's frame.
+                // A daughter's own mirror flag applies to her next division.
+                let handedness = if c.mirrored { -1. } else { 1. };
+                let angle = p.angle + m.angle * handedness;
                 let (sin, cos) = libm::sincosf(angle);
+                let span = radius(a.mass) + radius(b.mass) + ADHESION_GAP;
+                let (distance_a, distance_b) = if m.bind_children {
+                    (span / 2., span / 2.)
+                } else {
+                    // Reduced mass times relative speed gives equal and opposite
+                    // momenta, with the lighter daughter moving faster.
+                    let impulse = a.mass * (1. - m.ratio) * DIVISION_SEPARATION_SPEED;
+                    for (component, axis) in [cos, sin].into_iter().enumerate() {
+                        let momentum = impulse * axis;
+                        a.recoil[component] = (a.recoil[component] + momentum)
+                            .clamp(-MAX_RECOIL_MOMENTUM, MAX_RECOIL_MOMENTUM);
+                        b.recoil[component] = (b.recoil[component] - momentum)
+                            .clamp(-MAX_RECOIL_MOMENTUM, MAX_RECOIL_MOMENTUM);
+                    }
+                    (span * (1. - m.ratio), span * m.ratio)
+                };
                 let (ax, ay, _) = self.boundary.constrain(
-                    p.x + cos * distance,
-                    p.y + sin * distance,
+                    p.x + cos * distance_a,
+                    p.y + sin * distance_a,
                     a.mass,
                     12.,
                 );
                 let (bx, by, _) = self.boundary.constrain(
-                    p.x - cos * distance,
-                    p.y - sin * distance,
+                    p.x - cos * distance_b,
+                    p.y - sin * distance_b,
                     b.mass,
                     12.,
                 );
                 let pa = Position {
                     x: ax,
                     y: ay,
-                    angle: angle + m.child_angle_a * if a.mirrored { -1. } else { 1. },
+                    angle: angle + m.child_angle_a * handedness,
                 };
                 let pb = Position {
                     x: bx,
                     y: by,
-                    angle: angle
-                        + std::f32::consts::PI
-                        + m.child_angle_b * if b.mirrored { -1. } else { 1. },
+                    angle: angle + std::f32::consts::PI + m.child_angle_b * handedness,
                 };
                 children.push((pa, a, g.clone()));
                 children.push((pb, b, g.clone()));

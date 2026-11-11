@@ -25,7 +25,7 @@ use environment::Environment;
 use hecs::World;
 use program::{SPEED_TARGET, controlled_value};
 use spatial::SpatialGrid;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
@@ -46,6 +46,7 @@ pub struct Simulation {
     deaths: u32,
     infections: u32,
     frame: Vec<f32>,
+    division_events: Option<VecDeque<[f32; 8]>>,
     // Reused per-tick scratch storage: no heap churn at the population limit.
     entities: Vec<(u32, hecs::Entity)>,
     spatial: SpatialGrid,
@@ -71,6 +72,7 @@ impl Simulation {
             deaths: 0,
             infections: 0,
             frame: Vec::new(),
+            division_events: None,
             entities: Vec::new(),
             spatial: SpatialGrid::new(),
             metabolism: metabolism::MetabolismScratch::default(),
@@ -82,8 +84,10 @@ impl Simulation {
 
     pub fn reset(&mut self) {
         let boundary = self.boundary;
+        let track_divisions = self.division_events.is_some();
         *self = Self::new(self.seed);
         self.boundary = boundary;
+        self.set_division_event_tracking(track_divisions);
     }
 
     /// Opt in for the local laboratory without changing the native server map.
@@ -216,6 +220,22 @@ impl Simulation {
 
     pub fn tick_number(&self) -> u32 {
         self.tick
+    }
+
+    /// Capture visual events for consumers that render local simulation frames.
+    pub fn set_division_event_tracking(&mut self, enabled: bool) {
+        if enabled {
+            self.division_events.get_or_insert_with(VecDeque::new);
+        } else {
+            self.division_events = None;
+        }
+    }
+
+    /// Drain rows of tick, parent ID, daughter IDs and the parent's pose at division.
+    pub fn take_division_events(&mut self) -> Vec<f32> {
+        self.division_events
+            .as_mut()
+            .map_or_else(Vec::new, |events| events.drain(..).flatten().collect())
     }
 
     /// Fingerprint the canonical checkpoint for replay tests and diagnostics.

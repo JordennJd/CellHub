@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { flatten, STRIDE, TYPES, type Frame, type Mode } from "../model";
+import { flatten, STRIDE, TYPES, type Command, type Frame, type Mode } from "../model";
+import { DivisionAnimator, divisionMotionEnabled, playDivisionAnimation } from "../division-animation";
 
 function relativeLuminance(color: number) {
   const linear = (channel: number) => {
@@ -236,16 +237,28 @@ function drawCell(ctx: CanvasRenderingContext2D, cells: Float32Array, i: number,
   ctx.restore();
 }
 
+type PreviewParameters = { genome: Mode[]; initialMode: number; age: number };
+type PreviewRequest = PreviewParameters & { id: number };
+
+function sameGenome(a: PreviewParameters, b: PreviewParameters) {
+  return a.genome === b.genome && a.initialMode === b.initialMode;
+}
+
 /** Preview owns a separate laboratory: its clock and cells never affect the game. */
 export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initialMode: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const worker = useRef<Worker | null>(null);
-  const latest = useRef({ genome, initialMode, age: 0 });
+  const latest = useRef<PreviewParameters>({ genome, initialMode, age: 0 });
+  const sequence = useRef(0);
+  const pending = useRef<PreviewRequest | null>(null);
+  const presented = useRef<PreviewRequest | null>(null);
+  const [animator] = useState(() => new DivisionAnimator());
   const [ready, setReady] = useState(false);
   const [age, setAge] = useState(0);
-  const [frame, setFrame] = useState<Frame | null>(null);
+  const [result, setResult] = useState<{ frame: Frame; request: PreviewRequest } | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
+  const frame = result?.frame ?? null;
   latest.current = { genome, initialMode, age };
 
   useEffect(() => {
@@ -253,8 +266,17 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
     worker.current = w;
     w.onmessage = ({ data }) => {
       if (data.type === "ready") setReady(true);
-      if (data.type === "frame") { setFrame(data); setBusy(false); }
-      if (data.type === "error") { setError("Не удалось показать развитие этого генома."); setBusy(false); }
+      const request = pending.current;
+      if (data.type === "frame" && request && data.previewRequestId === request.id
+        && sameGenome(request, latest.current) && request.age === latest.current.age) {
+        pending.current = null;
+        setResult({ frame: data, request });
+        setBusy(false);
+      }
+      if (data.type === "error" && (data.requestId === undefined || data.requestId === request?.id)) {
+        setError("Не удалось показать развитие этого генома.");
+        setBusy(false);
+      }
     };
     w.onerror = () => { setError("Предпросмотр недоступен. Геном можно проверить в чашке."); setBusy(false); };
     return () => { w.terminate(); worker.current = null; };
@@ -264,9 +286,17 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
     if (!ready) return;
     setBusy(true);
     setError("");
+    const request = { genome, initialMode, age, id: ++sequence.current };
+    pending.current = request;
+    const previous = presented.current;
+    if (previous && (!sameGenome(previous, request) || age < previous.age || age > previous.age + 1)) {
+      animator.update(frame, performance.now(), false);
+    }
     const timer = window.setTimeout(() => {
-      const current = latest.current;
-      worker.current?.postMessage({ type: "preview", genome: flatten(current.genome), mode: current.initialMode, steps: current.age * 30 });
+      const command: Command = {
+        type: "preview", genome: flatten(genome), mode: initialMode, steps: age * 30, requestId: request.id,
+      };
+      worker.current?.postMessage(command);
     }, 160);
     return () => window.clearTimeout(timer);
   }, [genome, initialMode, age, ready]);
@@ -274,18 +304,25 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
   useEffect(() => {
     const element = canvas.current;
     if (!element) return;
-    function draw() {
+    const isOpen = () => element.closest("details")?.open === true;
+    const request = result?.request;
+    const previous = presented.current;
+    const animate = !!request && !!previous && isOpen() && divisionMotionEnabled()
+      && sameGenome(previous, request) && request.age === previous.age + 1;
+    animator.update(frame, performance.now(), animate);
+    function draw(cells = animator.sample(performance.now())) {
       if (!element) return;
+      if (request && isOpen()) presented.current = request;
       const width = element.clientWidth || 300, height = 180;
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      element.width = Math.round(width * dpr);
-      element.height = height * dpr;
+      const pixelsWide = Math.round(width * dpr), pixelsHigh = Math.round(height * dpr);
+      if (element.width !== pixelsWide) element.width = pixelsWide;
+      if (element.height !== pixelsHigh) element.height = pixelsHigh;
       const ctx = element.getContext("2d");
       if (!ctx) return;
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, width, height);
-      if (!frame?.cells.length) return;
-      const cells = frame.cells;
+      if (!frame || !cells?.length) return;
       let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
       const positions = new Map<number, number>();
       for (let i = 0; i < cells.length; i += STRIDE) {
@@ -311,10 +348,11 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
       }
     }
     draw();
-    const observer = new ResizeObserver(draw);
+    const stop = playDivisionAnimation(animator, draw);
+    const observer = new ResizeObserver(() => draw());
     observer.observe(element);
-    return () => observer.disconnect();
-  }, [frame]);
+    return () => { stop(); observer.disconnect(); };
+  }, [result]);
 
   return <section className="genome-preview" aria-label="Предпросмотр развития организма" aria-busy={busy}>
     <div className="genome-preview-heading"><h3>Развитие организма</h3><span>{busy ? "Расчёт…" : `${frame?.cells.length ? frame.cells.length / STRIDE : 0} кл.`}</span></div>

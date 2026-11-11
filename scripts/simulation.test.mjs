@@ -188,7 +188,7 @@ test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI"
     assert.equal(frame[23], 0);
     assert.equal(frame[10], 0x3399ff);
     assert.equal(frame[22], 0x3399ff);
-    assert(Math.abs(frame[21] - frame[9] - Math.PI + 0.1) < 0.00001);
+    assert(Math.abs(frame[21] - frame[9] - Math.PI + 0.7) < 0.00001);
     restored.restore_state(sim.export_state());
     assert.deepEqual(restored.snapshot(), frame);
     assert.deepEqual(restored.environment(), sim.environment());

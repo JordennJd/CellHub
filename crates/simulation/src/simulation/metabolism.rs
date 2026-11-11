@@ -12,6 +12,9 @@ use crate::genome::Genome;
 use crate::terrain::tile_index;
 use std::collections::BTreeMap;
 
+const MIN_CELL_MASS: f32 = 0.18;
+const RECOIL_DRAG: f32 = 4.;
+
 impl Simulation {
     pub(super) fn metabolize(
         &mut self,
@@ -21,6 +24,7 @@ impl Simulation {
         let population = entities.len();
         let settings = self.settings;
         let passive_drift = settings.vertical_drift();
+        let recoil_decay = libm::expf(-RECOIL_DRAG * settings.viscosity * STEP);
         let mut scratch = std::mem::take(&mut self.metabolism);
         // Dense ECS indices map directly to stable commit slots. Random draws
         // follow the existing ID-ordered entity list, regardless of ECS layout.
@@ -145,10 +149,15 @@ impl Simulation {
                 } else {
                     passive_drift
                 };
-                let next_x = p.x + libm::cosf(p.angle) * speed * STEP / settings.viscosity;
-                let next_y = p.y
+                let mut next_x = p.x + libm::cosf(p.angle) * speed * STEP / settings.viscosity;
+                let mut next_y = p.y
                     + libm::sinf(p.angle) * speed * STEP / settings.viscosity
                     + vertical_drift * STEP;
+                if c.recoil != [0.; 2] {
+                    let scale = STEP / c.mass.max(MIN_CELL_MASS);
+                    next_x += c.recoil[0] * scale;
+                    next_y += c.recoil[1] * scale;
+                }
                 let (x, y, reached_edge) = if c.anchored {
                     (p.x, p.y, false)
                 } else {
@@ -156,7 +165,12 @@ impl Simulation {
                 };
                 p.x = x;
                 p.y = y;
-                let died = c.mass < 0.18
+                if c.anchored || reached_edge {
+                    c.recoil = [0.; 2];
+                } else {
+                    c.recoil = c.recoil.map(|momentum| momentum * recoil_decay);
+                }
+                let died = c.mass < MIN_CELL_MASS
                     || c.nitrogen < NITROGEN_DEATH
                     || c.toxin >= 1.
                     || c.injury >= 1.

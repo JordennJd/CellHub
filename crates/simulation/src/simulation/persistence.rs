@@ -3,12 +3,12 @@
 use super::Simulation;
 use super::boundary::Boundary;
 use super::environment::Environment;
-use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, Position, SIZE};
+use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, MAX_RECOIL_MOMENTUM, Position, SIZE};
 use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, normalize_v4_signal};
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 
 fn is_main_v4(values: &[f64]) -> bool {
     // The deployed v4 writes the tile count immediately after fluid density.
@@ -146,6 +146,8 @@ impl Simulation {
                 c.telomeres as f64,
                 c.anchored as u8 as f64,
                 genome_id as f64,
+                f64::from(c.recoil[0]),
+                f64::from(c.recoil[1]),
             ]);
         }
         values.push(self.bonds.len() as f64);
@@ -162,6 +164,7 @@ impl Simulation {
         if values[0] < 4. || is_main_v4(values) {
             replacement.set_circular_dish(matches!(self.boundary, Boundary::Circle));
         }
+        replacement.set_division_event_tracking(self.division_events.is_some());
         *self = replacement;
         Ok(())
     }
@@ -313,6 +316,15 @@ impl Simulation {
             } else {
                 read_genome(&mut input, version, main_v4)?
             };
+            if version >= 6 {
+                for component in &mut cell.recoil {
+                    let value = input.number()?;
+                    if value.abs() > f64::from(MAX_RECOIL_MOMENTUM) {
+                        return Err("Импульс клетки вне допустимого диапазона".into());
+                    }
+                    *component = value as f32;
+                }
+            }
             if cell.mode >= genome.len() {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
             }
@@ -367,9 +379,10 @@ fn read_genome(input: &mut Reader<'_>, version: u32, main_v4: bool) -> Result<Ge
 mod tests {
     use super::*;
     use crate::cell_types::{LIPOCYTE, NEUROCYTE};
+    use crate::genome::Mode;
 
     #[test]
-    fn deployed_v4_world_migrates_terrain_cells_bonds_and_signals_to_v5() {
+    fn deployed_v4_world_migrates_terrain_cells_bonds_and_signals() {
         let mut checkpoint = vec![
             4.,
             123.,
@@ -459,14 +472,122 @@ mod tests {
             assert_eq!(cell.nitrogen, INITIAL_NITROGEN);
             assert_eq!(cell.signals, [8., -4., 2., -1., 0., 0., 0., 0.]);
             assert_eq!(cell.toxin, 0.5);
+            assert_eq!(cell.recoil, [0.; 2]);
         }
 
-        let v5 = sim.encode_state();
+        let saved = sim.encode_state();
         let mut replacement = Simulation::new(0);
-        replacement.restore_checked(&v5).unwrap();
-        assert_eq!(replacement.encode_state(), v5);
+        replacement.restore_checked(&saved).unwrap();
+        assert_eq!(replacement.encode_state(), saved);
         checkpoint.pop();
         assert!(sim.restore_checked(&checkpoint).is_err());
-        assert_eq!(sim.encode_state(), v5);
+        assert_eq!(sim.encode_state(), saved);
+    }
+
+    #[test]
+    fn deployed_v5_checkpoint_keeps_shared_genomes_and_bonds_with_zero_recoil() {
+        let genes = Genome::from_modes(vec![Mode {
+            kind: NEUROCYTE,
+            ..Mode::default()
+        }])
+        .values();
+        let mut checkpoint = vec![
+            5.,
+            123.,
+            456.,
+            91.,
+            3.,
+            2.,
+            0.,
+            0.,
+            1.,
+            1.,
+            0.,
+            1.,
+            1.,
+            0.,
+            0.,
+            0.,
+            0.,
+            1.,
+            0.,
+            (GRID * GRID) as f64,
+        ];
+        for _ in 0..GRID * GRID {
+            checkpoint.extend([1., 0., 0.25, 1., 0., 0.75, 1., 0.125]);
+        }
+        checkpoint.extend([1., genes.len() as f64]);
+        checkpoint.extend(genes.iter().copied().map(f64::from));
+        checkpoint.push(2.);
+        for (id, x) in [(1., 500.), (2., 522.)] {
+            checkpoint.extend([
+                id, x, 600., 0.125, 0., 1.25, 2.5, 1., 0., 0.25, 1., 0.75, 1., 2., 3., 4., 5., 6.,
+                7., 8., 0.125, 0.25, 9., 1., 0.,
+            ]);
+        }
+        checkpoint.extend([1., 1., 2.]);
+
+        let mut sim = Simulation::new(0);
+        sim.restore_checked(&checkpoint).unwrap();
+        assert_eq!(sim.tick, 91);
+        assert_eq!(sim.tiles[0].covered_food, 0.125);
+        assert_eq!(sim.bonds, BTreeSet::from([(1, 2)]));
+        assert_eq!(sim.entities.len(), 2);
+        for &(_, entity) in &sim.entities {
+            let cell = sim.world.get::<&Cell>(entity).unwrap();
+            assert_eq!(cell.recoil, [0.; 2]);
+            assert_eq!(cell.signals[7], 8.);
+            assert!(cell.anchored);
+            assert_eq!(sim.world.get::<&Genome>(entity).unwrap().values(), genes);
+        }
+        assert_eq!(sim.encode_state()[0], 6.);
+    }
+
+    #[test]
+    fn recoil_round_trips_and_invalid_momentum_does_not_replace_the_world() {
+        let mut sim = Simulation::new(42);
+        let genes = Genome::from_modes(vec![Mode::default()]).values();
+        sim.spawn_checked(500., 600., 0, &genes).unwrap();
+        let without_recoil = sim.checksum();
+        let recoil = [0.41234567_f32, -0.215625_f32];
+        sim.world
+            .get::<&mut Cell>(sim.entities[0].1)
+            .unwrap()
+            .recoil = recoil;
+        let saved = sim.encode_state();
+        let checksum = sim.checksum();
+        assert_ne!(checksum, without_recoil);
+
+        let mut restored = Simulation::new(0);
+        restored.restore_checked(&saved).unwrap();
+        assert_eq!(restored.encode_state(), saved);
+        assert_eq!(restored.checksum(), checksum);
+        let restored_cell = restored.world.get::<&Cell>(restored.entities[0].1).unwrap();
+        assert_eq!(
+            restored_cell.recoil.map(f32::to_bits),
+            recoil.map(f32::to_bits)
+        );
+        drop(restored_cell);
+
+        // With one unbonded cell, the last values are recoil X/Y and bond count.
+        let above_limit = 2. * f64::from(MAX_RECOIL_MOMENTUM);
+        for index in (saved.len() - 3)..(saved.len() - 1) {
+            for invalid in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                above_limit,
+                -above_limit,
+            ] {
+                let mut malformed = saved.clone();
+                malformed[index] = invalid;
+                assert!(restored.restore_checked(&malformed).is_err());
+                assert_eq!(restored.checksum(), checksum);
+            }
+        }
+
+        sim.advance(15);
+        restored.advance(15);
+        assert_eq!(restored.checksum(), sim.checksum());
     }
 }

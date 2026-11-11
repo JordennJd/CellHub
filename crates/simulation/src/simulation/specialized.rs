@@ -7,7 +7,7 @@ use super::program::{
     DIFFERENTIATION_B_TARGET, controlled_value,
 };
 use crate::cell_types::{BUOYOCYTE, CILIOCYTE, GAMETE, GLUEOCYTE, LIPOCYTE, STEMOCYTE};
-use crate::components::{Cell, MIN_DIVISION_AGE, Position, SIZE, radius};
+use crate::components::{Cell, MAX_RECOIL_MOMENTUM, MIN_DIVISION_AGE, Position, SIZE, radius};
 use crate::genome::{Genome, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
@@ -239,7 +239,9 @@ impl Simulation {
         }
         self.bonds.extend(added_bonds);
         for entity in anchors {
-            self.world.get::<&mut Cell>(entity).unwrap().anchored = true;
+            let mut cell = self.world.get::<&mut Cell>(entity).unwrap();
+            cell.anchored = true;
+            cell.recoil = [0.; 2];
         }
         let mut remapped = BTreeMap::new();
         for (a, b) in fusions {
@@ -250,6 +252,10 @@ impl Simulation {
             let genome = hybrid(a, b);
             let mut cell = Cell::new(id, a.mode.offspring_mode);
             cell.mass = (a.cell.mass + b.cell.mass).min(1_000_000.);
+            cell.recoil = std::array::from_fn(|axis| {
+                (a.cell.recoil[axis] + b.cell.recoil[axis])
+                    .clamp(-MAX_RECOIL_MOMENTUM, MAX_RECOIL_MOMENTUM)
+            });
             cell.nitrogen = (a.cell.nitrogen + b.cell.nitrogen).min(1.);
             cell.telomeres = a.mode.telomeres;
             cell.toxin = (a.cell.toxin + b.cell.toxin) * 0.5;

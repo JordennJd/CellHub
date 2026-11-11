@@ -321,6 +321,148 @@ fn minimum_age_prevents_instant_division_after_boost() {
     assert!(s.world.query::<&Cell>().iter().all(|(_, c)| c.age == 0.));
 }
 
+fn recoil_fixture(bind_children: bool, keep_a: bool) -> (Simulation, u32, Vec<f32>) {
+    let mut sim = quiet_world();
+    sim.configure_environment(super::environment::Environment {
+        light: 0.,
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let passive = Mode {
+        can_divide: false,
+        speed: 0.,
+        ..Mode::default()
+    };
+    let genes = Genome::from_modes(vec![
+        Mode {
+            can_divide: true,
+            threshold: 1.,
+            speed: 0.,
+            angle: 0.,
+            ratio: 0.75,
+            child_a: 1,
+            child_b: 1,
+            bind_children,
+            keep_a,
+            ..Mode::default()
+        },
+        passive,
+    ])
+    .values();
+    let parent = sim.spawn(500., 500., 0, &genes).unwrap();
+    sim.boost_cell(parent).unwrap();
+    (sim, parent, genes)
+}
+
+#[test]
+fn unbound_division_gives_unequal_daughters_equal_and_opposite_momentum() {
+    let (mut sim, _, _) = recoil_fixture(false, false);
+    sim.advance(15);
+    assert_eq!(sim.world.len(), 2);
+    let a = entity(&sim, 2);
+    let b = entity(&sim, 3);
+    let position = |sim: &Simulation, cell| *sim.world.get::<&Position>(cell).unwrap();
+    let (a_before, b_before) = (position(&sim, a), position(&sim, b));
+    let a_recoil = {
+        let a = sim.world.get::<&Cell>(a).unwrap();
+        let b = sim.world.get::<&Cell>(b).unwrap();
+        assert!(a.mass > b.mass);
+        for (a_pos, b_pos) in [(a_before.x, b_before.x), (a_before.y, b_before.y)] {
+            let center = (a_pos * a.mass + b_pos * b.mass) / (a.mass + b.mass);
+            assert!((center - 500.).abs() < 0.0001);
+        }
+        assert_eq!(a.recoil, b.recoil.map(|value| -value));
+        assert!(
+            a.recoil[0] * (a_before.x - b_before.x) + a.recoil[1] * (a_before.y - b_before.y) > 0.
+        );
+        a.recoil
+    };
+
+    sim.advance(1);
+
+    let (a_after, b_after) = (position(&sim, a), position(&sim, b));
+    let forward = (a_after.x - a_before.x) * a_recoil[0] + (a_after.y - a_before.y) * a_recoil[1];
+    let backward = (b_before.x - b_after.x) * a_recoil[0] + (b_before.y - b_after.y) * a_recoil[1];
+    assert!(
+        backward > forward && forward > 0.,
+        "lighter daughter moves farther"
+    );
+    let damped = sim.world.get::<&Cell>(a).unwrap().recoil;
+    assert!(
+        libm::hypotf(damped[0], damped[1]) < libm::hypotf(a_recoil[0], a_recoil[1]),
+        "viscosity damps recoil"
+    );
+}
+
+#[test]
+fn bound_sisters_share_parent_velocity_without_new_recoil() {
+    for momentum in [[0., 0.], [0.4, -0.2]] {
+        let (mut sim, parent, _) = recoil_fixture(true, false);
+        sim.advance(14);
+        sim.world
+            .get::<&mut Cell>(entity(&sim, parent))
+            .unwrap()
+            .recoil = momentum;
+        sim.advance(1);
+        assert_eq!(sim.links(), vec![2, 3]);
+        let a = sim.world.get::<&Cell>(entity(&sim, 2)).unwrap();
+        let b = sim.world.get::<&Cell>(entity(&sim, 3)).unwrap();
+        if momentum == [0.; 2] {
+            assert_eq!(a.recoil, momentum);
+            assert_eq!(b.recoil, momentum);
+        } else {
+            for (component, initial) in momentum.into_iter().enumerate() {
+                let a_speed = a.recoil[component] / a.mass;
+                let b_speed = b.recoil[component] / b.mass;
+                assert!(a_speed * initial > 0.);
+                assert!((a_speed - b_speed).abs() < 0.00001);
+            }
+        }
+    }
+}
+
+#[test]
+fn ejection_moves_the_retained_organism_through_its_adhesive_bond() {
+    let divided = || {
+        let (mut sim, parent, genes) = recoil_fixture(false, true);
+        let neighbor = sim.spawn(522., 500., 1, &genes).unwrap();
+        sim.bonds.insert((parent, neighbor));
+        sim.world
+            .get::<&mut Position>(entity(&sim, parent))
+            .unwrap()
+            .angle = 0.;
+        sim.advance(15);
+        assert_eq!(sim.links(), vec![neighbor, 3]);
+        (sim, neighbor)
+    };
+    let (mut recoiling, neighbor) = divided();
+    let (mut control, _) = divided();
+    for (_, cell) in control.world.query_mut::<&mut Cell>() {
+        cell.recoil = [0.; 2];
+    }
+    let x = |sim: &Simulation, id| sim.world.get::<&Position>(entity(sim, id)).unwrap().x;
+    recoiling.advance(5);
+    control.advance(5);
+    assert_eq!(recoiling.links(), vec![neighbor, 3]);
+    assert!(x(&recoiling, neighbor) > x(&control, neighbor));
+    assert!(x(&recoiling, 3) > x(&control, 3));
+    assert!(x(&recoiling, 4) < x(&control, 4));
+    let neighbor_entity = entity(&recoiling, neighbor);
+    assert!(
+        recoiling
+            .world
+            .get::<&Cell>(neighbor_entity)
+            .unwrap()
+            .recoil[0]
+            > 0.
+    );
+    recoiling.remove_cell(3).unwrap();
+    let before = x(&recoiling, neighbor);
+    recoiling.advance(1);
+    assert!(x(&recoiling, neighbor) > before);
+}
+
 #[test]
 fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mut s = quiet_world();
@@ -346,7 +488,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let rows = s.snapshot();
     assert_eq!(rows.len(), 24);
     let split_axis = (noise - 0.5) * 0.35 + 0.2;
-    assert!((rows[9] - (split_axis - 0.3)).abs() < 0.00001);
+    assert!((rows[9] - (split_axis + 0.3)).abs() < 0.00001);
     assert!((rows[21] - (split_axis + std::f32::consts::PI - 0.4)).abs() < 0.00001);
     assert_eq!(rows[11], 1.);
     assert_eq!(rows[23], 0.);
@@ -370,7 +512,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mirrored_axis = (noise - 0.5) * 0.35 - 0.2;
     assert_eq!(rows[11], 0.);
     assert_eq!(rows[23], 1.);
-    assert!((rows[9] - (mirrored_axis + 0.3)).abs() < 0.00001);
+    assert!((rows[9] - (mirrored_axis - 0.3)).abs() < 0.00001);
     assert!((rows[21] - (mirrored_axis + std::f32::consts::PI + 0.4)).abs() < 0.00001);
 }
 
@@ -1084,6 +1226,140 @@ fn both_daughters_can_inherit_without_creating_diagonal_bonds() {
             let (along, across) = displacement(c, d);
             assert!(along.abs() > 2. * across.abs());
         }
+    }
+}
+
+fn growing_path(angle: f32, mirror: bool) -> Simulation {
+    let mut s = Simulation::new(73421);
+    s.set_circular_dish(true);
+    s.configure_environment(super::environment::Environment {
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    // The same founder and conditions as the preview. Each generation grows
+    // to division mass on its own, and the fourth generation stops dividing.
+    let modes = (0..=4)
+        .map(|mode| Mode {
+            threshold: 1.,
+            angle,
+            child_angle_a: -angle,
+            child_angle_b: -angle,
+            mirror_a: mirror,
+            mirror_b: mirror,
+            speed: 0.,
+            lifespan: 1000.,
+            child_a: (mode + 1).min(4),
+            child_b: (mode + 1).min(4),
+            can_divide: mode < 4,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        })
+        .collect();
+    s.spawn(600., 600., 0, &Genome::from_modes(modes).values())
+        .unwrap();
+    s
+}
+
+fn advance_to(sim: &mut Simulation, tick: u32) {
+    while sim.tick < tick {
+        sim.advance((tick - sim.tick).min(120));
+    }
+}
+
+fn path_positions(sim: &Simulation, count: usize) -> Vec<Position> {
+    assert_eq!(sim.world.len() as usize, count, "tick {}", sim.tick);
+    assert_eq!(sim.bonds.len(), count - 1, "tick {}", sim.tick);
+    let mut neighbors = BTreeMap::<u32, Vec<u32>>::new();
+    for &(a, b) in &sim.bonds {
+        neighbors.entry(a).or_default().push(b);
+        neighbors.entry(b).or_default().push(a);
+    }
+    assert_eq!(neighbors.len(), count);
+    assert!(neighbors.values().all(|ends| ends.len() <= 2));
+    let (&first, _) = neighbors.iter().find(|(_, ends)| ends.len() == 1).unwrap();
+    let mut order = vec![first];
+    let (mut previous, mut current) = (None, first);
+    while let Some(&next) = neighbors[&current].iter().find(|&&id| Some(id) != previous) {
+        assert!(!order.contains(&next), "a path cannot revisit a cell");
+        order.push(next);
+        previous = Some(current);
+        current = next;
+    }
+    assert_eq!(order.len(), count, "one path must reach all cells");
+    order
+        .into_iter()
+        .map(|id| *sim.world.get::<&Position>(entity(sim, id)).unwrap())
+        .collect()
+}
+
+fn path_bearings(sim: &Simulation, count: usize) -> Vec<f32> {
+    let positions = path_positions(sim, count);
+    let (first, last) = (positions[0], positions[count - 1]);
+    let (dx, dy) = (last.x - first.x, last.y - first.y);
+    positions
+        .windows(2)
+        .map(|pair| {
+            let (x, y) = (pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+            let along = x * dx + y * dy;
+            assert!(along > 0., "path backtracks at tick {}", sim.tick);
+            libm::atan2f(y * dx - x * dy, along)
+        })
+        .collect()
+}
+
+fn assert_straight_path(sim: &Simulation, count: usize) {
+    let bearings = path_bearings(sim, count);
+    assert!(
+        bearings.iter().all(|bearing| bearing.abs() < 0.001),
+        "bent path: {bearings:?}"
+    );
+}
+
+#[test]
+fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
+    let mut s = growing_path(0., false);
+    advance_to(&mut s, 150);
+    assert_straight_path(&s, 4);
+    advance_to(&mut s, 300);
+    assert_straight_path(&s, 8);
+
+    let mut restored = Simulation::new(999);
+    restored.restore_checked(&s.export_state()).unwrap();
+    advance_to(&mut s, 450);
+    advance_to(&mut restored, 450);
+    assert_straight_path(&s, 16);
+    assert_eq!(s.export_state(), restored.export_state());
+}
+
+#[test]
+fn mirrored_daughters_turn_a_tilted_straight_path_into_a_wave() {
+    let angle = 10_f32.to_radians();
+    let mut straight = growing_path(angle, false);
+    let mut mirrored = growing_path(angle, true);
+    for (tick, count) in [(150, 4), (300, 8), (450, 16)] {
+        advance_to(&mut straight, tick);
+        assert_straight_path(&straight, count);
+        advance_to(&mut mirrored, tick);
+        let bearings = path_bearings(&mirrored, count);
+        let low = bearings.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = bearings.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            (high - low - 2. * angle).abs() < 0.001,
+            "tick {tick}: {bearings:?}"
+        );
+        assert!(
+            bearings
+                .iter()
+                .all(|b| (b - low).abs() < 0.001 || (b - high).abs() < 0.001)
+        );
+        let changes = bearings
+            .windows(2)
+            .filter(|pair| (pair[1] - pair[0]).abs() > angle)
+            .count();
+        assert!(changes >= count / 2, "tick {tick}: {bearings:?}");
     }
 }
 
