@@ -69,15 +69,15 @@ test("duplicate names, broken references, malformed environments and oversized i
 
 test("world metadata and distinct starting mode survive a round trip", () => {
   const plate = { genome: [newMode(0), newMode(1)], initialMode: 1, state: '{"version":1,"values":[1,123]}',
-    environment: { light: 1, food: 1, radiation: 0, viscosity: 1, aging: true, killAtEdge: false, onlyPointMutations: false, gravity: 0, density: 0 }, inserted: 3,
+    environment: { light: 1, food: 1, radiation: 0, viscosity: 1, aging: true, killAtEdge: false, onlyPointMutations: false, gravity: 0, density: 0, nitrogen: 1 }, inserted: 3,
     slotNames: ["Рост", "Движение"], genomeNames: { "0,2.4,0,0": ["Старая клетка"], "1,3,1,0": ["Новый фагоцит", "Двигатель"] } };
   const saved = storage.saveEntry("plate", "Образец", plate);
   assert.deepEqual(storage.parseEntry(storage.exportEntry(saved)).data, plate);
   for (const environment of [{ ...plate.environment, light: 5.01 }, { ...plate.environment, food: -1 }, { ...plate.environment, viscosity: 0 }, { ...plate.environment, viscosity: 5.1 },
     { ...plate.environment, onlyPointMutations: 1 }, { ...plate.environment, gravity: -0.1 }, { ...plate.environment, gravity: 1.01 },
-    { ...plate.environment, density: -3.31 }, { ...plate.environment, density: 3.31 }])
+    { ...plate.environment, density: -3.31 }, { ...plate.environment, density: 3.31 }, { ...plate.environment, nitrogen: -1 }])
     assert.throws(() => storage.validateData("plate", { ...plate, environment }));
-  const { onlyPointMutations, gravity, density, ...oldEnvironment } = plate.environment;
+  const { onlyPointMutations, gravity, density, nitrogen, ...oldEnvironment } = plate.environment;
   assert.deepEqual(storage.validateData("plate", { ...plate, environment: oldEnvironment }).environment, plate.environment,
     "old saves gain neutral environment defaults without losing existing settings");
   for (const state of ['{}', '{"version":2,"values":[1]}', '{"version":1,"values":[null]}'])
@@ -196,10 +196,10 @@ test("every mechanic challenge has a measured legal solution in the real WASM si
     };
     try {
       const e = challenge.environment;
-      sim.configure(e.light,e.food,e.radiation,e.viscosity,e.aging,e.killAtEdge,e.onlyPointMutations,e.gravity,e.density);
+      sim.configure(e.light,e.food,e.radiation,e.viscosity,e.aging,e.killAtEdge,e.onlyPointMutations,e.gravity,e.density,e.nitrogen);
       if (challenge.id === "algae") spawn(600,600,challenge.genome);
-      if (challenge.id === "feeding") spawn(2000,1300,challenge.genome.map(m=>({...m,kind:1})));
-      if (challenge.id === "colony") spawn(2000,1300,challenge.genome);
+      if (challenge.id === "feeding") spawn(1792,2112,challenge.genome.map(m=>({...m,kind:1})));
+      if (challenge.id === "colony") spawn(600,600,challenge.genome);
       if (challenge.id === "adhesion") spawn(2000,1300,challenge.genome.map(m=>({...m,kind:1,bindChildren:true,keepAdhesionA:true,keepAdhesionB:true})));
       if (challenge.id === "swimmer") spawn(600,600,[
         {...newMode(0),kind:0,threshold:1.2,speed:0,childA:1,childB:2,bindChildren:true,lifespan:1000},

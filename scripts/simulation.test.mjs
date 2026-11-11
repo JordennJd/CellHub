@@ -4,6 +4,12 @@ import { test } from "node:test";
 import ts from "typescript";
 import init, { Simulation } from "../frontend/wasm/simulation.js";
 
+const modelSource = await readFile(new URL("../frontend/model.ts", import.meta.url), "utf8");
+const modelJs = ts.transpileModule(modelSource, {compilerOptions: {
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+}}).outputText;
+const model = await import(`data:text/javascript;base64,${Buffer.from(modelJs).toString("base64")}`);
+
 await init({
   module_or_path: await readFile(
     new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url),
@@ -71,19 +77,80 @@ test("saved world JSON restores exact state and deterministic continuation", () 
   } finally { original.free(); restored.free(); }
 });
 
+test("all eighteen types and eight signal channels survive the real WASM ABI and checkpoints", () => {
+  const sim = new Simulation(41), restored = new Simulation(1);
+  try {
+    sim.configure(2, 2, 0, 1, false, false);
+    for (let kind = 0; kind < model.TYPES.length; kind++) {
+      const mode = { ...model.newMode(0), kind, speed: 0, canDivide: false };
+      if (kind === 13) mode.programs = Array.from({ length: 8 }, (_, channel) => ({
+        ...model.newProgram(), target: channel, scale: (channel - 3) * 0.25,
+      }));
+      const id = sim.spawn(300 + kind * 120, 1400, 0, model.flatten([mode]));
+      assert.deepEqual(sim.genome(id), model.flatten([mode]));
+    }
+    sim.advance(1);
+    const details = sim.cell_details();
+    assert.equal(details.length, 18 * model.CELL_DETAILS_STRIDE);
+    for (let channel = 0; channel < 8; channel++)
+      assert.equal(details[13 * model.CELL_DETAILS_STRIDE + channel], (channel - 3) * 0.25);
+    restored.restore_state(sim.export_state());
+    assert.deepEqual(restored.cell_details(), details);
+    for (let tick = 0; tick < 60; tick++) {
+      sim.advance(1);
+      restored.advance(1);
+      assert.equal(restored.checksum(), sim.checksum(), `checkpoint continuation at tick ${tick}`);
+    }
+    assert.equal(sim.covered_food().length, 48 * 48);
+  } finally { sim.free(); restored.free(); }
+});
+
+test("gamete hybridization and stem differentiation execute through the real WASM entry points", () => {
+  const sim = new Simulation(42);
+  try {
+    sim.configure(2, 2, 0, 1, false, false);
+    const gametes = [
+      { ...model.newMode(0), kind: 16, speed: 0, compatibleMode: 0, offspringMode: 1, telomeres: 3 },
+      { ...model.newMode(1), kind: 0, speed: 0, canDivide: false },
+    ];
+    sim.spawn(600, 600, 0, model.flatten(gametes));
+    sim.spawn(612, 600, 0, model.flatten(gametes));
+    sim.advance(15);
+    assert.equal(sim.stats()[1], 1);
+    const id = sim.snapshot()[0];
+    assert.equal(sim.genome(id).length, 2 + 4 * model.MODE_STRIDE);
+    assert.equal(sim.cell_details()[10], 3);
+    sim.reset();
+    sim.configure(2, 2, 0, 1, false, false);
+    const stem = [
+      { ...model.newMode(0), kind: 15, speed: 0, transitionA: 1,
+        programs: [{ ...model.newProgram(), target: 16 }] },
+      { ...model.newMode(1), kind: 1, speed: 0, canDivide: false },
+    ];
+    const founder = sim.spawn(600, 600, 0, model.flatten(stem));
+    sim.advance(15);
+    assert.equal(sim.cell_mode(founder), 1);
+    assert.equal(sim.stats()[2], 1);
+  } finally { sim.free(); }
+});
+
 test("laboratory tools and substrate settings work through the real WASM ABI", () => {
   const sim = new Simulation(73421);
   try {
-    sim.configure(2, 3, 0, 2, false, true, true, 1, -1);
-    assert.deepEqual(Array.from(sim.environment()), [2, 3, 0, 2, 0, 1, 1, 1, -1]);
+    sim.configure(2, 3, 0, 2, false, true, true, 1, -1, 0);
+    assert.deepEqual(Array.from(sim.environment()), [2, 3, 0, 2, 0, 1, 1, 1, -1, 0]);
+    assert.equal(sim.nitrates().length, 48 * 48);
+    assert(sim.nitrates().every(value => value === 0));
     const before = sim.export_state();
     assert.throws(() => sim.configure(1, 1, 0, 0, true, false));
     assert.deepEqual(sim.export_state(), before);
     const id = sim.spawn(500, 500, 0, genes());
     sim.advance(10);
+    assert(sim.nitrogen_reserves()[0] < 1);
     const mass = sim.snapshot()[5];
     sim.move_cell(id, 650, 700);
     sim.boost(id);
+    assert.equal(sim.nitrogen_reserves()[0], 1);
     assert.equal(sim.snapshot()[1], 650);
     assert.equal(sim.snapshot()[2], 700);
     assert(Math.abs(sim.snapshot()[5] - mass - 1) < 0.00001);
@@ -98,19 +165,19 @@ test("laboratory tools and substrate settings work through the real WASM ABI", (
     assert.equal(sim.snapshot().length, 0);
     sim.reset();
     assert.equal(sim.stats()[0], 0);
-    assert.deepEqual(Array.from(sim.environment()), [1, 1, 1, 1, 1, 0, 0, 0, 0]);
+    assert.deepEqual(Array.from(sim.environment()), [1, 1, 1, 1, 1, 0, 0, 0, 0, 1]);
   } finally { sim.free(); }
 });
 
-test("v4 daughter orientation, mirroring and RGB survive the real WASM save ABI", () => {
+test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI", () => {
   const sim = new Simulation(42), restored = new Simulation(1);
   try {
-    const g = new Float32Array([-4, 1,
-      0, 1, 0, 0, 0.5, 0, 0.2, 1000, 1, 0, 0, 0, 0.3, -0.4, 1, 0, 0.2, 0.6, 1, 2, 5, -12,
+    const g = new Float32Array([-3, 1,
+      0, 1, 0, 0, 0.5, 0, 0.2, 1000, 1, 0, 0, 0, 0.3, -0.4, 1, 0, 0.2, 0.6, 1,
     ]);
     sim.configure(1, 1, 0, 1, true, false, true, 0.5, -0.5);
     const id = sim.spawn(500, 500, 0, g);
-    assert.deepEqual(sim.genome(id), g);
+    assert.deepEqual(sim.genome(id), model.flatten(model.inflate(g)));
     sim.boost(id);
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
@@ -176,6 +243,31 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
     const restored = messages.find(message => message.type === "restored");
     assert.equal(restored.requestId, "load-valid");
     assert.equal(restored.settings.viscosity, 1);
+
+    // Save before commands targeted to a future boundary. Replaying the loaded
+    // queue must apply same-tick commands in their original receipt order.
+    send({type:"spawn", x:500, y:500, mode:0, genome:genes(), atTick:2});
+    send({type:"boost", id:1, atTick:2});
+    send({type:"export", requestId:"before-scheduled"});
+    tick();
+    const checkpoint = messages.find(message => message.requestId === "before-scheduled");
+    for (const replay of [false, true]) {
+      if (replay) {
+        send({type:"restore", requestId:"load-scheduled", state:checkpoint.state});
+        tick();
+      }
+      send({type:"step"});
+      tick();
+      assert.equal(messages.at(-1).stats[1], 0);
+      send({type:"step"});
+      tick();
+      assert.equal(messages.at(-1).stats[0], 2);
+      assert.equal(messages.at(-1).cells[5], 2);
+      send({type:"export", requestId:`after-${replay}`});
+      tick();
+    }
+    const finalState = replay => messages.find(message => message.requestId === `after-${replay}`).state;
+    assert.equal(finalState(false), finalState(true));
   } finally {
     globalThis.self = previousSelf;
     globalThis.setInterval = previousInterval;
@@ -243,7 +335,7 @@ test("real WASM preserves variable genomes and transfers integer bond endpoints"
       1, 8, 2, 0, 0.5, 0, 0, 1000, 1, 0, 1, 0,
     ]);
     const id = sim.spawn(300, 300, 0, g);
-    assert.deepEqual(Array.from(sim.genome(id)), [-4, 3, ...Array.from({length:3}, (_,i)=>[...g.slice(i*12,i*12+12),0,0,0,0,-1,-1,-1,0,0,0]).flat()]);
+    assert.deepEqual(sim.genome(id), model.flatten(model.inflate(g)));
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
     sim.advance(1);

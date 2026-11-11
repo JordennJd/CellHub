@@ -1,4 +1,4 @@
-import { newMode, STRIDE, type Mode, type Frame } from "../model";
+import { DEFAULT_ENVIRONMENT, newMode, STRIDE, type Mode, type Frame } from "../model";
 import type { PlateData } from "./storage";
 export type ChallengeObjective = {
     id: string;
@@ -62,7 +62,7 @@ export type Challenge = {
     genome: Mode[];
     objectives?: ChallengeObjective[];
 };
-const environment = { light: 1, food: 1, radiation: 0, viscosity: 1, aging: true, killAtEdge: false, onlyPointMutations: false, gravity: 0, density: 0 };
+const environment = { ...DEFAULT_ENVIRONMENT, radiation: 0 };
 // These are small web-adapted exercises, not claims of original level parity.
 export const CHALLENGES: Challenge[] = [
     {
@@ -76,7 +76,7 @@ export const CHALLENGES: Challenge[] = [
         id: "feeding", title: "Питательная среда", target: 12, budget: 2, requires: "algae", allowedKinds: [0, 1],
         description: "В среде без света вырастите не менее 12 клеток, используя не больше двух вставок.",
         hint: "При отсутствии света фотоцитам не хватает энергии. Другой тип клеток получает её из пищи.",
-        spoiler: "Выберите для M1 фагоцит. Включите слой «Пища», поместите клетку в область с насыщенным зелёным цветом и запустите время.",
+        spoiler: "Выберите для M1 фагоцит. Включите слой «Пища», поместите клетку в насыщенную зелёную область чуть правее и ниже центра чашки и запустите время.",
         environment: { ...environment, light: 0, food: 3 }, genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }],
     },
     {

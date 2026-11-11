@@ -4,6 +4,18 @@ version = "0.1.0"
 edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[features]
+wasm-threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
+
 [dependencies]
 hecs = "0.10"
+libm = "0.2"
 wasm-bindgen = "=0.2.130"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rayon = { version = "1.11", optional = true }
+wasm-bindgen-rayon = { version = "1.3", optional = true }

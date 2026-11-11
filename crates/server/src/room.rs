@@ -132,7 +132,7 @@ async fn run_room(
         let chunk_y = (cursor / CHUNKS_PER_AXIS as usize) as u32;
         let snapshot = simulation.chunk_snapshot(chunk_x, chunk_y, CHUNK_SIZE);
         let chunk = Chunk {
-            tick: stats[0] as u32,
+            tick: simulation.tick_number(),
             population: stats[1] as u32,
             births: stats[2] as u32,
             deaths: stats[3] as u32,

@@ -1,4 +1,4 @@
-import { parseGenome, type Mode, type Environment } from "../model";
+import { parseGenome, parseStoredGenome, type Mode, type Environment } from "../model";
 export type LibraryKind = "genome" | "plate";
 export type GenomeData = {
     genome: Mode[];
@@ -32,7 +32,7 @@ export function validName(name: string): string {
 export function validateData(kind: LibraryKind, data: unknown): GenomeData | PlateData {
     if (!record(data) || !Array.isArray(data.genome) || data.genome.length > 1000)
         throw new Error("В сохранении нет корректного генома.");
-    const genome = parseGenome(JSON.stringify({ version: 2, modes: data.genome }));
+    const genome = parseStoredGenome(data.genome);
     if (typeof data.initialMode !== "number" || !Number.isInteger(data.initialMode) || data.initialMode < 0 || data.initialMode >= genome.length)
         throw new Error("Начальный режим сохранения недоступен.");
     const base = { genome, initialMode: data.initialMode };
@@ -51,8 +51,8 @@ export function validateData(kind: LibraryKind, data: unknown): GenomeData | Pla
         || state.values.length > 10000000
         || state.values.some(v => typeof v !== "number" || !Number.isFinite(v)))
         throw new Error("Данные эксперимента повреждены или их версия не поддерживается.");
-    const e: Record<string, unknown> = { onlyPointMutations: false, gravity: 0, density: 0, ...data.environment };
-    if ([e.light, e.food, e.radiation].some(v => typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 5)
+    const e: Record<string, unknown> = { onlyPointMutations: false, gravity: 0, density: 0, nitrogen: 1, ...data.environment };
+    if ([e.light, e.food, e.radiation, e.nitrogen].some(v => typeof v !== "number" || !Number.isFinite(v) || v < 0 || v > 5)
         || typeof e.viscosity !== "number" || !Number.isFinite(e.viscosity) || e.viscosity < 0.1 || e.viscosity > 5
         || typeof e.aging !== "boolean" || typeof e.killAtEdge !== "boolean"
         || typeof e.onlyPointMutations !== "boolean"
@@ -66,7 +66,7 @@ export function validateData(kind: LibraryKind, data: unknown): GenomeData | Pla
     if (data.slotNames !== undefined && (!Array.isArray(data.slotNames) || data.slotNames.some(n => typeof n !== "string" || n.length > 80)))
         throw new Error("Имена режимов сохранения некорректны.");
     if (data.genomeNames !== undefined && (!record(data.genomeNames) || Object.keys(data.genomeNames).length > 20000
-        || Object.entries(data.genomeNames).some(([key, names]) => !key || key.length > 200000
+        || Object.entries(data.genomeNames).some(([key, names]) => !key || key.length > 2400000
             || !Array.isArray(names) || names.length > 1000 || names.some(n => typeof n !== "string" || !n.trim() || n.length > 80))))
         throw new Error("Имена режимов живых клеток некорректны.");
     return { ...base, state: data.state, environment: e as PlateData["environment"], inserted: data.inserted,

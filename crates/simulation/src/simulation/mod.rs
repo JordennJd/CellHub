@@ -1,27 +1,37 @@
 //! Cell simulation: public wasm ABI and tick orchestration.
 
-mod bonds;
 mod biology;
 mod boundary;
 mod environment;
+mod spatial;
+mod program;
+mod signals;
+mod interactions;
+mod bonds;
+mod specialized;
 mod persistence;
 mod tools;
-mod spatial;
-mod signals;
 mod step;
 #[cfg(test)]
 mod tests;
 
-use crate::cell_types::{CILIOCYTE, FLAGELLOCYTE, LIPOCYTE};
+use crate::cell_types::FLAGELLOCYTE;
 use crate::components::{Cell, LIMIT, Position, SNAPSHOT_STRIDE, radius};
 use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, map};
 use boundary::Boundary;
 use environment::Environment;
 use hecs::World;
+use program::{SPEED_TARGET, controlled_value};
 use spatial::SpatialGrid;
 use std::collections::{BTreeSet, HashMap};
 use wasm_bindgen::prelude::*;
+
+#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+#[wasm_bindgen]
+pub fn enable_parallel_simulation() {
+    interactions::enable_parallel();
+}
 
 #[wasm_bindgen]
 pub struct Simulation {
@@ -110,6 +120,7 @@ impl Simulation {
         only_point_mutations: Option<bool>,
         gravity: Option<f32>,
         density: Option<f32>,
+        nitrogen: Option<f32>,
     ) -> Result<(), JsError> {
         self.configure_environment(Environment {
             light,
@@ -121,6 +132,7 @@ impl Simulation {
             only_point_mutations: only_point_mutations.unwrap_or(false),
             gravity: gravity.unwrap_or(0.),
             density: density.unwrap_or(0.),
+            nitrogen: nitrogen.unwrap_or(1.),
         })
         .map_err(|error| JsError::new(&error))
     }
@@ -137,6 +149,7 @@ impl Simulation {
             s.only_point_mutations as u8 as f32,
             s.gravity,
             s.density,
+            s.nitrogen,
         ]
     }
 
@@ -198,36 +211,51 @@ impl Simulation {
         }
     }
 
+    pub fn tick_number(&self) -> u32 {
+        self.tick
+    }
+
+    /// Fingerprint the canonical checkpoint for replay tests and diagnostics.
+    pub fn checksum(&self) -> String {
+        let hash = self
+            .encode_state()
+            .into_iter()
+            .fold(0xcbf29ce484222325_u64, |hash, value| {
+                value.to_le_bytes().into_iter().fold(hash, |hash, byte| {
+                    (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+                })
+            });
+        format!("{hash:016x}")
+    }
+
     pub fn snapshot(&mut self) -> Vec<f32> {
         self.frame.clear();
-        let mut rows: Vec<[f32; SNAPSHOT_STRIDE]> = self
+        let mut rows: Vec<(u32, [f32; SNAPSHOT_STRIDE])> = self
             .world
             .query::<(&Position, &Cell, &Genome)>()
             .iter()
             .map(|(_, (p, c, g))| {
-                [
-                    c.id as f32,
-                    p.x,
-                    p.y,
-                    radius(c.mass),
-                    g.mode(c.mode).kind as f32,
-                    c.mass,
-                    c.age,
-                    c.generation as f32,
-                    c.mutations as f32,
-                    p.angle,
-                    if g.mode(c.mode).color[0] < 0. {
-                        -1.
-                    } else {
-                        let [r, green, b] = g.mode(c.mode).color.map(|v| (v * 255.).round() as u32);
-                        ((r << 16) | (green << 8) | b) as f32
-                    },
-                    c.mirrored as u8 as f32,
-                ]
+                (
+                    c.id,
+                    [
+                        c.id as f32,
+                        p.x,
+                        p.y,
+                        radius(c.mass),
+                        g.mode(c.mode).kind as f32,
+                        c.mass,
+                        c.age,
+                        c.generation as f32,
+                        c.mutations as f32,
+                        p.angle,
+                        packed_color(g.mode(c.mode).color),
+                        c.mirrored as u8 as f32,
+                    ],
+                )
             })
             .collect();
-        rows.sort_by_key(|r| r[0] as u32);
-        for row in rows {
+        rows.sort_unstable_by_key(|(id, _)| *id);
+        for (_, row) in rows {
             self.frame.extend(row);
         }
         self.frame.clone()
@@ -238,6 +266,45 @@ impl Simulation {
             .iter()
             .flat_map(|t| [t.light, t.radiation, t.food, t.biome])
             .collect()
+    }
+
+    pub fn nitrogen_reserves(&self) -> Vec<f32> {
+        self.entities
+            .iter()
+            .map(|&(_, entity)| self.world.get::<&Cell>(entity).unwrap().nitrogen)
+            .collect()
+    }
+
+    pub fn cell_details(&self) -> Vec<f32> {
+        self.entities
+            .iter()
+            .flat_map(|&(_, entity)| {
+                let cell = self.world.get::<&Cell>(entity).unwrap();
+                [
+                    cell.signals[0],
+                    cell.signals[1],
+                    cell.signals[2],
+                    cell.signals[3],
+                    cell.signals[4],
+                    cell.signals[5],
+                    cell.signals[6],
+                    cell.signals[7],
+                    cell.toxin,
+                    cell.injury,
+                    cell.telomeres as f32,
+                    cell.mode as f32,
+                    cell.anchored as u8 as f32,
+                ]
+            })
+            .collect()
+    }
+
+    pub fn covered_food(&self) -> Vec<f32> {
+        self.tiles.iter().map(|tile| tile.covered_food).collect()
+    }
+
+    pub fn nitrates(&self) -> Vec<f32> {
+        self.tiles.iter().map(|tile| tile.nitrates).collect()
     }
 
     pub fn links(&self) -> Vec<u32> {
@@ -279,28 +346,9 @@ impl Simulation {
         self.next_id += 1;
         let angle = self.random() * std::f32::consts::TAU;
         let (x, y, _) = self.boundary.constrain(x, y, 1., 10.);
-        // A lipocyte is born with its fat store; size is visible immediately.
-        let fat = if genome.mode(mode).kind == LIPOCYTE {
-            genome.mode(mode).signal.max(0.) * 0.5
-        } else {
-            0.
-        };
-        let entity = self.world.spawn((
-            Position { x, y, angle },
-            Cell {
-                id,
-                mode,
-                mass: 1. + fat,
-                age: 0.,
-                generation: 0,
-                mutations: 0,
-                cooldown: 0.,
-                mirrored: false,
-                signal: [0.; 4],
-                toxin: 0.,
-            },
-            genome,
-        ));
+        let entity = self
+            .world
+            .spawn((Position { x, y, angle }, Cell::new(id, mode), genome));
         self.entities.push((id, entity));
         self.births += 1;
         Ok(id)
@@ -332,16 +380,16 @@ impl Simulation {
 
     /// Native-only region export used by the authoritative server.
     ///
-    /// Cells are emitted with stride 12: the original ten render fields plus the
-    /// effective speed used for client-side prediction and a flag bit for
-    /// adhesion. Each bond is emitted once, in the chunk of its lower ID, so a
-    /// client can replace chunk-local links without duplicates.
+    /// Cells are emitted with stride 28, including the effective world speed
+    /// used directly for client-side prediction. Each bond is emitted once, in
+    /// the chunk of its lower ID, so a client can replace chunk-local links
+    /// without duplicates.
     pub fn chunk_snapshot(&self, chunk_x: u32, chunk_y: u32, chunk_size: f32) -> ChunkSnapshot {
         let mut cells = Vec::new();
         let mut links = Vec::new();
         let mut terrain = Vec::new();
         let mut cell_chunks = HashMap::new();
-        let linked = self.linked_ids();
+        let degrees = self.bond_degrees();
         for (_, (position, cell, genome)) in
             self.world.query::<(&Position, &Cell, &Genome)>().iter()
         {
@@ -352,12 +400,18 @@ impl Simulation {
                 continue;
             }
             let mode = genome.mode(cell.mode);
-            let is_linked = linked.contains(&cell.id);
-            let speed = match mode.kind {
-                FLAGELLOCYTE => mode.speed,
-                CILIOCYTE => mode.speed * 0.5,
-                _ => 0.,
-            };
+            let degree = degrees.get(&cell.id).copied().unwrap_or(0);
+            let is_linked = degree != 0;
+            let programmed_speed = controlled_value(cell, mode, SPEED_TARGET, degree);
+            let speed = if cell.anchored {
+                0.
+            } else if mode.kind == FLAGELLOCYTE {
+                programmed_speed
+            } else if is_linked {
+                0.
+            } else {
+                programmed_speed * 0.15
+            } / self.settings.viscosity;
             cells.extend([
                 cell.id as f32,
                 position.x,
@@ -371,6 +425,22 @@ impl Simulation {
                 position.angle,
                 speed,
                 is_linked as u8 as f32,
+                packed_color(mode.color),
+                cell.mirrored as u8 as f32,
+                cell.nitrogen,
+                cell.signals[0],
+                cell.signals[1],
+                cell.signals[2],
+                cell.signals[3],
+                cell.signals[4],
+                cell.signals[5],
+                cell.signals[6],
+                cell.signals[7],
+                cell.toxin,
+                cell.injury,
+                cell.telomeres as f32,
+                cell.mode as f32,
+                cell.anchored as u8 as f32,
             ]);
         }
         for &(a, b) in &self.bonds {
@@ -386,7 +456,14 @@ impl Simulation {
         for y in start_y..(start_y + tiles_per_chunk).min(GRID) {
             for x in start_x..(start_x + tiles_per_chunk).min(GRID) {
                 let tile = self.tiles[y * GRID + x];
-                terrain.extend([tile.light, tile.radiation, tile.food, tile.biome]);
+                terrain.extend([
+                    tile.light,
+                    tile.radiation,
+                    tile.food,
+                    tile.biome,
+                    tile.nitrates,
+                    tile.covered_food,
+                ]);
             }
         }
         ChunkSnapshot {
@@ -395,6 +472,14 @@ impl Simulation {
             terrain,
         }
     }
+}
+
+fn packed_color(color: [f32; 3]) -> f32 {
+    if color[0] < 0. {
+        return -1.;
+    }
+    let [r, g, b] = color.map(|v| (v * 255.).round() as u32);
+    ((r << 16) | (g << 8) | b) as f32
 }
 
 /// One server-synchronized map chunk.

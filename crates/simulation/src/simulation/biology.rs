@@ -1,17 +1,66 @@
-//! Resource exchange and direct protection in multicellular organisms.
+//! Resource uptake, exchange and protection in multicellular organisms.
 
 use super::Simulation;
-use crate::cell_types::{LIPOCYTE, blocks_signals, protects_neighbours};
+use crate::cell_types::{NITROCYTE, protects_neighbours};
 use crate::components::Cell;
-use crate::genome::Genome;
+use crate::genome::{Genome, Mode};
+use crate::terrain::Tile;
 use hecs::Entity;
 use std::collections::{BTreeMap, HashSet};
 
+const STARVING_MASS: f32 = 0.65;
+const STARVING_PRIORITY_MULTIPLIER: f64 = 4.;
+const NITROGEN_CONSUMPTION: f32 = 0.025;
+const NITROGEN_FIXATION: f32 = 0.10;
+const NITROGEN_UPTAKE: f32 = 0.35;
+// The environment stores a concentration, in units per tile. Cell stores are
+// normalized separately: one full reserve consumes this much concentration.
+const NITRATE_PER_RESERVE: f32 = 0.01;
+
+fn effective_priority(mode: &Mode, mass: f32) -> f64 {
+    let base = f64::from(mode.nutrient_priority);
+    if mode.prioritize_when_starving && mass < STARVING_MASS {
+        base * STARVING_PRIORITY_MULTIPLIER
+    } else {
+        base
+    }
+}
+
+impl Tile {
+    pub(super) fn regenerate_nitrates(&mut self, step: f32) {
+        self.nitrates =
+            (self.nitrates + step * 0.08 * self.nitrate_capacity).min(self.nitrate_capacity);
+    }
+
+    pub(super) fn feed_nitrogen(&mut self, cell: &mut Cell, kind: u8, step: f32) {
+        let fixation = if kind == NITROCYTE {
+            NITROGEN_FIXATION
+        } else {
+            0.
+        };
+        cell.nitrogen = (cell.nitrogen + step * (fixation - NITROGEN_CONSUMPTION)).clamp(0., 1.);
+        let uptake = (step * NITROGEN_UPTAKE * self.nitrates)
+            .min(self.nitrates / NITRATE_PER_RESERVE)
+            .min(1. - cell.nitrogen);
+        self.nitrates = (self.nitrates - uptake * NITRATE_PER_RESERVE).max(0.);
+        cell.nitrogen += uptake;
+    }
+}
+
 impl Simulation {
-    /// Diffuse mass across bonds from one common snapshot, then commit together.
-    /// Degree-normalized flow keeps the update a convex combination of existing
-    /// masses, so dense graphs cannot overdraw a donor or amplify total energy.
-    pub(super) fn exchange_bond_energy(&mut self, fraction: f64) {
+    pub(super) fn bond_degrees(&self) -> BTreeMap<u32, usize> {
+        let mut degree = BTreeMap::new();
+        for &(a, b) in &self.bonds {
+            *degree.entry(a).or_default() += 1;
+            *degree.entry(b).or_default() += 1;
+        }
+        degree
+    }
+
+    /// Diffuse mass and nitrogen across bonds from one common snapshot. Mass
+    /// moves toward the priority-weighted split. Degree normalization bounds
+    /// total outgoing flow even when a donor is surrounded by high priorities.
+    pub(super) fn exchange_bond_energy(&mut self, fraction: f64, degree: &BTreeMap<u32, usize>) {
         if self.bonds.is_empty() {
             return;
         }
@@ -22,36 +71,36 @@ impl Simulation {
             .map(|(entity, (cell, genome))| {
                 (
                     cell.id,
-                    (entity, cell.mass as f64, genome.mode(cell.mode).kind),
+                    (
+                        entity,
+                        f64::from(cell.mass),
+                        f64::from(cell.nitrogen),
+                        effective_priority(genome.mode(cell.mode), cell.mass),
+                    ),
                 )
             })
             .collect();
-        let mut degree = BTreeMap::<u32, usize>::new();
+        let fraction = fraction.clamp(0., 0.5);
+        let mut deltas = BTreeMap::<u32, (f64, f64)>::new();
         for &(a, b) in &self.bonds {
-            *degree.entry(a).or_default() += 1;
-            *degree.entry(b).or_default() += 1;
+            let (_, mass_a, nitrogen_a, priority_a) = bodies[&a];
+            let (_, mass_b, nitrogen_b, priority_b) = bodies[&b];
+            let share = fraction / degree[&a].max(degree[&b]) as f64;
+            let mass_flow = 2. * (mass_a * priority_b - mass_b * priority_a) * share
+                / (priority_a + priority_b);
+            let nitrogen_flow = (nitrogen_a - nitrogen_b) * share;
+            let (mass, nitrogen) = deltas.entry(a).or_default();
+            *mass -= mass_flow;
+            *nitrogen -= nitrogen_flow;
+            let (mass, nitrogen) = deltas.entry(b).or_default();
+            *mass += mass_flow;
+            *nitrogen += nitrogen_flow;
         }
-        let mut deltas = BTreeMap::<u32, f64>::new();
-        for &(a, b) in &self.bonds {
-            let (_, mass_a, kind_a) = bodies[&a];
-            let (_, mass_b, kind_b) = bodies[&b];
-            let mut flow =
-                (mass_a - mass_b) * fraction.clamp(0., 0.5) / degree[&a].max(degree[&b]) as f64;
-            // Fat cells have a strong nutrient priority: they absorb quickly and
-            // give stored lipids away only reluctantly.
-            let priority_a = priority(kind_a);
-            let priority_b = priority(kind_b);
-            if flow > 0. {
-                flow *= priority_b / priority_a;
-            } else {
-                flow *= priority_a / priority_b;
-            }
-            *deltas.entry(a).or_default() -= flow;
-            *deltas.entry(b).or_default() += flow;
-        }
-        for (id, delta) in deltas {
-            let (entity, mass, _) = bodies[&id];
-            self.world.get::<&mut Cell>(entity).unwrap().mass = (mass + delta) as f32;
+        for (id, (mass_delta, nitrogen_delta)) in deltas {
+            let (entity, mass, nitrogen, _) = bodies[&id];
+            let mut cell = self.world.get::<&mut Cell>(entity).unwrap();
+            cell.mass = (mass + mass_delta) as f32;
+            cell.nitrogen = (nitrogen + nitrogen_delta) as f32;
         }
     }
 
@@ -77,68 +126,4 @@ impl Simulation {
         }
         protected
     }
-
-    /// Diffuse signalling substances and cyanide along adhesion bonds.
-    /// Lipocytes insulate the connection, so a fat cell can separate circuits.
-    pub(super) fn exchange_bond_signals(&mut self, fraction: f64) {
-        if self.bonds.is_empty() {
-            return;
-        }
-        let bodies: BTreeMap<_, _> = self
-            .world
-            .query::<(&Cell, &Genome)>()
-            .iter()
-            .map(|(entity, (cell, genome))| {
-                (
-                    cell.id,
-                    (entity, genome.mode(cell.mode).kind, cell.signal, cell.toxin),
-                )
-            })
-            .collect();
-        let mut degree = BTreeMap::<u32, usize>::new();
-        for &(a, b) in &self.bonds {
-            *degree.entry(a).or_default() += 1;
-            *degree.entry(b).or_default() += 1;
-        }
-        let mut deltas = BTreeMap::<u32, [f32; 5]>::new();
-        for &(a, b) in &self.bonds {
-            let (_, kind_a, signal_a, toxin_a) = bodies[&a];
-            let (_, kind_b, signal_b, toxin_b) = bodies[&b];
-            if blocks_signals(kind_a) || blocks_signals(kind_b) {
-                continue;
-            }
-            let share = fraction.clamp(0., 0.45) as f32 / degree[&a].max(degree[&b]) as f32;
-            let mut flow = [0_f32; 5];
-            for (channel, value) in flow.iter_mut().take(4).enumerate() {
-                *value = (signal_a[channel] - signal_b[channel]) * share;
-            }
-            flow[4] = (toxin_a - toxin_b) * share * 0.5;
-            {
-                let delta = deltas.entry(a).or_default();
-                for (slot, value) in delta.iter_mut().zip(flow) {
-                    *slot -= value;
-                }
-            }
-            {
-                let delta = deltas.entry(b).or_default();
-                for (slot, value) in delta.iter_mut().zip(flow) {
-                    *slot += value;
-                }
-            }
-        }
-        for (id, delta) in deltas {
-            let (entity, _, mut signal, mut toxin) = bodies[&id];
-            for (value, change) in signal.iter_mut().zip(&delta[..4]) {
-                *value = (*value + change).clamp(-100., 100.);
-            }
-            toxin = (toxin + delta[4]).clamp(0., 100.);
-            let mut cell = self.world.get::<&mut Cell>(entity).unwrap();
-            cell.signal = signal;
-            cell.toxin = toxin;
-        }
-    }
-}
-
-fn priority(kind: u8) -> f64 {
-    if kind == LIPOCYTE { 6. } else { 1. }
 }

@@ -1,7 +1,7 @@
 //! Laboratory interventions, independent of genome and time controls.
 
 use super::Simulation;
-use crate::components::{Cell, Position};
+use crate::components::{Cell, INITIAL_NITROGEN, Position};
 use hecs::Entity;
 
 impl Simulation {
@@ -32,6 +32,7 @@ impl Simulation {
             .query_one_mut::<(&mut Cell, &mut Position)>(entity)
             .unwrap();
         cell.mass = (cell.mass + 1.).min(1_000_000.);
+        cell.nitrogen = INITIAL_NITROGEN;
         if matches!(self.boundary, super::boundary::Boundary::Circle) {
             (position.x, position.y, _) = self
                 .boundary

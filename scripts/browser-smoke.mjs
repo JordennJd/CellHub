@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {writeFile,mkdir} from 'node:fs/promises';
 import {verifyTouchControls} from './browser-touch.mjs';
-import {gpuCaptureSource,verifyRenderFixtures} from './browser-render-fixture.mjs';
+import {gpuCaptureSource,verifyRenderFixtures,verifyCellTypeFixtures} from './browser-render-fixture.mjs';
 await mkdir('work',{recursive:true});
 const cdp=process.env.CELLHUB_CDP_URL??'http://127.0.0.1:9224';
 const url=process.env.CELLHUB_URL??'http://127.0.0.1:5175';
@@ -18,6 +18,7 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const until=async expression=>{for(let i=0;i<200;i++){if(await evaluate(`Boolean(${expression})`))return;const error=await evaluate("document.querySelector('.toast.error,.error-message[role=alert]')?.textContent");if(error)throw Error(error);await delay(150);}throw Error(`Timeout: ${expression}`);};
 const click=async(text,scope='document')=>{assert(await evaluate(`(()=>{const b=[...${scope}.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true;})()`),`Missing enabled button: ${text}`);await delay(80);};
 const input=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(String(value))});el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
+const select=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing select');el.value=${JSON.stringify(String(value))};el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
 const screenshot=async path=>{const r=await call('Page.captureScreenshot',{format:'png'});await writeFile(path,Buffer.from(r.data,'base64'));};
 const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("document.querySelector('#mode-sandbox-title').closest('button').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
 const clickWorld=async(x,y,button='left')=>{const point=await evaluate(`(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();const z=Math.min(r.width,r.height)/3072*.93;return{x:r.x+r.width/2+(${x}-1536)*z,y:r.y+r.height/2+(${y}-1536)*z};})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button,clickCount:1,...point});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button,clickCount:1,...point});};
@@ -29,7 +30,7 @@ try{
  window.__cellhubFrames=0;const NativeWorker=window.Worker;
  window.Worker=class extends NativeWorker{
  postMessage(message,...args){if(message.type==='reset'||message.type==='restore'){window.__mainWorker=this;window.__cellhubFrame=null;}return super.postMessage(message,...args);}
- constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(this===window.__mainWorker&&data.type==='frame'){window.__cellhubFrame=data;window.__cellhubFrames++;}});}
+ constructor(...args){super(...args);this.addEventListener('message',({data})=>{if(data.type==='ready')this.threaded=data.threaded;if(this===window.__mainWorker&&data.type==='frame'){window.__cellhubFrame=data;window.__cellhubFrames++;}});}
  };`});
  await call('Page.navigate',{url});await until("document.querySelector('.home-shell')");
  assert.deepEqual(await evaluate("[...document.querySelectorAll('.home-mode-card')].map(button=>({title:button.querySelector('.home-mode-title').textContent,disabled:button.disabled}))"),[
@@ -37,6 +38,7 @@ try{
  ]);
  assert.equal(await evaluate("document.querySelectorAll('.future-section').length"),0);
  await screenshot('work/cellhub-home.png');await openSandbox();
+ assert.equal(await evaluate('window.__mainWorker.threaded'),await evaluate('crossOriginIsolated && navigator.hardwareConcurrency > 1'),'worker selects the matching WASM variant');
  const hasWebGPU=await evaluate("document.querySelector('.world canvas').dataset.renderer==='webgpu'");
  assert(await evaluate("!/(WASM|RUST|WebGPU|WebGL|SEED|experimental|Большие возможности|Маленькая жизнь)/.test(document.body.innerText)"));
  assert.equal(await evaluate('window.__cellhubFrame.stats[0]'),0);
@@ -69,12 +71,30 @@ try{
  assert.deepEqual(await evaluate('({cells:Array.from(window.__cellhubFrame.cells),stats:Array.from(window.__cellhubFrame.stats),terrain:Array.from(window.__cellhubFrame.terrain)})'),saved);
  await screenshot('work/cellhub-reopened-experiment.png');
  console.log('PASS: named saves, reset semantics, Home library reopen and exact world restoration');
- if(hasWebGPU)await verifyRenderFixtures({evaluate,delay});else console.log('SKIP: GPU pixel fixtures; browser uses WebGL fallback');
+ if(hasWebGPU){await verifyRenderFixtures({evaluate,delay});await verifyCellTypeFixtures(evaluate,'webgpu');}else console.log('SKIP: WebGPU pixel fixtures; browser uses WebGL fallback');
+ // Exercise an eighth-channel neuron through the real editor, worker and save route.
+ await click('Начать заново');await confirm();await until('window.__cellhubFrame?.cells.length===0');
+ await click('Геном',"document.querySelector('.tabs')");
+ await select('.genome-cell-type select',13);
+ await evaluate("(()=>{const label=[...document.querySelectorAll('.genome-cell-type')].find(el=>el.textContent.startsWith('Сигнальный канал'));const el=label.querySelector('select');el.value='7';el.dispatchEvent(new Event('change',{bubbles:true}));})()");
+ await input('input[aria-label="Выходной сигнал"]',-0.75);
+ await click('Поместить');await clickWorld(600,600);await until('window.__cellhubFrame?.cells.length===12');
+ await click('Один шаг');await until('window.__cellhubFrame.stats[0]===1');
+ assert.equal(await evaluate('window.__cellhubFrame.details[7]'),-0.75);
+ await click('Диагностика');await clickWorld(600,600);
+ await until("document.querySelector('.cell-details') && document.body.innerText.includes('S8')");
+ assert(await evaluate("[...document.querySelectorAll('.cell-details div')].some(row=>row.querySelector('dt')?.textContent==='S8'&&row.querySelector('dd')?.textContent==='-0.750')"));
+ const signalPlateName=`Eight signals ${suffix}`;
+ await click('Сохранить эксперимент');await input('[role=dialog] input',signalPlateName);await click('Сохранить',"document.querySelector('[role=dialog]')");await until("!document.querySelector('[role=dialog]')");
+ await click('← Меню');await confirm();await click('Открыть эксперимент');await until("document.querySelector('.library-list li')");
+ await evaluate(`(()=>{const item=[...document.querySelectorAll('.library-list li')].find(el=>el.querySelector('h3')?.textContent===${JSON.stringify(signalPlateName)});item.querySelector('button').click();})()`);
+ await until('window.__cellhubFrame?.details?.[7]===-0.75');
+ console.log('PASS: real editor S8 output, cell inspector and exact experiment reload');
  // Engine stress is isolated from the UI; no undocumented ?count entry route.
  await evaluate(`(async()=>{const m=await import('/frontend/wasm/simulation.js');await m.default();const s=new m.Simulation(42);try{const g=new Float32Array([0,8,0,0,.5,0,0,1000,1,0,0,0]);for(let i=0;i<20000;i++)s.spawn(20+(i%142)*21,20+Math.floor(i/142)*21,0,g);s.advance(1);if(s.snapshot().length!==240000||!Array.from(s.snapshot()).every(Number.isFinite))throw Error('Invalid 20000-cell fixture');}finally{s.free();}})()`);
  await click('← Меню');await confirm();
  await verifyTouchControls({call,evaluate,until,delay,screenshot,url,openSandbox,click});
  if(await evaluate("!!document.createElement('canvas').getContext('webgl2')")){
- await call('Page.navigate',{url:`${url}/?renderer=webgl`});await openSandbox();await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl'");await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');await screenshot('work/cellhub-webgl-laboratory.png');console.log('PASS: WebGL fallback through Home and laboratory');}
+ await call('Page.navigate',{url:`${url}/?renderer=webgl`});await openSandbox();await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl'");await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');await screenshot('work/cellhub-webgl-laboratory.png');await verifyCellTypeFixtures(evaluate,'webgl');console.log('PASS: WebGL fallback through Home and laboratory');}
  assert.deepEqual(errors,[]);
 }catch(error){console.error(JSON.stringify({errors,body:await evaluate('document.body.innerText')}));await screenshot('work/cellhub-integration-failure.png');throw error;}finally{ws.close();}

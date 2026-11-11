@@ -35,6 +35,8 @@ const addressReady = new Promise((resolve, reject) => {
   server.once("exit", (code) => reject(new Error(`server exited early (${code}):\n${output}`)));
 });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const CELL_STRIDE = 28;
+const TERRAIN_STRIDE = 6;
 const waitFor = async (predicate, label, timeout = 10_000) => {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -53,11 +55,12 @@ function decodeChunk(buffer) {
   const tileCount = view.getUint16(27, true);
   assert.equal(
     buffer.byteLength,
-    31 + cellCount * 48 + linkCount * 8 + tileCount * 16,
+    31 + cellCount * CELL_STRIDE * 4 + linkCount * 8 + tileCount * TERRAIN_STRIDE * 4,
     "chunk length",
   );
-  const cells = new Float32Array(cellCount * 12);
+  const cells = new Float32Array(cellCount * CELL_STRIDE);
   for (let i = 0; i < cells.length; i++) cells[i] = view.getFloat32(31 + i * 4, true);
+  const terrainOffset = 31 + cells.byteLength + linkCount * 8;
   return {
     tick: view.getUint32(1, true),
     population: view.getUint32(5, true),
@@ -65,7 +68,14 @@ function decodeChunk(buffer) {
     chunkY: view.getUint8(22),
     cells,
     terrainTiles: tileCount,
+    firstTileNitrates: tileCount > 0 ? view.getFloat32(terrainOffset + 4 * 4, true) : undefined,
   };
+}
+
+function cellRow(chunk, id) {
+  for (let i = 0; i < chunk.cells.length; i += CELL_STRIDE) {
+    if (chunk.cells[i] === id) return chunk.cells.subarray(i, i + CELL_STRIDE);
+  }
 }
 
 class Client {
@@ -137,7 +147,7 @@ try {
     () => first.messages.find((m) => m.type === "welcome"),
     "welcome",
   );
-  assert.equal(welcome.protocol, 1);
+  assert.equal(welcome.protocol, 3);
   assert.equal(welcome.host, true);
   const room = welcome.room.id;
 
@@ -154,11 +164,10 @@ try {
   await waitFor(() => first.chunks.length >= 40, "chunk stream", 15_000);
   const seen = new Set(first.chunks.map((chunk) => chunk.chunkY * 6 + chunk.chunkX));
   assert.equal(seen.size, 36, "a full sequential chunk cycle is delivered");
-  const withCell = first.chunks.find((chunk) =>
-    Array.from({ length: chunk.cells.length / 12 }, (_, i) => chunk.cells[i * 12]).includes(cellId),
-  );
+  const withCell = first.chunks.find((chunk) => cellRow(chunk, cellId));
   assert(withCell, "the authoritative cell appears in its chunk");
   assert(withCell.population >= 1);
+  assert(withCell.firstTileNitrates > 0, "the chunk includes substrate nitrates");
 
   second = new Client(url);
   await second.connect();
@@ -173,30 +182,31 @@ try {
   await waitFor(() => second.chunks.length >= 3, "second client chunks");
 
   const inspected = await second.command({ type: "inspect", id: cellId }, 4);
-  // Legacy input is normalized to the shared v4 genome ABI by the simulation.
-  assert.deepEqual(inspected.genome.slice(0, 2), [-4, 1]);
-  assert.equal(inspected.genome.length, 24);
+  // Legacy input is normalized to the shared v5 genome ABI by the simulation.
+  assert.deepEqual(inspected.genome.slice(0, 2), [-5, 1]);
+  assert.equal(inspected.genome.length, 104);
   genome.forEach((value, index) => assert(Math.abs(inspected.genome[index + 2] - value) < 1e-6,
     `shared genome field ${index} survives legacy normalization`));
-  assert.deepEqual(inspected.genome.slice(14), [0, 0, 0, 0, -1, -1, -1, 0, 0, 0]);
-  const otherGenome = Array.from({ length: 1 }, () => [
-    1, 2.4, 0, 0, 0.5, 0, 0.8, 1000, 1, 0, 0, 0,
-  ]).flat();
+  assert.deepEqual(inspected.genome.slice(14, 24), [0, 0, 0, 0, -1, -1, -1, -1, 1, 0]);
+  // The previous main used type 6 for Lipocyte and three signal fields.
+  const otherGenome = [-4, 1,
+    6, 2.4, 0, 0, 0.5, 0, 0.8, 1000, 0, 0, 0, 0,
+    0, 0, 0, 0, 1, 0, 0, 0, 0, 4.5,
+  ];
   const secondAck = await second.command(
     { type: "spawn", x: 700, y: 700, mode: 0, genome: otherGenome },
     5,
   );
   assert(secondAck.cell_id > 0 && secondAck.cell_id !== cellId);
-  await waitFor(
-    () =>
-      first.chunks.some((chunk) =>
-        Array.from({ length: chunk.cells.length / 12 }, (_, i) => chunk.cells[i * 12]).includes(
-          secondAck.cell_id,
-        ),
-      ),
+  const otherChunk = await waitFor(
+    () => first.chunks.find((chunk) => cellRow(chunk, secondAck.cell_id)),
     "second player's cell reaches the first client",
     15_000,
   );
+  const otherRow = cellRow(otherChunk, secondAck.cell_id);
+  assert.equal(otherRow[4], 7, "the previous main Lipocyte ID migrates to the current ID");
+  assert.equal(otherRow[12], 0xff0000, "the selected color is serialized separately from speed");
+  assert(otherRow[14] > 0 && otherRow[14] <= 1, "the cell reserve is included in the chunk");
 
   const before = second.messages.filter((m) => m.type === "world_reset").length;
   const resetAck = await first.command({ type: "reset" }, 2);
@@ -221,15 +231,8 @@ try {
   assert.notEqual(welcome3.room.id, room, "a new room gets a new id");
   assert.equal(welcome3.room.population, 0, "a new room starts empty");
   await waitFor(() => third.chunks.length >= 40, "third room chunk stream", 15_000);
-  const knownIds = new Set([cellId, secondAck.cell_id]);
   assert(
-    third.chunks.every(
-      (chunk) =>
-        !Array.from(
-          { length: chunk.cells.length / 12 },
-          (_, i) => chunk.cells[i * 12],
-        ).some((id) => knownIds.has(id)),
-    ),
+    third.chunks.every((chunk) => !cellRow(chunk, cellId) && !cellRow(chunk, secondAck.cell_id)),
     "existing cells do not leak into a new room",
   );
 

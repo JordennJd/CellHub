@@ -3,6 +3,8 @@ struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32
 @group(0) @binding(1) var terrain: texture_2d<f32>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
 @group(0) @binding(3) var atlas_sampler: sampler;
+@group(0) @binding(4) var material: texture_2d<f32>;
+@group(0) @binding(5) var material_sampler: sampler;
 
 fn corner(i:u32)->vec2f {
     let positions=array<vec2f,6>(vec2f(-1.,-1.),vec2f(1.,-1.),vec2f(-1.,1.),vec2f(-1.,1.),vec2f(1.,-1.),vec2f(1.,1.));
@@ -18,6 +20,9 @@ fn relative_luminance(color:vec3f)->f32 {
 fn over(base:vec4f,color:vec3f,a:f32)->vec4f {return vec4f(color*a,a)+base*(1.-a);}
 fn coverage(distance:f32)->f32 {let aa=max(fwidth(distance),0.001);return 1.-smoothstep(-aa*0.5,aa*0.5,distance);}
 fn dish_distance(world:vec2f)->f32 {return length(world-vec2f(1536.))-1536.;}
+fn grain(uv: vec2f) -> f32 {
+    return textureSample(material, material_sampler, uv).r - 0.5;
+}
 
 struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
 @vertex fn terrain_vs(@builtin(vertex_index) i:u32)->TerrainOut {
@@ -32,9 +37,15 @@ struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
     if camera.layer==1. {color=vec4f(mix(rgb(0x253e2bu),rgb(0xe7cf7du),clamp(t.x*0.65,0.,1.)),1.);}
     if camera.layer==2. {color=vec4f(mix(rgb(0x253e2bu),rgb(0xd28ce9u),clamp(t.y*0.65,0.,1.)),1.);}
     if camera.layer==3. {color=vec4f(mix(rgb(0x253e2bu),rgb(0x75d5bdu),clamp(t.z*0.65,0.,1.)),1.);}
+    if camera.layer==4. {color=vec4f(mix(rgb(0x253e2bu),rgb(0x88c4f0u),clamp(t.z*0.65,0.,1.)),1.);}
+    // World coordinates keep the surface grain still as the camera moves.
+    let mottling = grain(w / 224.) * select(0.34, 0.1, camera.layer > 0.);
+    color = vec4f(clamp(color.rgb + mottling * vec3f(0.78, 1., 0.84), vec3f(0.), vec3f(1.)), 1.);
     let food_center=vec2f(ij)*64.+vec2f(17.+f32(ij.y%3u)*9.,27.+f32(ij.x%3u)*7.);
-    let food=coverage(length(w-food_center)-1.8);
-    if t.z>0.15 {color=over(color,rgb(0xa5cf9bu),food*t.z*0.35*smoothstep(0.2,0.65,camera.zoom));}
+    // The center jumps at tile boundaries, so derive the pixel width from the continuous position.
+    let food_edge = 0.5 * max(length(fwidth(w)), 0.001);
+    let food = 1. - smoothstep(1.8 - food_edge, 1.8 + food_edge, length(w - food_center));
+    if camera.layer!=4. && t.z>0.15 {color=over(color,rgb(0xa5cf9bu),food*t.z*0.35*smoothstep(0.2,0.65,camera.zoom));}
     color=over(color,rgb(0x7b9889u),coverage(abs(distance+0.65/camera.zoom)-0.65/camera.zoom));
     return color*mask;
 }
@@ -56,188 +67,75 @@ struct CellOut {
     @location(5) @interpolate(flat) selected:u32,
     @location(6) @interpolate(flat) custom_color:f32,
     @location(7) world:vec2f,
+    @location(8) @interpolate(flat) material_phase:vec2f,
+    @location(9) @interpolate(flat) handedness:f32,
 }
 @vertex fn cell_vs(@builtin(vertex_index) v:u32,@location(0) a:vec4f,@location(1) b:vec4f,@location(2) c:vec4f)->CellOut {
     // id,x,y,radius, kind,mass,age,generation, mutations,angle,RGB,mirrored.
-    var o:CellOut;let radius=a.w;let extent=max(radius*2.+2./camera.zoom,radius+9./camera.zoom);o.local=corner(v)*extent;
-    o.world=a.yz+o.local;o.pos=project(o.world);o.radius=radius;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);o.custom_color=c.z;return o;
+    var o:CellOut;
+    let radius=a.w;
+    let extent=max(radius*2.+2./camera.zoom,radius+9./camera.zoom);
+    o.local=corner(v)*extent;
+    o.world=a.yz+o.local;
+    o.pos=project(o.world);
+    o.radius=radius;
+    o.kind=u32(b.x);
+    o.angle=c.y;
+    o.mutations=c.x;
+    o.selected=u32(a.x==camera.selected);
+    o.custom_color=c.z;
+    o.material_phase = fract(vec2f(0.38197, 0.61803) * f32(u32(abs(a.x)) % 251u));
+    o.handedness = select(1., -1., c.w > 0.);
+    return o;
 }
-fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a,v)/max(dot(v,v),0.0001),0.,1.);return length(p-a-v*t);}
-fn disc(p:vec2f,c:vec2f,radius:f32)->f32 {return coverage(length(p-c)-radius);}
-fn ring(p:vec2f,c:vec2f,radius:f32,width:f32)->f32 {return coverage(abs(length(p-c)-radius)-width);}
-fn stroke(p:vec2f,a:vec2f,b:vec2f,width:f32)->f32 {return coverage(segment_distance(p,a,b)-width);}
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
-    // Cell Lab's roster: every type keeps a distinct hue and organelle pattern.
-    let palette=array<u32,18>(
-        0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,
-        0xe8d17au,0x8fd8c0u,0xd4a6e8u,0x7bb98au,0xe6a26bu,0x9cc7e8u,
-        0xd98c9cu,0xc9b3e8u,0xa8c98au,0xe3b52eu,0xf2a6c4u,0x8ed0a1u);
+    let palette=array<u32,18>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,0x8ed6b3u,
+        0xe4b978u,0x8ebfe8u,0xccbd78u,0xb8a0e5u,0xa7cbe6u,0xe68fa1u,0xb89ce0u,0xdca18cu,0x9ed8bdu,0xe7c893u,0x88c9c3u);
     var color=rgb(palette[min(o.kind,17u)]);
     if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
-    let r=o.radius;let local=o.local;let d=length(local);
-    let direction=vec2f(cos(o.angle),sin(o.angle));
-    let side=vec2f(-direction.y,direction.x);
-    let width=max(r*0.045,0.8/camera.zoom);
+    let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
     let halo=coverage(d-r-1./camera.zoom);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.6/camera.zoom);
+    let mutation=coverage(length(o.local-vec2f(r*0.55,-r*0.55))-2.);
     let selection=coverage(abs(d-r-4./camera.zoom)-0.75/camera.zoom);
+    // Type markings rotate and mirror with the cell, while the custom RGB
+    // continues to tint the membrane and cytoplasm.
+    let radial = o.local / max(r, 0.001);
+    let side = vec2f(-direction.y, direction.x) * o.handedness;
+    let p = vec2f(dot(radial, direction), dot(radial, side));
+    let aa = clamp(0.5 * length(fwidth(radial)), 0.001, 0.5);
+    let appendages = marking_coverage(appendage_distance(o.kind, p), aa);
+    let internal_marks = marking_coverage(interior_distance(o.kind, p), aa);
+    let nucleus = marking_coverage(nucleus_distance(o.kind, p), aa);
+    let patch_grain = grain(p * 0.68 + o.material_phase) * 0.17;
+    let cytoplasm = 0.34 - 0.08 * min(dot(radial, radial), 1.);
     // Keep custom body RGB; lift only details that fall below 3:1 against the dish.
     var ink=color;
     let minimum_ink_luminance=3.*(relative_luminance(rgb(0x253e2bu))+0.05)-0.05;
     if o.custom_color>=0. && relative_luminance(color)<minimum_ink_luminance {ink=rgb(0xdce6dcu);}
-    let accent=mix(ink,vec3f(1.),0.45);
-    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*0.22);out=over(out,ink,outline);
-    // A faint shared nucleus anchors every type; the organelle below tells them apart.
-    out=over(out,ink,coverage(length(local-direction*r*0.18)-r*0.28)*0.28);
-    if o.kind==0u {
-        // Photocyte: chloroplasts in a ring.
-        for (var i=0;i<5;i++) {
-            let a=f32(i)*1.256637+0.35;
-            let p=vec2f(cos(a),sin(a))*r*0.5;
-            let size=max(r*0.11,1.2/camera.zoom);
-            out=over(out,accent,disc(local,p,size)*0.55);
-            out=over(out,ink,ring(local,p,size,width*0.45)*0.8);
-        }
+    var out = over(vec4f(0.), color, halo * 0.08);
+    out = over(out, color, body * cytoplasm);
+    if o.kind == 0u {
+        let chloroplasts = marking_coverage(chloroplast_distance(p) + patch_grain, aa);
+        out = over(out, rgb(0x57a73fu), chloroplasts * body * 0.88);
     }
-    if o.kind==1u {
-        // Phagocyte: food vacuoles and a feeding mouth.
-        for (var i=0;i<3;i++) {
-            let a=f32(i)*2.094395+0.5;
-            let p=direction*r*0.32+vec2f(cos(a),sin(a))*r*0.35;
-            out=over(out,accent,disc(local,p,r*0.16)*0.32);
-            out=over(out,ink,ring(local,p,r*0.16,width*0.7)*0.85);
-        }
-        out=over(out,ink,stroke(local,direction*r*0.88+side*r*0.3,direction*r*0.88-side*r*0.3,width)*0.9);
+    if o.kind == 4u {
+        let inner_membrane = marking_coverage(abs(length(radial) - 0.72) - 0.05, aa);
+        out = over(out, ink, inner_membrane * 0.8);
     }
-    if o.kind==2u {
-        // Flagellocyte: a two-joint flagellum trails the body.
-        let base=-direction*r;
-        let middle=-direction*r*1.45+side*r*0.22;
-        let tip=-direction*r*1.9-side*r*0.12;
-        out=over(out,ink,stroke(local,base,middle,max(width,0.7/camera.zoom))*0.95);
-        out=over(out,ink,stroke(local,middle,tip,max(width,0.7/camera.zoom))*0.95);
-        out=over(out,accent,disc(local,base,r*0.11)*0.6);
+    if o.kind == 7u {
+        let lipid = marking_coverage(length(p) - 0.69, aa);
+        out = over(out, mix(rgb(0xa77c51u), color, 0.28), lipid * 0.85);
     }
-    if o.kind==3u {
-        // Virocyte: a crown of infectivity spikes.
-        for (var i=0;i<8;i++) {
-            let a=f32(i)*0.785398;
-            let dirv=direction*cos(a)+side*sin(a);
-            out=over(out,ink,stroke(local,dirv*r*0.94,dirv*r*1.22,width*0.8)*0.85);
-        }
-        out=over(out,ink,ring(local,vec2f(0.),r*0.56,width*0.5)*0.5);
+    if o.kind == 15u {
+        let first = marking_coverage(stem_lobe_distance(p), aa);
+        let second = marking_coverage(stem_lobe_distance(-p), aa);
+        out = over(out, mix(ink, rgb(0xdf7777u), 0.55), first * body * 0.85);
+        out = over(out, mix(ink, rgb(0x79a9e1u), 0.55), second * body * 0.85);
     }
-    if o.kind==4u {
-        // Keratinocyte: a thick armour shell and inner plates.
-        out=over(out,ink,ring(local,vec2f(0.),r*0.72,width)*0.8);
-        out=over(out,ink,ring(local,vec2f(0.),r+2.4/camera.zoom,0.8/camera.zoom)*0.55);
-        for (var i=0;i<6;i++) {
-            let a=f32(i)*1.047198+0.52;
-            out=over(out,ink,disc(local,vec2f(cos(a),sin(a))*r*0.72,max(r*0.06,0.9/camera.zoom))*0.7);
-        }
-    }
-    if o.kind==5u {
-        // Devorocyte: a wide jaw and a digesting stomach.
-        out=over(out,ink,stroke(local,direction*r*0.25+side*r*0.42,direction*r*0.82,width)*0.95);
-        out=over(out,ink,stroke(local,direction*r*0.25-side*r*0.42,direction*r*0.82,width)*0.95);
-        out=over(out,ink,ring(local,vec2f(0.),r*0.55,width*0.65)*0.6);
-    }
-    if o.kind==6u {
-        // Lipocyte: one oversized fat vacuole.
-        let p=-direction*r*0.08;
-        out=over(out,accent,disc(local,p,r*0.55)*0.25);
-        out=over(out,ink,ring(local,p,r*0.55,width)*0.9);
-        out=over(out,accent,disc(local,p-direction*r*0.18,r*0.12)*0.35);
-    }
-    if o.kind==7u {
-        // Buoyocyte: a gas vesicle with a highlight.
-        out=over(out,accent,disc(local,vec2f(0.),r*0.46)*0.3);
-        out=over(out,ink,ring(local,vec2f(0.),r*0.46,width)*0.9);
-        out=over(out,accent,disc(local,vec2f(-r*0.14,r*0.16),r*0.1)*0.5);
-    }
-    if o.kind==8u {
-        // Glueocyte: adhesive knobs around the membrane.
-        for (var i=0;i<6;i++) {
-            let a=f32(i)*1.047198;
-            let dirv=direction*cos(a)+side*sin(a);
-            out=over(out,ink,disc(local,dirv*r*1.08,max(r*0.09,1./camera.zoom))*0.9);
-        }
-        out=over(out,ink,ring(local,vec2f(0.),r*0.5,width*0.55)*0.45);
-    }
-    if o.kind==9u {
-        // Nitrocyte: nitrogen-fixing nodules.
-        for (var i=0;i<4;i++) {
-            let a=f32(i)*1.570796+0.785398;
-            out=over(out,ink,disc(local,vec2f(cos(a),sin(a))*r*0.45,r*0.1)*0.85);
-        }
-        out=over(out,ink,ring(local,vec2f(0.),r*0.62,width*0.45)*0.45);
-    }
-    if o.kind==10u {
-        // Stereocyte: two directional eyes wired to the centre.
-        let eye_a=direction*r*0.4+side*r*0.42;
-        let eye_b=direction*r*0.4-side*r*0.42;
-        out=over(out,accent,disc(local,eye_a,r*0.15)*0.4);
-        out=over(out,ink,ring(local,eye_a,r*0.15,width*0.75)*0.9);
-        out=over(out,accent,disc(local,eye_b,r*0.15)*0.4);
-        out=over(out,ink,ring(local,eye_b,r*0.15,width*0.75)*0.9);
-        out=over(out,ink,stroke(local,direction*r*0.15,eye_a,width*0.45)*0.5);
-        out=over(out,ink,stroke(local,direction*r*0.15,eye_b,width*0.45)*0.5);
-    }
-    if o.kind==11u {
-        // Senseocyte: a single lens with a receiving ring.
-        let p=direction*r*0.42;
-        out=over(out,accent,disc(local,p,r*0.2)*0.3);
-        out=over(out,ink,ring(local,p,r*0.2,width*0.75)*0.9);
-        out=over(out,ink,disc(local,p,r*0.07)*0.9);
-        out=over(out,ink,ring(local,p,r*0.34,width*0.45)*0.45);
-    }
-    if o.kind==12u {
-        // Myocyte: parallel contractile fibres.
-        for (var i:i32=-2;i<=2;i=i+1) {
-            let offset=f32(i)*r*0.22;
-            out=over(out,ink,stroke(local,-direction*r*0.55+side*offset,direction*r*0.55+side*offset,width*0.55)*0.8);
-        }
-    }
-    if o.kind==13u {
-        // Neurocyte: soma, axon and two terminal branches.
-        let start=-direction*r*0.05;
-        let end=-direction*r*1.22;
-        out=over(out,ink,stroke(local,start,end,max(width,0.8/camera.zoom))*0.9);
-        out=over(out,ink,stroke(local,end,end+side*r*0.3-direction*r*0.18,width*0.65)*0.9);
-        out=over(out,ink,stroke(local,end,end-side*r*0.3-direction*r*0.18,width*0.65)*0.9);
-        out=over(out,accent,disc(local,direction*r*0.1,r*0.18)*0.4);
-    }
-    if o.kind==14u {
-        // Secrocyte: secretory vesicles feeding a duct.
-        for (var i=0;i<3;i++) {
-            let a=f32(i)*2.094395+0.5;
-            let p=direction*r*0.3+vec2f(cos(a),sin(a))*r*0.3;
-            out=over(out,accent,disc(local,p,r*0.13)*0.45);
-            out=over(out,ink,ring(local,p,r*0.13,width*0.65)*0.85);
-        }
-        out=over(out,ink,stroke(local,direction*r*0.55,direction*r*0.9,width*0.55)*0.7);
-    }
-    if o.kind==15u {
-        // Stemocyte: a large, pale nucleus ready to differentiate.
-        out=over(out,accent,disc(local,vec2f(0.),r*0.38)*0.28);
-        out=over(out,ink,ring(local,vec2f(0.),r*0.38,width)*0.9);
-        out=over(out,ink,disc(local,-direction*r*0.08,r*0.16)*0.8);
-    }
-    if o.kind==16u {
-        // Gamete: a hooked mating tail and a pronucleus.
-        out=over(out,ink,stroke(local,-direction*r*0.7,-direction*r*1.35+side*r*0.42,max(width,0.7/camera.zoom))*0.9);
-        out=over(out,accent,disc(local,direction*r*0.25,r*0.14)*0.5);
-        out=over(out,ink,ring(local,vec2f(0.),r*0.6,width*0.45)*0.4);
-    }
-    if o.kind==17u {
-        // Ciliocyte: a comb of beating cilia around the rim.
-        for (var i=0;i<12;i++) {
-            let a=f32(i)*0.523599;
-            let dirv=direction*cos(a)+side*sin(a);
-            out=over(out,ink,stroke(local,dirv*r,dirv*r*1.18,width*0.65)*0.85);
-        }
-        out=over(out,ink,ring(local,vec2f(0.),r*0.55,width*0.45)*0.45);
-    }
-    let mutation=coverage(length(local-vec2f(r*0.55,-r*0.55))-2.);
+    out = over(out, ink, internal_marks * body * 0.85);
+    out = over(out, ink, appendages);
+    out = over(out, ink, outline);
+    out = over(out, ink, nucleus * 0.9);
     if o.mutations>0. {out=over(out,vec3f(1.),mutation);}
     if o.selected!=0u {out=over(out,vec3f(1.),selection);}
     out*=coverage(dish_distance(o.world));

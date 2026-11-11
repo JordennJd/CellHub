@@ -4,6 +4,7 @@ use super::backend::Backend;
 use super::error::error;
 use super::gpu::{ATTRIBUTES, CELL_STRIDE, LINK_ATTRIBUTES, LINK_STRIDE, buffer, pipeline};
 use super::labels::{ATLAS_HEIGHT, ATLAS_WIDTH, rasterize_labels};
+use super::material;
 use crate::scene_data::{CELL_VALUES, pack_links};
 use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
@@ -34,6 +35,7 @@ pub(super) struct RendererState {
     link_capacity: u64,
     link_count: u32,
     atlas: wgpu::Texture,
+    material: wgpu::Texture,
     view: [f32; 8],
     dirty: bool,
     destroyed: bool,
@@ -208,6 +210,17 @@ impl RendererState {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let material = material::texture(&device, &queue);
+        let material_view = material.create_view(&Default::default());
+        let material_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("material grain"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let bindings = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("scene bindings"),
             entries: &[
@@ -247,6 +260,22 @@ impl RendererState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -269,6 +298,14 @@ impl RendererState {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&material_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&material_sampler),
+                },
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -278,7 +315,14 @@ impl RendererState {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("CellHub WGSL"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("../scene.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                concat!(
+                    include_str!("../cell_shapes.wgsl"),
+                    "\n",
+                    include_str!("../scene.wgsl")
+                )
+                .into(),
+            ),
         });
         let terrain_pipeline = pipeline(
             &device,
@@ -354,6 +398,7 @@ impl RendererState {
             link_capacity,
             link_count: 0,
             atlas,
+            material,
             view,
             dirty: true,
             destroyed: false,
@@ -548,6 +593,7 @@ impl RendererState {
             self.links.destroy();
             self.uniform.destroy();
             self.atlas.destroy();
+            self.material.destroy();
             self.device.destroy();
         }
     }

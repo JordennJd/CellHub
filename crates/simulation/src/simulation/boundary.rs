@@ -29,7 +29,7 @@ impl Boundary {
                 let center = SIZE / 2.;
                 let dx = x - center;
                 let dy = y - center;
-                let distance = dx.hypot(dy);
+                let distance = libm::hypotf(dx, dy);
                 let limit = (center - radius(mass).max(square_margin)).max(0.);
                 if distance > limit {
                     let scale = limit / distance;

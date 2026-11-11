@@ -9,12 +9,14 @@ mod state;
 mod ws;
 
 use axum::Router;
+use axum::http::{HeaderName, HeaderValue};
 use axum::routing::get;
 use state::AppState;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -37,6 +39,14 @@ async fn main() {
             ServeDir::new(&config.static_dir).not_found_service(ServeFile::new(index)),
         )
         .with_state(Arc::clone(&state))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("cross-origin-embedder-policy"),
+            HeaderValue::from_static("require-corp"),
+        ))
         .layer(TraceLayer::new_for_http());
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
