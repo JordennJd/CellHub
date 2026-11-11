@@ -5,7 +5,7 @@ use super::boundary::Boundary;
 use super::interactions::{Components, for_each_island};
 use super::program::{BENDING_TARGET, CONTRACTION_TARGET, LIFT_TARGET, controlled_value};
 use crate::cell_types::{BUOYOCYTE, MYOCYTE, is_motile};
-use crate::components::{Cell, Position, radius};
+use crate::components::{Cell, MAX_RECOIL_MOMENTUM, Position, radius};
 use crate::genome::Genome;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet};
@@ -354,6 +354,7 @@ impl Simulation {
                     position: p,
                     parent: parents.get(id).copied(),
                     mass: cell.mass,
+                    recoil: cell.recoil,
                     anchored: cell.anchored,
                     muscle,
                     driven: is_motile(mode.kind)
@@ -386,9 +387,17 @@ impl Simulation {
             islands[a.island].edges.push((a.index, b.index));
         }
         let boundary = self.boundary;
-        for_each_island(&mut islands, active, |island| island.solve(boundary));
+        for_each_island(&mut islands, active, |island| {
+            island.solve(boundary);
+            island.share_recoil();
+        });
         for body in islands.into_iter().flat_map(|island| island.bodies) {
-            *self.world.get::<&mut Position>(body.entity).unwrap() = body.position;
+            let (position, cell) = self
+                .world
+                .query_one_mut::<(&mut Position, &mut Cell)>(body.entity)
+                .unwrap();
+            *position = body.position;
+            cell.recoil = body.recoil;
         }
     }
 }
@@ -403,6 +412,7 @@ struct BondBody {
     position: Position,
     parent: Option<(u32, Position)>,
     mass: f32,
+    recoil: [f32; 2],
     anchored: bool,
     muscle: [f32; 3],
     driven: bool,
@@ -427,6 +437,35 @@ impl BondBody {
 }
 
 impl BondIsland {
+    fn share_recoil(&mut self) {
+        if !self.bodies.iter().any(|body| body.recoil != [0.; 2]) {
+            return;
+        }
+        // Adhesion transmits translational recoil across the whole organism.
+        // An anchor absorbs that momentum into the dish.
+        let mut momentum = [0.; 2];
+        let mut mass = 0.;
+        for body in &self.bodies {
+            if body.anchored {
+                momentum = [0.; 2];
+                break;
+            }
+            mass += f64::from(body.mass);
+            momentum[0] += f64::from(body.recoil[0]);
+            momentum[1] += f64::from(body.recoil[1]);
+        }
+        let velocity = if mass > 0. {
+            momentum.map(|value| value / mass)
+        } else {
+            [0.; 2]
+        };
+        let limit = f64::from(MAX_RECOIL_MOMENTUM);
+        for body in &mut self.bodies {
+            body.recoil =
+                velocity.map(|value| (value * f64::from(body.mass)).clamp(-limit, limit) as f32);
+        }
+    }
+
     fn solve(&mut self, boundary: Boundary) {
         if self.solve_passive_path(boundary) {
             return;

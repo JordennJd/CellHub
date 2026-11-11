@@ -95,6 +95,7 @@ mod tests {
             id: 1,
             mode: 0,
             mass: 2.,
+            recoil: [0.; 2],
             nitrogen: 0.5,
             age: 3.,
             generation: 0,

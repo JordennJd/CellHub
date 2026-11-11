@@ -8,13 +8,17 @@ use crate::cell_types::{
     BUOYOCYTE, COUNT, FLAGELLOCYTE, GAMETE, KERATINOCYTE, LIPOCYTE, PHAGOCYTE, PHOTOCYTE,
 };
 use crate::components::{
-    Cell, LIMIT, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position, radius,
+    Cell, LIMIT, MAX_RECOIL_MOMENTUM, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION,
+    Position, radius,
 };
 use crate::genome::Genome;
 use crate::terrain::tile_index;
 use std::collections::{BTreeMap, HashSet};
 
 const STEP: f32 = 1. / 30.;
+const MIN_CELL_MASS: f32 = 0.18;
+const DIVISION_SEPARATION_SPEED: f32 = 100.;
+const RECOIL_DRAG: f32 = 4.;
 
 impl Simulation {
     pub(super) fn step(&mut self) {
@@ -35,6 +39,7 @@ impl Simulation {
         let mut divisions = BTreeMap::new();
         let settings = self.settings;
         let passive_drift = settings.vertical_drift();
+        let recoil_decay = libm::expf(-RECOIL_DRAG * settings.viscosity * STEP);
         let mut paths = Vec::with_capacity(population);
         for &(_, e) in &entities {
             let noise = self.random();
@@ -104,10 +109,15 @@ impl Simulation {
             } else {
                 passive_drift
             };
-            let next_x = p.x + libm::cosf(p.angle) * speed * STEP / settings.viscosity;
-            let next_y = p.y
+            let mut next_x = p.x + libm::cosf(p.angle) * speed * STEP / settings.viscosity;
+            let mut next_y = p.y
                 + libm::sinf(p.angle) * speed * STEP / settings.viscosity
                 + vertical_drift * STEP;
+            if c.recoil != [0.; 2] {
+                let scale = STEP / c.mass.max(MIN_CELL_MASS);
+                next_x += c.recoil[0] * scale;
+                next_y += c.recoil[1] * scale;
+            }
             let (x, y, reached_edge) = if c.anchored {
                 (p.x, p.y, false)
             } else {
@@ -115,7 +125,12 @@ impl Simulation {
             };
             p.x = x;
             p.y = y;
-            if c.mass < 0.18
+            if c.anchored || reached_edge {
+                c.recoil = [0.; 2];
+            } else {
+                c.recoil = c.recoil.map(|momentum| momentum * recoil_decay);
+            }
+            if c.mass < MIN_CELL_MASS
                 || c.nitrogen < NITROGEN_DEATH
                 || c.toxin >= 1.
                 || c.injury >= 1.
@@ -171,6 +186,8 @@ impl Simulation {
                 );
                 a.mass = total * m.ratio;
                 b.mass = total * (1. - m.ratio);
+                a.recoil = c.recoil.map(|momentum| momentum * m.ratio);
+                b.recoil = c.recoil.map(|momentum| momentum * (1. - m.ratio));
                 a.nitrogen = c.nitrogen * 0.5;
                 b.nitrogen = a.nitrogen;
                 a.mode = m.child_a;
@@ -191,17 +208,32 @@ impl Simulation {
                 // A daughter's own mirror flag applies to her next division.
                 let handedness = if c.mirrored { -1. } else { 1. };
                 let angle = p.angle + m.angle * handedness;
-                let distance = (radius(a.mass) + radius(b.mass) + ADHESION_GAP) / 2.;
                 let (sin, cos) = libm::sincosf(angle);
+                let span = radius(a.mass) + radius(b.mass) + ADHESION_GAP;
+                let (distance_a, distance_b) = if m.bind_children {
+                    (span / 2., span / 2.)
+                } else {
+                    // Reduced mass times relative speed gives equal and opposite
+                    // momenta, with the lighter daughter moving faster.
+                    let impulse = a.mass * (1. - m.ratio) * DIVISION_SEPARATION_SPEED;
+                    for (component, axis) in [cos, sin].into_iter().enumerate() {
+                        let momentum = impulse * axis;
+                        a.recoil[component] = (a.recoil[component] + momentum)
+                            .clamp(-MAX_RECOIL_MOMENTUM, MAX_RECOIL_MOMENTUM);
+                        b.recoil[component] = (b.recoil[component] - momentum)
+                            .clamp(-MAX_RECOIL_MOMENTUM, MAX_RECOIL_MOMENTUM);
+                    }
+                    (span * (1. - m.ratio), span * m.ratio)
+                };
                 let (ax, ay, _) = self.boundary.constrain(
-                    p.x + cos * distance,
-                    p.y + sin * distance,
+                    p.x + cos * distance_a,
+                    p.y + sin * distance_a,
                     a.mass,
                     12.,
                 );
                 let (bx, by, _) = self.boundary.constrain(
-                    p.x - cos * distance,
-                    p.y - sin * distance,
+                    p.x - cos * distance_b,
+                    p.y - sin * distance_b,
                     b.mass,
                     12.,
                 );

@@ -321,6 +321,148 @@ fn minimum_age_prevents_instant_division_after_boost() {
     assert!(s.world.query::<&Cell>().iter().all(|(_, c)| c.age == 0.));
 }
 
+fn recoil_fixture(bind_children: bool, keep_a: bool) -> (Simulation, u32, Vec<f32>) {
+    let mut sim = quiet_world();
+    sim.configure_environment(super::environment::Environment {
+        light: 0.,
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let passive = Mode {
+        can_divide: false,
+        speed: 0.,
+        ..Mode::default()
+    };
+    let genes = Genome::from_modes(vec![
+        Mode {
+            can_divide: true,
+            threshold: 1.,
+            speed: 0.,
+            angle: 0.,
+            ratio: 0.75,
+            child_a: 1,
+            child_b: 1,
+            bind_children,
+            keep_a,
+            ..Mode::default()
+        },
+        passive,
+    ])
+    .values();
+    let parent = sim.spawn(500., 500., 0, &genes).unwrap();
+    sim.boost_cell(parent).unwrap();
+    (sim, parent, genes)
+}
+
+#[test]
+fn unbound_division_gives_unequal_daughters_equal_and_opposite_momentum() {
+    let (mut sim, _, _) = recoil_fixture(false, false);
+    sim.advance(15);
+    assert_eq!(sim.world.len(), 2);
+    let a = entity(&sim, 2);
+    let b = entity(&sim, 3);
+    let position = |sim: &Simulation, cell| *sim.world.get::<&Position>(cell).unwrap();
+    let (a_before, b_before) = (position(&sim, a), position(&sim, b));
+    let a_recoil = {
+        let a = sim.world.get::<&Cell>(a).unwrap();
+        let b = sim.world.get::<&Cell>(b).unwrap();
+        assert!(a.mass > b.mass);
+        for (a_pos, b_pos) in [(a_before.x, b_before.x), (a_before.y, b_before.y)] {
+            let center = (a_pos * a.mass + b_pos * b.mass) / (a.mass + b.mass);
+            assert!((center - 500.).abs() < 0.0001);
+        }
+        assert_eq!(a.recoil, b.recoil.map(|value| -value));
+        assert!(
+            a.recoil[0] * (a_before.x - b_before.x) + a.recoil[1] * (a_before.y - b_before.y) > 0.
+        );
+        a.recoil
+    };
+
+    sim.advance(1);
+
+    let (a_after, b_after) = (position(&sim, a), position(&sim, b));
+    let forward = (a_after.x - a_before.x) * a_recoil[0] + (a_after.y - a_before.y) * a_recoil[1];
+    let backward = (b_before.x - b_after.x) * a_recoil[0] + (b_before.y - b_after.y) * a_recoil[1];
+    assert!(
+        backward > forward && forward > 0.,
+        "lighter daughter moves farther"
+    );
+    let damped = sim.world.get::<&Cell>(a).unwrap().recoil;
+    assert!(
+        libm::hypotf(damped[0], damped[1]) < libm::hypotf(a_recoil[0], a_recoil[1]),
+        "viscosity damps recoil"
+    );
+}
+
+#[test]
+fn bound_sisters_share_parent_velocity_without_new_recoil() {
+    for momentum in [[0., 0.], [0.4, -0.2]] {
+        let (mut sim, parent, _) = recoil_fixture(true, false);
+        sim.advance(14);
+        sim.world
+            .get::<&mut Cell>(entity(&sim, parent))
+            .unwrap()
+            .recoil = momentum;
+        sim.advance(1);
+        assert_eq!(sim.links(), vec![2, 3]);
+        let a = sim.world.get::<&Cell>(entity(&sim, 2)).unwrap();
+        let b = sim.world.get::<&Cell>(entity(&sim, 3)).unwrap();
+        if momentum == [0.; 2] {
+            assert_eq!(a.recoil, momentum);
+            assert_eq!(b.recoil, momentum);
+        } else {
+            for (component, initial) in momentum.into_iter().enumerate() {
+                let a_speed = a.recoil[component] / a.mass;
+                let b_speed = b.recoil[component] / b.mass;
+                assert!(a_speed * initial > 0.);
+                assert!((a_speed - b_speed).abs() < 0.00001);
+            }
+        }
+    }
+}
+
+#[test]
+fn ejection_moves_the_retained_organism_through_its_adhesive_bond() {
+    let divided = || {
+        let (mut sim, parent, genes) = recoil_fixture(false, true);
+        let neighbor = sim.spawn(522., 500., 1, &genes).unwrap();
+        sim.bonds.insert((parent, neighbor));
+        sim.world
+            .get::<&mut Position>(entity(&sim, parent))
+            .unwrap()
+            .angle = 0.;
+        sim.advance(15);
+        assert_eq!(sim.links(), vec![neighbor, 3]);
+        (sim, neighbor)
+    };
+    let (mut recoiling, neighbor) = divided();
+    let (mut control, _) = divided();
+    for (_, cell) in control.world.query_mut::<&mut Cell>() {
+        cell.recoil = [0.; 2];
+    }
+    let x = |sim: &Simulation, id| sim.world.get::<&Position>(entity(sim, id)).unwrap().x;
+    recoiling.advance(5);
+    control.advance(5);
+    assert_eq!(recoiling.links(), vec![neighbor, 3]);
+    assert!(x(&recoiling, neighbor) > x(&control, neighbor));
+    assert!(x(&recoiling, 3) > x(&control, 3));
+    assert!(x(&recoiling, 4) < x(&control, 4));
+    let neighbor_entity = entity(&recoiling, neighbor);
+    assert!(
+        recoiling
+            .world
+            .get::<&Cell>(neighbor_entity)
+            .unwrap()
+            .recoil[0]
+            > 0.
+    );
+    recoiling.remove_cell(3).unwrap();
+    let before = x(&recoiling, neighbor);
+    recoiling.advance(1);
+    assert!(x(&recoiling, neighbor) > before);
+}
+
 #[test]
 fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mut s = quiet_world();
