@@ -1,5 +1,6 @@
 //! Tile-owned metabolism jobs, independent of ECS mutation and division order.
 use super::Simulation;
+use super::interactions::ContactMotion;
 use super::program::{SPEED_TARGET, controlled_value};
 use super::specialized::{buoyant_drift, corpse_food, differentiate};
 use super::step::STEP;
@@ -13,7 +14,7 @@ use crate::terrain::index;
 use std::collections::BTreeMap;
 
 const MIN_CELL_MASS: f32 = 0.18;
-const RECOIL_DRAG: f32 = 4.;
+const MOMENTUM_DRAG: f32 = 4.;
 
 impl Simulation {
     pub(super) fn metabolize(
@@ -26,7 +27,7 @@ impl Simulation {
         let grid = (self.boundary.size() / 64.) as usize;
         let chaos = self.chaos.is_some();
         let passive_drift = settings.vertical_drift();
-        let recoil_decay = libm::expf(-RECOIL_DRAG * settings.viscosity * STEP);
+        let momentum_decay = libm::expf(-MOMENTUM_DRAG * settings.viscosity * STEP);
         let mut scratch = std::mem::take(&mut self.metabolism);
         // Dense ECS indices map directly to stable commit slots. Random draws
         // follow the existing ID-ordered entity list, regardless of ECS layout.
@@ -56,8 +57,10 @@ impl Simulation {
                     order,
                     tile: index(p.x, p.y, grid),
                     result: MetabolismResult {
-                        start: *p,
-                        end: *p,
+                        motion: ContactMotion {
+                            path: [*p; 2],
+                            drive: [0.; 2],
+                        },
                         division: None,
                         died: false,
                     },
@@ -161,10 +164,10 @@ impl Simulation {
                 } else {
                     passive_drift
                 };
-                let mut next_x = p.x + libm::cosf(p.angle) * speed * STEP / settings.viscosity;
-                let mut next_y = p.y
-                    + libm::sinf(p.angle) * speed * STEP / settings.viscosity
-                    + vertical_drift * STEP;
+                let drive_x = libm::cosf(p.angle) * speed * STEP / settings.viscosity;
+                let drive_y = libm::sinf(p.angle) * speed * STEP / settings.viscosity;
+                let mut next_x = p.x + drive_x;
+                let mut next_y = p.y + drive_y + vertical_drift * STEP;
                 if c.recoil != [0.; 2] {
                     let scale = STEP / c.mass.max(MIN_CELL_MASS);
                     next_x += c.recoil[0] * scale;
@@ -180,7 +183,7 @@ impl Simulation {
                 if c.anchored || reached_edge {
                     c.recoil = [0.; 2];
                 } else {
-                    c.recoil = c.recoil.map(|momentum| momentum * recoil_decay);
+                    c.recoil = c.recoil.map(|momentum| momentum * momentum_decay);
                 }
                 let died = c.mass < MIN_CELL_MASS
                     || c.nitrogen < NITROGEN_DEATH
@@ -192,8 +195,14 @@ impl Simulation {
                 if died {
                     corpse_food(t, c, m.kind);
                 }
-                item.result.start = start;
-                item.result.end = *p;
+                item.result.motion = ContactMotion {
+                    path: [start, *p],
+                    drive: if c.anchored || reached_edge {
+                        [0.; 2]
+                    } else {
+                        [drive_x / STEP, drive_y / STEP + vertical_drift]
+                    },
+                };
                 item.result.died = died;
                 if !died
                     && m.can_divide
@@ -213,15 +222,13 @@ impl Simulation {
         scratch
             .results
             .resize_with(population, || MetabolismResult {
-                start: Position {
-                    x: 0.,
-                    y: 0.,
-                    angle: 0.,
-                },
-                end: Position {
-                    x: 0.,
-                    y: 0.,
-                    angle: 0.,
+                motion: ContactMotion {
+                    path: [Position {
+                        x: 0.,
+                        y: 0.,
+                        angle: 0.,
+                    }; 2],
+                    drive: [0.; 2],
                 },
                 division: None,
                 died: false,
@@ -244,8 +251,7 @@ struct Body<'a> {
 }
 
 pub(super) struct MetabolismResult {
-    pub(super) start: Position,
-    pub(super) end: Position,
+    pub(super) motion: ContactMotion,
     pub(super) division: Option<Box<crate::genome::Mode>>,
     pub(super) died: bool,
 }

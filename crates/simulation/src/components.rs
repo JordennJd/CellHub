@@ -31,7 +31,7 @@ pub(crate) struct Cell {
     pub(crate) id: u32,
     pub(crate) mode: usize,
     pub(crate) mass: f32,
-    /// Momentum from division, in world units times cell mass per second.
+    /// Momentum from division and contacts, in world units times cell mass per second.
     pub(crate) recoil: [f32; 2],
     pub(crate) nitrogen: f32,
     pub(crate) age: f32,

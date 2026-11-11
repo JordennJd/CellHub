@@ -6,6 +6,7 @@ mod environment;
 mod spatial;
 mod program;
 mod signals;
+mod collisions;
 mod interactions;
 mod bonds;
 mod specialized;

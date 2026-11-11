@@ -16,8 +16,8 @@ for (const [source, target] of [["frontend/model.ts", "model.mjs"], ["frontend/g
 }
 after(() => rm(directory, { recursive: true, force: true }));
 const storage = await import(pathToFileURL(join(directory, "storage.mjs")));
-const { newMode, flatten, STRIDE } = await import(pathToFileURL(join(directory, "model.mjs")));
-const { CHALLENGES, listCompleted, completeChallenge, evaluateChallenge, TUTORIALS, evaluateTutorialStep, completeTutorial, listCompletedTutorials } = await import(pathToFileURL(join(directory, "challenges.mjs")));
+const { newMode, STRIDE } = await import(pathToFileURL(join(directory, "model.mjs")));
+const { listCompleted, completeChallenge, TUTORIALS, evaluateTutorialStep, completeTutorial, listCompletedTutorials } = await import(pathToFileURL(join(directory, "challenges.mjs")));
 const data = new Map();
 const key = "cellhub.library.v1";
 const genome = () => ({ genome: [newMode(0)], initialMode: 0 });
@@ -89,37 +89,19 @@ test("world metadata and distinct starting mode survive a round trip", () => {
 });
 
 test("challenge progress is idempotent and invalid progress is preserved", () => {
-  completeChallenge(CHALLENGES[0].id); completeChallenge(CHALLENGES[0].id);
-  assert.deepEqual(listCompleted(), [CHALLENGES[0].id]);
-  assert.throws(() => completeChallenge("missing"));
+  completeChallenge("1"); completeChallenge("1");
+  assert.deepEqual(listCompleted(), ["1"]);
+  assert.throws(() => completeChallenge(""));
   data.set("cellhub.progress.v1", "broken");
-  assert.throws(() => completeChallenge(CHALLENGES[1].id));
+  assert.throws(() => completeChallenge("2"));
   assert.equal(data.get("cellhub.progress.v1"), "broken");
 });
 
-function makeFrame(rows, links = [], tick = 0, infections = 0, births = 0) {
+function makeFrame(rows, links = []) {
   const cells = new Float32Array(rows.length * STRIDE);
   rows.forEach((row, i) => cells.set(row, i * STRIDE));
-  return { type: "frame", cells, links: new Uint32Array(links), terrain: new Float32Array(), stats: new Float32Array([tick, rows.length, births, 0, infections]) };
+  return { type: "frame", cells, links: new Uint32Array(links), terrain: new Float32Array(), stats: new Float32Array([0, rows.length, 0, 0, 0]) };
 }
-test("compound objectives require simultaneous criteria and legal insertion budget", () => {
-  const adhesion = CHALLENGES.find(c => c.id === "adhesion");
-  const rows = Array.from({length: 4}, (_, i) => [i + 1, 500, 500, 10, 1, 1, 1, 2, 0, 0]);
-  assert(!evaluateChallenge(adhesion, makeFrame(rows), 1).complete);
-  const connected = makeFrame(rows, [1, 2, 2, 3, 3, 4]);
-  assert(evaluateChallenge(adhesion, connected, 1).complete);
-  assert(!evaluateChallenge(adhesion, connected, 2).complete);
-  assert(!evaluateChallenge(adhesion, connected, 0).complete);
-  assert(!evaluateChallenge(adhesion, null, 1).complete);
-  const survival = CHALLENGES.find(c => c.id === "survival");
-  assert(!evaluateChallenge(survival, makeFrame([[1, 500, 500, 10, 4, 1, 0, 0, 0, 0]], [], 3000), 1).complete,
-    "waiting before placing a fresh cell cannot satisfy survival");
-  const virus = CHALLENGES.find(c => c.id === "viral-transfer");
-  const viros = makeFrame([[1,500,500,10,3,1,0,0,0,0],[2,518,500,10,3,1,0,0,0,0]]);
-  assert(!evaluateChallenge(virus, viros, 2).complete, "two directly inserted virocytes are not an infection");
-  viros.stats[4] = 1;
-  assert(evaluateChallenge(virus, viros, 2).complete);
-});
 
 test("tutorial requirements use live mechanics and progress does not overwrite challenges", () => {
   const state = { genome: [newMode(0)], initialMode: 0, inserted: 0, running: false, frame: null, selected: false, savedGenome: false };
@@ -137,31 +119,9 @@ test("tutorial requirements use live mechanics and progress does not overwrite c
   assert(evaluateTutorialStep(organism.steps.find(s=>s.requirement === "livingBond"), state));
   state.frame.links = new Uint32Array();
   assert(!evaluateTutorialStep(organism.steps.find(s=>s.requirement === "livingBond"), state));
-  completeChallenge("algae"); completeTutorial("genome"); completeTutorial("genome");
-  assert.deepEqual(listCompleted(), ["algae"]);
+  completeChallenge("1"); completeTutorial("genome"); completeTutorial("genome");
+  assert.deepEqual(listCompleted(), ["1"]);
   assert.deepEqual(listCompletedTutorials(), ["genome"]);
-});
-
-test("role and survival objectives require the intended relationship on living cells", () => {
-  const swimmer = CHALLENGES.find(c => c.id === "swimmer");
-  const roles = [
-    [1,500,500,10,0,1,12,1,0,0],
-    [2,518,500,10,2,1,12,1,0,0],
-    [3,536,500,10,1,1,12,1,0,0],
-  ];
-  assert(!evaluateChallenge(swimmer, makeFrame(roles, [2,3]), 1).complete,
-    "a bond to a third role cannot replace the requested photo/flagellocyte bond");
-  assert(evaluateChallenge(swimmer, makeFrame(roles, [2,1]), 1).complete,
-    "the requested bond works regardless of endpoint order");
-  const survival = CHALLENGES.find(c => c.id === "survival");
-  const splitRequirements = [
-    [1,500,500,10,4,0.2,45,1,0,0],
-    [2,518,500,10,4,0.8,12,1,0,0],
-  ];
-  assert(!evaluateChallenge(survival, makeFrame(splitRequirements), 1).complete,
-    "age and mass must belong to the same keratinocyte");
-  splitRequirements[0][5] = 0.4;
-  assert(evaluateChallenge(survival, makeFrame(splitRequirements), 1).complete);
 });
 
 test("organism lesson waits for the requested movement and linked daughter roles", () => {
@@ -184,41 +144,39 @@ test("organism lesson waits for the requested movement and linked daughter roles
   assert(!evaluateTutorialStep(adhesion,state), "the linked initial cell must be the photo role");
 });
 
-test("every mechanic challenge has a measured legal solution in the real WASM simulation", async () => {
+test("the first campaign manifest loads and its demo wins in the real WASM simulation", async () => {
   const { default: init, Simulation } = await import("../frontend/wasm/simulation.js");
   await init({ module_or_path: await readFile(new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url)) });
-  const staticCell = kind => [{ ...newMode(0), kind, canDivide: false, speed: 0, lifespan: 1000 }];
-  const frame = sim => ({type: "frame", cells: sim.snapshot(), links: sim.links(), terrain: sim.terrain(), stats: sim.stats()});
-  for (const challenge of CHALLENGES) {
-    const sim = new Simulation(73421);
-    sim.set_circular_dish(true);
-    let inserted = 0;
-    const spawn = (x,y,genome,mode=0) => {
-      assert(genome.every(m=>challenge.allowedKinds.includes(m.kind)), `${challenge.id}: solution uses allowed types`);
-      sim.spawn(x,y,mode,flatten(genome)); inserted++;
-    };
-    try {
-      const e = challenge.environment;
-      sim.configure(e.light,e.food,e.radiation,e.viscosity,e.aging,e.killAtEdge,e.onlyPointMutations,e.gravity,e.density,e.nitrogen);
-      if (challenge.id === "algae") spawn(600,600,challenge.genome);
-      if (challenge.id === "feeding") spawn(1792,2112,challenge.genome.map(m=>({...m,kind:1})));
-      if (challenge.id === "colony") spawn(600,600,challenge.genome);
-      if (challenge.id === "adhesion") spawn(2000,1300,challenge.genome.map(m=>({...m,kind:1,bindChildren:true,keepAdhesionA:true,keepAdhesionB:true})));
-      if (challenge.id === "swimmer") spawn(600,600,[
-        {...newMode(0),kind:0,threshold:1.2,speed:0,childA:1,childB:2,bindChildren:true,lifespan:1000},
-        {...newMode(1),kind:0,canDivide:false,speed:0,lifespan:1000},
-        {...newMode(2),kind:2,canDivide:false,speed:15,lifespan:1000},
-      ]);
-      if (challenge.id === "survival") spawn(600,600,staticCell(4));
-      if (challenge.id === "predation") {spawn(600,600,staticCell(5));spawn(618,600,staticCell(1));spawn(582,600,staticCell(1));}
-      if (challenge.id === "viral-transfer") {spawn(600,600,staticCell(1));spawn(618,600,staticCell(3));}
-      assert(inserted <= challenge.budget);
-      let result = evaluateChallenge(challenge,frame(sim),inserted);
-      for (let second=0;second<300 && !result.complete;second++) {
-        sim.advance(30); result=evaluateChallenge(challenge,frame(sim),inserted);
-      }
-      assert(result.complete, `${challenge.id}: ${JSON.stringify(result.objectives)}`);
-      console.log(`${challenge.id}: achieved at ${(sim.stats()[0]/30).toFixed(1)}s with ${inserted} insertions`);
-    } finally { sim.free(); }
-  }
+  const text = await readFile(new URL("../levels/1.json", import.meta.url), "utf8");
+  const level = JSON.parse(text);
+  const sim = new Simulation(level.test.seed);
+  try {
+    const status = () => JSON.parse(sim.level_status());
+    sim.load_level_json(text);
+    const initial = status();
+    assert.equal(initial.id, level.id);
+    assert.equal(initial.state, "running");
+    assert.equal(initial.demo, false);
+    assert.equal(initial.counts.user, 0);
+    assert.equal(initial.demoActions, level.demo.length);
+
+    sim.start_level_demo();
+    assert.equal(status().demo, true);
+    sim.advance(1);
+    let current = status();
+    const opening = level.demo.filter(action => action.at === 0);
+    assert(opening.length > 0);
+    assert.equal(current.demoCursor, opening.length);
+    assert.equal(current.counts.user, opening.filter(action => action.op === "spawn").length);
+
+    for (let second = 0; second < 120 && current.state === "running"; second++) {
+      sim.advance(30);
+      current = status();
+    }
+    assert.equal(current.state, "won", JSON.stringify(current));
+    const objective = current.conditions.find(condition => condition.key === "user-cells");
+    assert.equal(objective?.target, level.conditions["user-cells"]);
+    assert.equal(objective?.met, true);
+    assert(current.counts.user >= objective.target);
+  } finally { sim.free(); }
 });

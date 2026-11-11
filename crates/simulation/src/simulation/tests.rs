@@ -2,7 +2,7 @@ use super::Simulation;
 
 use crate::cell_types::{COUNT as KIND_COUNT, NITROCYTE as NITROCYTE_KIND};
 use crate::components::{
-    Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE,
+    Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE, radius,
 };
 use crate::genome::{Genome, MODE_STRIDE, Mode, decode_checked};
 use crate::terrain::tile_index;
@@ -461,6 +461,189 @@ fn ejection_moves_the_retained_organism_through_its_adhesive_bond() {
     let before = x(&recoiling, neighbor);
     recoiling.advance(1);
     assert!(x(&recoiling, neighbor) > before);
+}
+
+fn collision_pair(distance: f32, masses: [f32; 2], momenta: [f32; 2]) -> (Simulation, [Entity; 2]) {
+    let mut sim = quiet_world();
+    let genes = stationary_genes(0);
+    let pair = [500., 500. + distance].map(|x| {
+        let id = sim.spawn(x, 500., 0, &genes).unwrap();
+        entity(&sim, id)
+    });
+    for ((entity, mass), momentum) in pair.into_iter().zip(masses).zip(momenta) {
+        let mut cell = sim.world.get::<&mut Cell>(entity).unwrap();
+        cell.mass = mass;
+        cell.recoil = [momentum, 0.];
+    }
+    (sim, pair)
+}
+
+#[test]
+fn head_on_collision_rebounds_and_conserves_net_momentum_after_drag() {
+    let masses = [1., 4.];
+    let momenta = [96., -95.];
+    let touching = masses.map(radius).into_iter().sum::<f32>();
+    let (mut sim, pair) = collision_pair(touching + 2., masses, momenta);
+    let (mut control, control_pair) = collision_pair(touching + 60., masses, momenta);
+    let distance = |sim: &Simulation, [a, b]: [Entity; 2]| {
+        let a = sim.world.get::<&Position>(a).unwrap();
+        let b = sim.world.get::<&Position>(b).unwrap();
+        libm::hypotf(b.x - a.x, b.y - a.y)
+    };
+    let momentum = |sim: &Simulation, pair: [Entity; 2]| {
+        pair.map(|e| sim.world.get::<&Cell>(e).unwrap().recoil[0])
+    };
+
+    sim.advance(1);
+    control.advance(1);
+    let [left, right] = momentum(&sim, pair);
+    let [control_left, control_right] = momentum(&control, control_pair);
+    assert!(
+        left < 0. && right > 0.,
+        "outgoing momentum: {left}, {right}"
+    );
+    // Recoil stores momentum. Comparing with a noncolliding pair factors out
+    // viscosity, and the different masses catch equal-velocity corrections.
+    let net_error = (left + right - (control_left + control_right)).abs();
+    assert!(
+        net_error < 0.001,
+        "collision changed net momentum by {net_error}"
+    );
+    let separation = distance(&sim, pair);
+    assert!(
+        separation > touching * 0.99,
+        "collision left substantial overlap"
+    );
+    sim.advance(2);
+    assert!(
+        distance(&sim, pair) > separation,
+        "the rebounding pair must separate"
+    );
+}
+
+#[test]
+fn swept_collision_stops_fast_cells_passing_through_each_other() {
+    // Each unimpeded cell would travel about the entire gap in one tick.
+    // A solver checking only final overlap would see two separated cells.
+    for initial_gap in [40., 16.] {
+        let (mut sim, [a, b]) = collision_pair(initial_gap, [1., 1.], [1200., -1200.]);
+        sim.advance(1);
+        let pa = sim.world.get::<&Position>(a).unwrap();
+        let pb = sim.world.get::<&Position>(b).unwrap();
+        let a = sim.world.get::<&Cell>(a).unwrap();
+        let b = sim.world.get::<&Cell>(b).unwrap();
+        let separation = pb.x - pa.x;
+        assert!(
+            separation > 0.99 * (radius(a.mass) + radius(b.mass)),
+            "cells crossed or remained overlapped: x gap {separation}"
+        );
+        assert!(a.recoil[0] < 0. && b.recoil[0] > 0.);
+    }
+}
+
+#[test]
+fn stationary_overlap_produces_opposing_collision_momentum() {
+    let initial_distance = 14.;
+    let (mut sim, [a, b]) = collision_pair(initial_distance, [1., 1.], [0., 0.]);
+    sim.advance(1);
+    let pa = sim.world.get::<&Position>(a).unwrap();
+    let pb = sim.world.get::<&Position>(b).unwrap();
+    let a = sim.world.get::<&Cell>(a).unwrap();
+    let b = sim.world.get::<&Cell>(b).unwrap();
+    assert!(pb.x - pa.x > initial_distance);
+    assert!(a.recoil[0] < 0. && b.recoil[0] > 0.);
+    assert!((a.recoil[0] + b.recoil[0]).abs() < 0.001);
+}
+
+#[test]
+fn a_deep_mature_gamete_contact_can_fuse_before_separation() {
+    let genes = Genome::from_modes(vec![
+        Mode {
+            kind: crate::cell_types::GAMETE,
+            compatible_mode: 1,
+            offspring_mode: 1,
+            speed: 0.,
+            ..Mode::default()
+        },
+        Mode::default(),
+    ])
+    .values();
+    for (gap, population) in [(12., 1), (16., 2)] {
+        let mut sim = quiet_world();
+        sim.spawn(500., 500., 0, &genes).unwrap();
+        sim.spawn(500. + gap, 500., 0, &genes).unwrap();
+        mature_all(&mut sim);
+        sim.advance(1);
+        assert_eq!(sim.world.len(), population, "gap {gap}");
+    }
+}
+
+#[test]
+fn dense_collision_cluster_resolves_most_penetration_in_a_few_ticks() {
+    let mut sim = quiet_world();
+    let genes = stationary_genes(0);
+    for y in 0..3 {
+        for x in 0..3 {
+            sim.spawn(500. + x as f32 * 11., 500. + y as f32 * 11., 0, &genes)
+                .unwrap();
+        }
+    }
+    let deepest_penetration = |sim: &Simulation| {
+        let bodies: Vec<_> = sim
+            .world
+            .query::<(&Position, &Cell)>()
+            .iter()
+            .map(|(_, (position, cell))| (*position, radius(cell.mass)))
+            .collect();
+        let mut max_penetration = 0_f32;
+        for (i, (a, ar)) in bodies.iter().enumerate() {
+            for (b, br) in &bodies[i + 1..] {
+                let distance = libm::hypotf(b.x - a.x, b.y - a.y);
+                max_penetration = max_penetration.max(ar + br - distance);
+            }
+        }
+        max_penetration
+    };
+    let initial = deepest_penetration(&sim);
+    assert!(initial > 5.);
+    sim.advance(3);
+    assert_eq!(sim.world.len(), 9);
+    let remaining = deepest_penetration(&sim);
+    assert!(
+        remaining < initial / 3.,
+        "penetration {initial} → {remaining}"
+    );
+}
+
+#[test]
+fn collision_processing_preserves_direct_bond_rest_distance() {
+    use super::bonds::ADHESION_GAP;
+
+    let (mut sim, [a, b]) = collision_pair(
+        radius(1.) + radius(4.) + ADHESION_GAP,
+        [1., 4.],
+        [96., -95.],
+    );
+    sim.bonds.insert((1, 2));
+    for _ in 0..8 {
+        sim.advance(1);
+        assert_eq!(sim.links(), [1, 2]);
+        let pa = sim.world.get::<&Position>(a).unwrap();
+        let pb = sim.world.get::<&Position>(b).unwrap();
+        let ca = sim.world.get::<&Cell>(a).unwrap();
+        let cb = sim.world.get::<&Cell>(b).unwrap();
+        let distance = libm::hypotf(pb.x - pa.x, pb.y - pa.y);
+        let rest = radius(ca.mass) + radius(cb.mass) + ADHESION_GAP;
+        assert!(
+            (distance - rest).abs() < 0.05,
+            "bond distance {distance}, rest {rest}"
+        );
+        let (va, vb) = (ca.recoil[0] / ca.mass, cb.recoil[0] / cb.mass);
+        assert!(
+            (va - vb).abs() < 0.001,
+            "a bonded pair must not rebound apart"
+        );
+    }
 }
 
 #[test]

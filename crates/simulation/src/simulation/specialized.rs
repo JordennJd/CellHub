@@ -1,6 +1,7 @@
 //! Stable contact events for adhesion, sexual reproduction, and cilia.
 
 use super::Simulation;
+use super::biology::GameteContact;
 use super::boundary::Boundary;
 use super::program::{
     CILIA_LEFT_TARGET, CILIA_RIGHT_TARGET, DENSITY_TARGET, DIFFERENTIATION_A_TARGET,
@@ -88,6 +89,7 @@ struct Body {
     cell: Cell,
     genome: Genome,
     mode: Mode,
+    gamete: Option<GameteContact>,
 }
 
 fn hybrid(a: &Body, b: &Body) -> Genome {
@@ -135,13 +137,15 @@ impl Simulation {
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(entity)
                     .unwrap();
+                let mode = *genome.mode(cell.mode);
                 Body {
                     id,
                     entity,
                     position: *position,
                     cell: cell.clone(),
                     genome: genome.clone(),
-                    mode: *genome.mode(cell.mode),
+                    mode,
+                    gamete: GameteContact::new(cell, &mode, genome.len()),
                 }
             })
             .collect();
@@ -194,30 +198,16 @@ impl Simulation {
                         *degrees.entry(target.id).or_default() += 1;
                     }
                 }
-                if source.mode.kind == GAMETE
-                    && target.mode.kind == GAMETE
-                    && source.cell.age + 0.000001 >= MIN_DIVISION_AGE
-                    && target.cell.age + 0.000001 >= MIN_DIVISION_AGE
-                    && source.genome.len() + target.genome.len() <= 1000
+                if let (Some(a), Some(b)) = (source.gamete, target.gamete)
+                    && a.mature()
+                    && b.mature()
+                    && let Some(scale) = a.fusion_scale(b)
+                    && distance <= contact * scale
                 {
-                    let compatible = match (
-                        source.mode.legacy_gamete_group,
-                        target.mode.legacy_gamete_group,
-                    ) {
-                        (None, None) => {
-                            source.mode.compatible_mode == target.cell.mode
-                                && target.mode.compatible_mode == source.cell.mode
-                        }
-                        (Some(a), Some(b)) if a == b => true,
-                        _ => continue,
-                    };
-                    let range = contact * if compatible { 1.03 } else { 0.65 };
-                    if distance <= range {
-                        consumed.insert(index);
-                        consumed.insert(other);
-                        fusions.push((index, other));
-                        continue;
-                    }
+                    consumed.insert(index);
+                    consumed.insert(other);
+                    fusions.push((index, other));
+                    continue;
                 }
                 if source.mode.kind == CILIOCYTE {
                     let degree = degrees.get(&source.id).copied().unwrap_or(0);
