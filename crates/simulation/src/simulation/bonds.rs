@@ -10,14 +10,122 @@ use crate::genome::Genome;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) struct BondDivision {
+    pub(super) parent: Position,
+    pub(super) daughters: [u32; 2],
+    pub(super) keep: [bool; 2],
+    pub(super) bind_children: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BondEnd {
+    id: u32,
+    position: Position,
+}
+
+impl BondEnd {
+    fn displacement(self, other: Self) -> (f64, f64) {
+        (
+            f64::from(other.position.x) - f64::from(self.position.x),
+            f64::from(other.position.y) - f64::from(self.position.y),
+        )
+    }
+
+    fn distance_squared(self, other: Self) -> f64 {
+        let (dx, dy) = self.displacement(other);
+        dx * dx + dy * dy
+    }
+
+    fn edge(self, other: Self) -> (u32, u32) {
+        (self.id.min(other.id), self.id.max(other.id))
+    }
+}
+
+struct DividedBondEnds<'a> {
+    division: &'a BondDivision,
+    daughters: [BondEnd; 2],
+    neighbors: Vec<BondEnd>,
+}
+
+impl DividedBondEnds<'_> {
+    fn candidates(&self, neighbor: u32) -> &[BondEnd] {
+        let [a, b] = self.daughters;
+        match (self.division.keep, self.neighbors.as_slice()) {
+            ([true, true], [first, second]) => {
+                // Replace a vertex with two connected daughters. Assign one old
+                // bond to each daughter so a path or loop stays continuous.
+                let direct = a.distance_squared(*first) + b.distance_squared(*second);
+                let swapped = a.distance_squared(*second) + b.distance_squared(*first);
+                let a_neighbor = if direct <= swapped { first } else { second };
+                if a_neighbor.id == neighbor {
+                    &self.daughters[..1]
+                } else {
+                    &self.daughters[1..]
+                }
+            }
+            ([true, true], _) => &self.daughters,
+            ([true, false], _) => &self.daughters[..1],
+            ([false, true], _) => &self.daughters[1..],
+            ([false, false], _) => &[],
+        }
+    }
+}
+
+fn is_crosswise(candidates: &[BondEnd], bond: (f64, f64)) -> bool {
+    let [a, b] = candidates else { return false };
+    let (dx, dy) = a.displacement(*b);
+    let (bx, by) = bond;
+    let dot = dx * bx + dy * by;
+    let norm_squared = (dx * dx + dy * dy) * (bx * bx + by * by);
+    // A bond within about 11.5° of the cleavage line can reach both daughters.
+    norm_squared > 0. && dot * dot <= norm_squared * (0.2 * 0.2)
+}
+
+fn inherit_bond(
+    bonds: &mut BTreeSet<(u32, u32)>,
+    left: &[BondEnd],
+    right: &[BondEnd],
+    crosswise: bool,
+) {
+    if crosswise {
+        match (left, right) {
+            ([a, b], [c, d]) => {
+                let direct = a.distance_squared(*c) + b.distance_squared(*d);
+                let swapped = a.distance_squared(*d) + b.distance_squared(*c);
+                let (first, second) = if direct <= swapped { (c, d) } else { (d, c) };
+                bonds.extend([a.edge(*first), b.edge(*second)]);
+                return;
+            }
+            ([a, b], [c]) | ([c], [a, b]) => {
+                bonds.extend([a.edge(*c), b.edge(*c)]);
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    let mut closest = None;
+    for &a in left {
+        for &b in right {
+            let candidate = (a.distance_squared(b), a.edge(b));
+            if closest.is_none_or(|best| candidate < best) {
+                closest = Some(candidate);
+            }
+        }
+    }
+    if let Some((_, edge)) = closest {
+        bonds.insert(edge);
+    }
+}
+
 impl Simulation {
     /// Rebuild the graph after deaths and divisions, then solve constraints.
     pub(super) fn replace_bonds(
         &mut self,
-        inheritors: &BTreeMap<u32, Vec<u32>>,
-        new_bonds: Vec<(u32, u32)>,
+        divisions: &BTreeMap<u32, BondDivision>,
+        degrees: &BTreeMap<u32, usize>,
     ) {
-        if self.bonds.is_empty() && new_bonds.is_empty() {
+        if self.bonds.is_empty() && divisions.is_empty() {
             return;
         }
         let entity_for = |id| {
@@ -26,14 +134,57 @@ impl Simulation {
                 .ok()
                 .map(|index| self.entities[index].1)
         };
-        let position_for = |id| {
+        let end_for = |id| {
             let entity = entity_for(id)?;
-            Some(*self.world.get::<&Position>(entity).unwrap())
+            Some(BondEnd {
+                id,
+                position: *self.world.get::<&Position>(entity).unwrap(),
+            })
         };
+        let former_end = |id| match divisions.get(&id) {
+            Some(division) => division.keep.contains(&true).then_some(BondEnd {
+                id,
+                position: division.parent,
+            }),
+            None => end_for(id),
+        };
+        let mut divided = BTreeMap::new();
         let mut bonds = BTreeSet::new();
+        for (&id, division) in divisions {
+            if division.bind_children {
+                let [a, b] = division.daughters;
+                bonds.insert((a, b));
+            }
+            if degrees.contains_key(&id) {
+                divided.insert(
+                    id,
+                    DividedBondEnds {
+                        division,
+                        daughters: division
+                            .daughters
+                            .map(|daughter| end_for(daughter).unwrap()),
+                        neighbors: Vec::new(),
+                    },
+                );
+            }
+        }
+        if !divided.is_empty() {
+            for &(a, b) in &self.bonds {
+                for (parent, neighbor) in [(a, b), (b, a)] {
+                    if let Some(split) = divided.get_mut(&parent)
+                        && split.division.bind_children
+                        && split.division.keep == [true; 2]
+                        && degrees[&parent] == 2
+                        && let Some(neighbor) = former_end(neighbor)
+                    {
+                        split.neighbors.push(neighbor);
+                    }
+                }
+            }
+        }
         for &(a, b) in &self.bonds {
-            let next_a = inheritors.get(&a);
-            let next_b = inheritors.get(&b);
+            let next_a = divided.get(&a);
+            let next_b = divided.get(&b);
             if next_a.is_none() && next_b.is_none() {
                 if entity_for(a).is_some() && entity_for(b).is_some() {
                     bonds.insert((a, b));
@@ -41,30 +192,20 @@ impl Simulation {
                 continue;
             }
 
-            // Transfer each old bond once, using the nearest eligible pair
-            // before the solver moves any cells. IDs break ties consistently.
-            let mut closest = None;
-            for &id_a in next_a.map_or(std::slice::from_ref(&a), Vec::as_slice) {
-                let Some(pa) = position_for(id_a) else {
-                    continue;
-                };
-                for &id_b in next_b.map_or(std::slice::from_ref(&b), Vec::as_slice) {
-                    let Some(pb) = position_for(id_b) else {
-                        continue;
-                    };
-                    let dx = f64::from(pb.x) - f64::from(pa.x);
-                    let dy = f64::from(pb.y) - f64::from(pa.y);
-                    let candidate = (dx * dx + dy * dy, (id_a.min(id_b), id_a.max(id_b)));
-                    if closest.is_none_or(|best| candidate < best) {
-                        closest = Some(candidate);
-                    }
-                }
-            }
-            if let Some((_, edge)) = closest {
-                bonds.insert(edge);
-            }
+            let (Some(old_a), Some(old_b)) = (former_end(a), former_end(b)) else {
+                continue;
+            };
+            let left = next_a.map_or(std::slice::from_ref(&old_a), |split| split.candidates(b));
+            let right = next_b.map_or(std::slice::from_ref(&old_b), |split| split.candidates(a));
+            let bond = old_a.displacement(old_b);
+            // A transverse cut of an isolated pair can retain the connection
+            // on both sides. If only one cell divides, the two sides share its neighbor.
+            let crosswise = degrees[&a] == 1
+                && degrees[&b] == 1
+                && next_a.is_none_or(|_| is_crosswise(left, bond))
+                && next_b.is_none_or(|_| is_crosswise(right, bond));
+            inherit_bond(&mut bonds, left, right, crosswise);
         }
-        bonds.extend(new_bonds);
         self.bonds = bonds;
         self.solve_bonds();
     }

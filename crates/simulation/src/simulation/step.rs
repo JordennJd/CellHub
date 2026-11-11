@@ -1,6 +1,7 @@
 //! One simulation tick: metabolism, interactions, death, division and bonds.
 
 use super::Simulation;
+use super::bonds::BondDivision;
 use super::program::{SPEED_TARGET, controlled_value};
 use super::specialized::{buoyant_drift, corpse_food, differentiate};
 use crate::cell_types::{
@@ -31,8 +32,7 @@ impl Simulation {
         let population = self.world.len() as usize;
         let mut dead = Vec::new();
         let mut children = Vec::new();
-        let mut inheritors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        let mut new_bonds = Vec::new();
+        let mut divisions = BTreeMap::new();
         let settings = self.settings;
         let passive_drift = settings.vertical_drift();
         let mut paths = Vec::with_capacity(population);
@@ -143,16 +143,15 @@ impl Simulation {
                 a.id = self.next_id;
                 b.id = self.next_id + 1;
                 self.next_id += 2;
-                let successors = inheritors.entry(c.id).or_default();
-                if m.keep_a {
-                    successors.push(a.id);
-                }
-                if m.keep_b {
-                    successors.push(b.id);
-                }
-                if m.bind_children {
-                    new_bonds.push((a.id, b.id));
-                }
+                divisions.insert(
+                    c.id,
+                    BondDivision {
+                        parent: *p,
+                        daughters: [a.id, b.id],
+                        keep: [m.keep_a, m.keep_b],
+                        bind_children: m.bind_children,
+                    },
+                );
                 a.mass = total * m.ratio;
                 b.mass = total * (1. - m.ratio);
                 a.nitrogen = c.nitrogen * 0.5;
@@ -206,8 +205,7 @@ impl Simulation {
             paths.push([start, *p]);
         }
         let removed: HashSet<_> = dead.iter().copied().collect();
-        let divisions = children.len() / 2;
-        self.deaths += (dead.len() - divisions) as u32;
+        self.deaths += (dead.len() - divisions.len()) as u32;
         entities.retain(|(_, entity)| !removed.contains(entity));
         for e in dead {
             self.world.despawn(e).unwrap();
@@ -220,7 +218,7 @@ impl Simulation {
             self.births += 1;
         }
         self.entities = entities;
-        self.replace_bonds(&inheritors, new_bonds);
+        self.replace_bonds(&divisions, &degrees);
         // Constraint solving can move cells across buckets or into a different
         // colony. Build the contact graph only after those positions are known.
         self.resolve_contacts(paths, STEP);

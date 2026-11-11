@@ -1052,6 +1052,104 @@ fn both_daughters_can_inherit_without_creating_diagonal_bonds() {
     }
 }
 
+fn right_angle_growth() -> Simulation {
+    let mut s = quiet_world();
+    let genes = Genome::from_modes(vec![Mode {
+        threshold: 1.,
+        angle: std::f32::consts::FRAC_PI_2,
+        speed: 0.,
+        bind_children: true,
+        keep_a: true,
+        keep_b: true,
+        ..Mode::default()
+    }])
+    .values();
+    let founder = s.spawn(500., 500., 0, &genes).unwrap();
+    s.world.get::<&mut Cell>(entity(&s, founder)).unwrap().mass = 10.;
+    mature_all(&mut s);
+    s.advance(1);
+    assert_eq!(s.bonds, BTreeSet::from([(2, 3)]));
+    s
+}
+
+fn assert_four_cell_square(s: &Simulation) {
+    assert_eq!(s.world.len(), 4);
+    assert_eq!(s.bonds, BTreeSet::from([(4, 5), (4, 7), (5, 6), (6, 7)]));
+    let corners = [4, 7, 6, 5].map(|id| *s.world.get::<&Position>(entity(s, id)).unwrap());
+    let edges: [(f32, f32); 4] = std::array::from_fn(|i| {
+        let from = corners[i];
+        let to = corners[(i + 1) % 4];
+        (to.x - from.x, to.y - from.y)
+    });
+    let lengths = edges.map(|(x, y)| libm::hypotf(x, y));
+    for i in 0..4 {
+        let next = (i + 1) % 4;
+        let (x, y) = edges[i];
+        let (nx, ny) = edges[next];
+        assert!(
+            (lengths[i] - lengths[0]).abs() < 0.05 * lengths[0],
+            "square sides have unequal lengths: {lengths:?}"
+        );
+        assert!(
+            (x * nx + y * ny).abs() < 0.05 * lengths[i] * lengths[next],
+            "adjacent square sides are not perpendicular: {edges:?}"
+        );
+    }
+}
+
+#[test]
+fn repeated_right_angle_division_forms_a_square_then_an_eight_cell_ring() {
+    let mut s = right_angle_growth();
+    let center_clearance = |sim: &mut Simulation| {
+        let cells = sim.snapshot();
+        let count = (cells.len() / SNAPSHOT_STRIDE) as f32;
+        let rows = cells.chunks_exact(SNAPSHOT_STRIDE);
+        let cx = rows.clone().map(|row| row[1]).sum::<f32>() / count;
+        let cy = rows.clone().map(|row| row[2]).sum::<f32>() / count;
+        rows.map(|row| libm::hypotf(row[1] - cx, row[2] - cy) - row[3])
+            .fold(f32::INFINITY, f32::min)
+    };
+
+    mature_all(&mut s);
+    s.advance(1);
+    assert_four_cell_square(&s);
+    assert!(center_clearance(&mut s) > 2., "square center is occupied");
+
+    mature_all(&mut s);
+    s.advance(1);
+    assert_eq!(s.world.len(), 8);
+    assert_eq!(
+        s.bonds,
+        BTreeSet::from([
+            (8, 9),
+            (8, 15),
+            (9, 10),
+            (10, 11),
+            (11, 12),
+            (12, 13),
+            (13, 14),
+            (14, 15),
+        ]),
+        "the ring should have one continuous perimeter without cross-links"
+    );
+    assert!(center_clearance(&mut s) > 2., "ring center is occupied");
+}
+
+#[test]
+fn right_angle_division_forms_the_same_square_on_separate_ticks() {
+    for (first, second) in [(2, 3), (3, 2)] {
+        let mut s = right_angle_growth();
+        s.world.get::<&mut Cell>(entity(&s, first)).unwrap().age = MIN_DIVISION_AGE;
+        s.advance(1);
+        assert_eq!(s.world.len(), 3);
+        assert_eq!(s.bonds, BTreeSet::from([(second, 4), (second, 5), (4, 5)]));
+
+        s.world.get::<&mut Cell>(entity(&s, second)).unwrap().age = MIN_DIVISION_AGE;
+        s.advance(1);
+        assert_four_cell_square(&s);
+    }
+}
+
 #[test]
 fn organism_keeps_flagellum_and_releases_photo_offspring() {
     let mut s = quiet_world();
