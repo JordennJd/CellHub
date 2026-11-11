@@ -106,6 +106,7 @@ mod tests {
             injury: 0.,
             telomeres: -1,
             anchored: false,
+            class: crate::components::CLASS_USER,
         }
     }
 

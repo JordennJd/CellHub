@@ -11,6 +11,13 @@ pub(crate) const INITIAL_NITROGEN: f32 = 1.;
 pub(crate) const NITROGEN_DIVISION: f32 = 0.2;
 pub(crate) const NITROGEN_DEATH: f32 = 0.1;
 
+/// Owner class mirrored from the original game. Level conditions count cells
+/// by this value: 0 = substrate cell, 1 = player cell, 3 = infected, 6 = hybrid.
+pub(crate) const CLASS_LEVEL: u8 = 0;
+pub(crate) const CLASS_USER: u8 = 1;
+pub(crate) const CLASS_INFECTED: u8 = 3;
+pub(crate) const CLASS_HYBRID: u8 = 6;
+
 #[derive(Clone, Copy)]
 pub(crate) struct Position {
     pub(crate) x: f32,
@@ -34,6 +41,7 @@ pub(crate) struct Cell {
     pub(crate) injury: f32,
     pub(crate) telomeres: i32,
     pub(crate) anchored: bool,
+    pub(crate) class: u8,
 }
 
 impl Default for Cell {
@@ -53,6 +61,7 @@ impl Default for Cell {
             injury: 0.,
             telomeres: -1,
             anchored: false,
+            class: CLASS_USER,
         }
     }
 }

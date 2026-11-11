@@ -12,6 +12,7 @@ mod specialized;
 mod persistence;
 mod tools;
 mod step;
+mod level;
 #[cfg(test)]
 mod tests;
 
@@ -52,6 +53,9 @@ pub struct Simulation {
     bonds: BTreeSet<(u32, u32)>,
     settings: Environment,
     boundary: Boundary,
+    level: Option<level::LevelRuntime>,
+    /// Per-level population cap from the original substrate (`max_cells`).
+    population_limit: usize,
 }
 
 #[wasm_bindgen]
@@ -74,10 +78,19 @@ impl Simulation {
             bonds: BTreeSet::new(),
             settings: Environment::default(),
             boundary: Boundary::default(),
+            level: None,
+            population_limit: LIMIT,
         }
     }
 
     pub fn reset(&mut self) {
+        if let Some(runtime) = &self.level {
+            let level = runtime.level.clone();
+            if self.install_level(level).is_ok() {
+                return;
+            }
+            self.level = None;
+        }
         let boundary = self.boundary;
         *self = Self::new(self.seed);
         self.boundary = boundary;
@@ -175,6 +188,26 @@ impl Simulation {
     pub fn restore_state(&mut self, values: &[f64]) -> Result<(), JsError> {
         self.restore_checked(values)
             .map_err(|error| JsError::new(&error))
+    }
+
+    /// Load a self-contained campaign manifest. The world is replaced only
+    /// after the whole level validates.
+    pub fn load_level_json(&mut self, text: &str) -> Result<(), JsError> {
+        self.load_level(text).map_err(|error| JsError::new(&error))
+    }
+
+    /// Serialized campaign progress for the objective panel and tests.
+    pub fn level_status(&self) -> String {
+        self.level_status_snapshot().to_json()
+    }
+
+    /// Play the level's authored demo track from the current state.
+    pub fn start_level_demo(&mut self) -> Result<(), JsError> {
+        self.start_demo().map_err(|error| JsError::new(&error))
+    }
+
+    pub fn stop_level_demo(&mut self) {
+        self.stop_demo();
     }
 
     pub fn spawn(&mut self, x: f32, y: f32, mode: usize, values: &[f32]) -> Result<u32, JsError> {
@@ -339,8 +372,8 @@ impl Simulation {
         if mode >= genome.len() {
             return Err("Invalid spawn archetype".to_owned());
         }
-        if self.world.len() as usize >= LIMIT {
-            return Err(format!("Population limit: {LIMIT}"));
+        if self.world.len() as usize >= self.population_limit {
+            return Err(format!("Population limit: {}", self.population_limit));
         }
         let id = self.next_id;
         self.next_id += 1;

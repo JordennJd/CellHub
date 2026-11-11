@@ -354,6 +354,7 @@ impl Simulation {
                 };
                 cell.mutations += 1;
                 cell.cooldown = 3.;
+                cell.class = crate::components::CLASS_INFECTED;
                 self.infections += 1;
             }
         }

@@ -453,10 +453,12 @@ export type WorldCommand = (
 export type Command = WorldCommand
   | { type: "inspect"; id: number }
   | { type: "speed"; value: number }
-  | { type: "reset"; requestId?: string }
+  | { type: "reset"; requestId?: string; level?: string }
   | { type: "export"; requestId: string }
   | { type: "restore"; state: string; requestId?: string }
   | { type: "preview"; genome: Float32Array; mode: number; steps: number }
+  | { type: "demo"; restart?: boolean }
+  | { type: "stopDemo" }
   | { type: "step" };
 export type Environment = {
   light: number;
@@ -484,4 +486,5 @@ export type Frame = {
   nitrates?: Float32Array;
   details?: Float32Array;
   coveredFood?: Float32Array;
+  level?: string;
 };

@@ -11,6 +11,8 @@ wasm-threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 [dependencies]
 hecs = "0.10"
 libm = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 wasm-bindgen = "=0.2.130"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

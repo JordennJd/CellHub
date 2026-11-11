@@ -98,7 +98,11 @@ fn hybrid(a: &Body, b: &Body) -> Genome {
         mode.transition_a += offset;
         mode.transition_b += offset;
         mode.offspring_mode += offset;
-        mode.compatible_mode += offset;
+        // Malformed/legacy genomes may carry an out-of-range sentinel here.
+        // Keep it out of range instead of overflowing debug builds.
+        if mode.compatible_mode != usize::MAX {
+            mode.compatible_mode += offset;
+        }
         if mode.virus_copy_from != usize::MAX {
             mode.virus_copy_from += offset;
         }
@@ -249,6 +253,7 @@ impl Simulation {
             self.next_id += 1;
             let genome = hybrid(a, b);
             let mut cell = Cell::new(id, a.mode.offspring_mode);
+            cell.class = crate::components::CLASS_HYBRID;
             cell.mass = (a.cell.mass + b.cell.mass).min(1_000_000.);
             cell.nitrogen = (a.cell.nitrogen + b.cell.nitrogen).min(1.);
             cell.telomeres = a.mode.telomeres;

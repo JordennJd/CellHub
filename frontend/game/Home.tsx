@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
-import { CHALLENGES, TUTORIALS, listCompleted, listCompletedTutorials } from './challenges';
+import { TUTORIALS, listCompleted, listCompletedTutorials } from './challenges';
+import { loadLevels, type LevelManifest } from './levels';
 import { Library } from './Library';
 import { Settings } from './Settings';
 import type { LibraryKind, PlateData } from './storage';
@@ -39,6 +40,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
     const [page, setPage] = useState<'home' | 'challenges' | 'tutorials'>('home');
     const [library, setLibrary] = useState<LibraryKind | null>(null);
     const [settings, setSettings] = useState(false);
+    const [levels, setLevels] = useState<LevelManifest[] | null>(null), [levelsError, setLevelsError] = useState('');
     const heading = useRef<HTMLHeadingElement>(null);
     const previousPage = useRef(page);
     const [progress] = useState(() => {
@@ -48,6 +50,13 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
             return { completed: [] as string[], tutorials: [] as string[], error: String(e) };
         }
     });
+
+    useEffect(() => {
+        let active = true;
+        loadLevels().then(value => { if (active) setLevels(value); })
+            .catch(error => { if (active) setLevelsError(String(error)); });
+        return () => { active = false; };
+    }, []);
 
     useEffect(() => {
         if (previousPage.current === page) return;
@@ -86,9 +95,10 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
             </> : <>
                 <div className="page-heading"><button onClick={() => setPage('home')}>← Режимы</button>
                     <h1 ref={heading} tabIndex={-1}>{page === 'tutorials' ? 'Обучение' : 'Испытания'}</h1>
-                    <p>{page === 'tutorials' ? 'Уроки можно проходить в любом порядке.' : 'Каждая задача открывает следующую.'}</p>
+                    <p>{page === 'tutorials' ? 'Уроки можно проходить в любом порядке.' : 'Все задачи доступны сразу — выбирайте любую.'}</p>
                 </div>
                 {progress.error && <p role="alert">{progress.error}</p>}
+                {levelsError && <p role="alert">Не удалось загрузить испытания: {levelsError}</p>}
                 <div className="challenge-list">
                     {page === 'tutorials' ? TUTORIALS.map((lesson, i) => <article className="challenge-card" key={lesson.id}>
                         <span className="challenge-number">{String(i + 1).padStart(2, '0')}</span>
@@ -96,15 +106,13 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
                             {progress.tutorials.includes(lesson.id) && <p className="success">Пройдено</p>}
                             <button className="primary" onClick={() => onStart({ kind: 'tutorial', tutorialId: lesson.id })}>Начать урок</button>
                         </div>
-                    </article>) : CHALLENGES.map((challenge, i) => {
-                        const locked = challenge.requires && !progress.completed.includes(challenge.requires);
-                        const done = progress.completed.includes(challenge.id);
-                        return <article className="challenge-card" key={challenge.id}>
+                    </article>) : levels === null ? (!levelsError && <p role="status">Загружаем испытания…</p>) : levels.map((level, i) => {
+                        const done = progress.completed.includes(level.id);
+                        return <article className="challenge-card" key={level.id}>
                             <span className="challenge-number">{String(i + 1).padStart(2, '0')}</span>
-                            <div><h2>{challenge.title}</h2><p>{challenge.description}</p>
+                            <div><h2>{level.title}</h2><p>{level.description}</p>
                                 {done && <p className="success">Пройдено</p>}
-                                {locked ? <p>Сначала пройдите «{CHALLENGES.find(v => v.id === challenge.requires)?.title}».</p>
-                                    : <button className="primary" onClick={() => onStart({ kind: 'challenge', challengeId: challenge.id })}>{done ? 'Повторить' : 'Начать'}</button>}
+                                <button className="primary" onClick={() => onStart({ kind: 'challenge', level })}>{done ? 'Повторить' : 'Начать'}</button>
                             </div>
                         </article>;
                     })}
@@ -112,9 +120,11 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
             </>}
         </main>
         {library && <Modal label="Библиотека" onClose={() => setLibrary(null)}>
-            <Library kind={library} onClose={() => setLibrary(null)} onLoad={entry => onStart(entry.kind === 'plate'
-                ? { kind: (entry.data as PlateData).challengeId ? 'challenge' : 'sandbox', challengeId: (entry.data as PlateData).challengeId, entry }
-                : { kind: 'sandbox', entry })}/>
+            <Library kind={library} onClose={() => setLibrary(null)} onLoad={entry => {
+                const challengeId = entry.kind === 'plate' ? (entry.data as PlateData).challengeId : undefined;
+                const level = challengeId ? levels?.find(value => value.id === challengeId) : undefined;
+                onStart(entry.kind === 'plate' && level ? { kind: 'challenge', level, entry } : { kind: 'sandbox', entry });
+            }}/>
         </Modal>}
         {settings && <Modal label="Настройки" onClose={() => setSettings(false)}><Settings onClose={() => setSettings(false)}/></Modal>}
     </div>;

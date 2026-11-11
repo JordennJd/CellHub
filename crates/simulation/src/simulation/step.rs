@@ -7,7 +7,7 @@ use crate::cell_types::{
     BUOYOCYTE, COUNT, FLAGELLOCYTE, GAMETE, KERATINOCYTE, LIPOCYTE, PHAGOCYTE, PHOTOCYTE,
 };
 use crate::components::{
-    Cell, LIMIT, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position, radius,
+    Cell, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position, radius,
 };
 use crate::genome::Genome;
 use crate::terrain::tile_index;
@@ -17,6 +17,7 @@ const STEP: f32 = 1. / 30.;
 
 impl Simulation {
     pub(super) fn step(&mut self) {
+        self.dispatch_level_demo();
         self.tick += 1;
         self.update_signals_and_secretions(STEP);
         let degrees = self.bond_degrees();
@@ -134,7 +135,7 @@ impl Simulation {
                 && c.mass >= m.threshold
                 && c.nitrogen >= NITROGEN_DIVISION
                 && m.max_connections.is_none_or(|limit| degree < limit)
-                && population + children.len() / 2 < LIMIT
+                && population + children.len() / 2 < self.population_limit
             {
                 // parent is replaced by two daughters
                 let total = c.mass;
@@ -157,6 +158,8 @@ impl Simulation {
                 b.mass = total * (1. - m.ratio);
                 a.nitrogen = c.nitrogen * 0.5;
                 b.nitrogen = a.nitrogen;
+                a.class = c.class;
+                b.class = c.class;
                 a.mode = m.child_a;
                 b.mode = m.child_b;
                 a.age = 0.;
@@ -225,5 +228,6 @@ impl Simulation {
         // colony. Build the contact graph only after those positions are known.
         self.resolve_contacts(paths, STEP);
         self.specialized_contacts(STEP);
+        self.update_level_status();
     }
 }

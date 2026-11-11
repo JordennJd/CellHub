@@ -21,8 +21,9 @@ function frame() {
     nitrogen = sim.nitrogen_reserves(),
     nitrates = sim.nitrates(),
     details = sim.cell_details(),
-    coveredFood = sim.covered_food();
-  ctx.postMessage({ type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood }, [
+    coveredFood = sim.covered_food(),
+    level = sim.level_status();
+  ctx.postMessage({ type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, level }, [
     cells.buffer,
     links.buffer,
     terrain.buffer,
@@ -39,6 +40,14 @@ ctx.onmessage = ({ data }: MessageEvent<Command>) => {
 };
 function sortScheduled(commands: ScheduledCommand[]) {
   return commands.sort((a, b) => a.atTick - b.atTick);
+}
+
+function settingsData() {
+  const [light, food, radiation, viscosity, aging, killAtEdge, onlyPointMutations, gravity, density, nitrogen] = sim.environment();
+  return {
+    light, food, radiation, viscosity, aging: !!aging, killAtEdge: !!killAtEdge,
+    onlyPointMutations: !!onlyPointMutations, gravity, density, nitrogen,
+  };
 }
 
 function readScheduled(raw: unknown, tick: number): ScheduledCommand[] {
@@ -161,11 +170,7 @@ function apply(c: Command) {
         scheduled = nextScheduled;
         speed = 0;
         debt = 0;
-        const [light, food, radiation, viscosity, aging, killAtEdge, onlyPointMutations, gravity, density, nitrogen] = sim.environment();
-        ctx.postMessage({ type: "restored", requestId: c.requestId, settings: {
-          light, food, radiation, viscosity, aging: !!aging, killAtEdge: !!killAtEdge,
-          onlyPointMutations: !!onlyPointMutations, gravity, density, nitrogen,
-        } });
+        ctx.postMessage({ type: "restored", requestId: c.requestId, settings: settingsData() });
         changed = true;
         break;
       }
@@ -188,11 +193,31 @@ function apply(c: Command) {
         break;
       }
       case "reset":
-        sim.reset();
+        if (c.level !== undefined) {
+          if (typeof c.level !== "string" || c.level.length > 20_000_000)
+            throw new Error("Некорректный файл уровня");
+          sim.load_level_json(c.level);
+        } else {
+          sim.reset();
+        }
         scheduled = [];
         speed = 0;
         debt = 0;
-        ctx.postMessage({ type: "reset", requestId: c.requestId });
+        ctx.postMessage({ type: "reset", requestId: c.requestId, settings: settingsData() });
+        changed = true;
+        break;
+      case "demo":
+        if (c.restart) sim.reset();
+        sim.start_level_demo();
+        scheduled = [];
+        speed = 4;
+        debt = 0;
+        changed = true;
+        break;
+      case "stopDemo":
+        sim.stop_level_demo();
+        speed = 0;
+        debt = 0;
         changed = true;
         break;
       case "step":

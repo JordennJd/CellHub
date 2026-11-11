@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_ENVIRONMENT, type Command, type Environment, type Frame, type Mode, flatten, inflate } from '../model';
+import type { LevelStatus } from './levels';
 type InspectResult = {
     genome: Mode[];
     mode: number;
@@ -15,15 +16,28 @@ type InspectRequest = PendingRequest & {
 type Transition = {
     id: string;
     kind: 'reset' | 'restore';
+    level: boolean;
     inserted: number;
     previousFrame: Frame | null;
     previousInserted: number;
     previousPending: number;
 };
 const REQUEST_TIMEOUT = 15000;
+function parseLevelStatus(raw: unknown): LevelStatus | null {
+    if (typeof raw !== 'string' || !raw)
+        return null;
+    try {
+        const value = JSON.parse(raw) as LevelStatus;
+        return value && typeof value.id === 'string' && value.id ? value : null;
+    }
+    catch {
+        return null;
+    }
+}
 export function useSimulation() {
     const worker = useRef<Worker | null>(null), available = useRef(false);
     const [ready, setReady] = useState(false), [frame, setFrame] = useState<Frame | null>(null);
+    const [levelStatus, setLevelStatus] = useState<LevelStatus | null>(null);
     const [resetting, setResetting] = useState(false);
     const [error, setError] = useState(''), [speed, setSpeed] = useState(0);
     const [environment, setEnvironment] = useState<Environment>({ ...DEFAULT_ENVIRONMENT });
@@ -75,8 +89,10 @@ export function useSimulation() {
             if (data.type === 'frame') {
                 if (transition.current)
                     transition.current.previousFrame = data;
-                else
+                else {
                     setFrame(data);
+                    setLevelStatus(parseLevelStatus(data.level));
+                }
             }
             if (data.type === 'spawned') {
                 if (transition.current) {
@@ -98,7 +114,7 @@ export function useSimulation() {
                 pendingSpawns.current = 0;
                 setInserted(current.inserted);
                 setResetting(false);
-                if (data.type === 'restored' && data.settings)
+                if (data.settings && (data.type === 'restored' || current.level))
                     setEnvironment(data.settings);
                 const pending = requests.current.get(data.requestId);
                 if (pending) {
@@ -196,13 +212,14 @@ export function useSimulation() {
             send(command);
         });
     }
-    function beginTransition(kind: Transition['kind'], count: number): string {
+    function beginTransition(kind: Transition['kind'], count: number, level = false): string {
         const id = crypto.randomUUID();
         cancelInspect(new Error('Среда изменена. Выберите клетку заново.'));
-        transition.current = { id, kind, inserted: count, previousFrame: frame,
+        transition.current = { id, kind, level, inserted: count, previousFrame: frame,
             previousInserted: successfulSpawns.current, previousPending: pendingSpawns.current };
         setResetting(true);
         setFrame(null);
+        setLevelStatus(null);
         setSpeed(0);
         setInserted(0);
         pendingSpawns.current = 0;
@@ -224,9 +241,34 @@ export function useSimulation() {
         if (transition.current)
             return;
         const requestId = beginTransition('reset', 0);
+        setEnvironment(settings);
         void request<boolean>(requestId, { type: 'reset', requestId })
             .catch(reason => { failedTransition(requestId); setError(String(reason)); });
         configure(settings);
+    }
+    function resetLevel(levelText: string) {
+        if (transition.current)
+            return;
+        const requestId = beginTransition('reset', 0, true);
+        void request<boolean>(requestId, { type: 'reset', requestId, level: levelText })
+            .catch(reason => { failedTransition(requestId); setError(String(reason)); });
+    }
+    function playDemo(restart = false) {
+        if (!available.current || transition.current)
+            return;
+        if (restart) {
+            setInserted(0);
+            pendingSpawns.current = 0;
+            successfulSpawns.current = 0;
+        }
+        setSpeed(4);
+        send({ type: 'demo', restart });
+    }
+    function stopDemo() {
+        if (!available.current || transition.current)
+            return;
+        setSpeed(0);
+        send({ type: 'stopDemo' });
     }
     async function exportWorld(): Promise<string> {
         if (transition.current)
@@ -260,5 +302,5 @@ export function useSimulation() {
             send({ type: 'inspect', id });
         });
     }
-    return { ready, resetting, frame, error, setError, speed, changeSpeed, environment, configure, inserted, send, spawn, reset, exportWorld, restore, inspect, names };
+    return { ready, resetting, frame, levelStatus, error, setError, speed, changeSpeed, environment, configure, inserted, send, spawn, reset, resetLevel, playDemo, stopDemo, exportWorld, restore, inspect, names };
 }

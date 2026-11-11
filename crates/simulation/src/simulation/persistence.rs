@@ -8,7 +8,7 @@ use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, norm
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
-const VERSION: u32 = 5;
+const VERSION: u32 = 6;
 
 fn is_main_v4(values: &[f64]) -> bool {
     // The deployed v4 writes the tile count immediately after fluid density.
@@ -145,6 +145,7 @@ impl Simulation {
                 c.injury as f64,
                 c.telomeres as f64,
                 c.anchored as u8 as f64,
+                c.class as f64,
                 genome_id as f64,
             ]);
         }
@@ -156,7 +157,9 @@ impl Simulation {
     }
 
     pub(super) fn restore_checked(&mut self, values: &[f64]) -> Result<(), String> {
+        let level = self.level.take();
         let mut replacement = Self::decode_state(values)?;
+        replacement.level = level;
         // Old saves did not encode geometry. Keep their migration path into
         // the current dish. Current saves restore geometry and coordinates as-is.
         if values[0] < 4. || is_main_v4(values) {
@@ -305,6 +308,13 @@ impl Simulation {
                 }
                 cell.telomeres = telomeres as i32;
                 cell.anchored = input.flag()?;
+                cell.class = crate::components::CLASS_USER;
+                if version >= 6 {
+                    cell.class = input.integer(255)? as u8;
+                    if !matches!(cell.class, 0 | 1 | 3 | 6) {
+                        return Err("Некорректный класс клетки в сохранении".into());
+                    }
+                }
                 let id = input.integer(LIMIT as u32)? as usize;
                 genomes
                     .get(id)
