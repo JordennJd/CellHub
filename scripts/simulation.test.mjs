@@ -102,11 +102,11 @@ test("laboratory tools and substrate settings work through the real WASM ABI", (
   } finally { sim.free(); }
 });
 
-test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI", () => {
+test("v4 daughter orientation, mirroring and RGB survive the real WASM save ABI", () => {
   const sim = new Simulation(42), restored = new Simulation(1);
   try {
-    const g = new Float32Array([-3, 1,
-      0, 1, 0, 0, 0.5, 0, 0.2, 1000, 1, 0, 0, 0, 0.3, -0.4, 1, 0, 0.2, 0.6, 1,
+    const g = new Float32Array([-4, 1,
+      0, 1, 0, 0, 0.5, 0, 0.2, 1000, 1, 0, 0, 0, 0.3, -0.4, 1, 0, 0.2, 0.6, 1, 2, 5, -12,
     ]);
     sim.configure(1, 1, 0, 1, true, false, true, 0.5, -0.5);
     const id = sim.spawn(500, 500, 0, g);
@@ -243,7 +243,7 @@ test("real WASM preserves variable genomes and transfers integer bond endpoints"
       1, 8, 2, 0, 0.5, 0, 0, 1000, 1, 0, 1, 0,
     ]);
     const id = sim.spawn(300, 300, 0, g);
-    assert.deepEqual(Array.from(sim.genome(id)), [-3, 3, ...Array.from({length:3}, (_,i)=>[...g.slice(i*12,i*12+12),0,0,0,0,-1,-1,-1]).flat()]);
+    assert.deepEqual(Array.from(sim.genome(id)), [-4, 3, ...Array.from({length:3}, (_,i)=>[...g.slice(i*12,i*12+12),0,0,0,0,-1,-1,-1,0,0,0]).flat()]);
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
     sim.advance(1);

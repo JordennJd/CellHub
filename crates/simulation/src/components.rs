@@ -25,6 +25,10 @@ pub(crate) struct Cell {
     pub(crate) mutations: u32,
     pub(crate) cooldown: f32,
     pub(crate) mirrored: bool,
+    /// Diffusing S1..S4 concentrations, in micromoles per litre.
+    pub(crate) signal: [f32; 4],
+    /// Cyanide load. Slowly damages the cell and is shared through bonds.
+    pub(crate) toxin: f32,
 }
 
 /// Drawing and collision radius derived from mass.

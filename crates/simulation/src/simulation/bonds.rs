@@ -1,7 +1,9 @@
 //! Adhesion graph maintenance and positional constraints.
 
 use super::Simulation;
+use crate::cell_types::MYOCYTE;
 use crate::components::{Cell, Position, radius};
+use crate::genome::Genome;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 impl Simulation {
@@ -46,9 +48,21 @@ impl Simulation {
         }
         let mut bodies: Vec<_> = self
             .world
-            .query::<(&Position, &Cell)>()
+            .query::<(&Position, &Cell, &Genome)>()
             .iter()
-            .map(|(e, (p, c))| (e, c.id, *p, c.mass))
+            .map(|(e, (p, c, g))| {
+                let mode = g.mode(c.mode);
+                // A myocyte shortens its bonds in proportion to signal S1 and
+                // its own contraction setting. Other cells contribute nothing.
+                let contraction = if mode.kind == MYOCYTE {
+                    (c.signal[0].max(0.) / 60.).clamp(0., 1.)
+                        * (mode.speed / 60.).clamp(0., 1.)
+                        * 6.
+                } else {
+                    0.
+                };
+                (e, c.id, *p, c.mass, contraction)
+            })
             .collect();
         bodies.sort_by_key(|b| b.1);
         let indices: BTreeMap<_, _> = bodies.iter().enumerate().map(|(i, b)| (b.1, i)).collect();
@@ -62,8 +76,8 @@ impl Simulation {
         for _ in 0..12 {
             for &(a, b) in &edges {
                 let (left, right) = bodies.split_at_mut(b);
-                let (_, _, pa, ma) = &mut left[a];
-                let (_, _, pb, mb) = &mut right[0];
+                let (_, _, pa, ma, ca) = &mut left[a];
+                let (_, _, pb, mb, cb) = &mut right[0];
                 let dx = pb.x - pa.x;
                 let dy = pb.y - pa.y;
                 let distance = dx.hypot(dy);
@@ -72,7 +86,8 @@ impl Simulation {
                 } else {
                     (1., 0.)
                 };
-                let error = distance - (radius(*ma) + radius(*mb) + 2.);
+                let rest = (radius(*ma) + radius(*mb) + 2. - (*ca + *cb).min(6.)).max(1.);
+                let error = distance - rest;
                 let share_a = *mb / (*ma + *mb);
                 let share_b = 1. - share_a;
                 (pa.x, pa.y, _) = self.boundary.constrain(
@@ -89,7 +104,7 @@ impl Simulation {
                 );
             }
         }
-        for (entity, _, position, _) in bodies {
+        for (entity, _, position, _, _) in bodies {
             *self.world.get::<&mut Position>(entity).unwrap() = position;
         }
     }

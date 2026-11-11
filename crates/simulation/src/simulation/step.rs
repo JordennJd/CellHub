@@ -2,12 +2,18 @@
 
 use super::Simulation;
 use super::spatial::BUCKET_SIZE;
+use crate::cell_types::{
+    BUOYOCYTE, CILIOCYTE, COUNT, DEVOROCYTE, FLAGELLOCYTE, GAMETE, GLUEOCYTE, KERATINOCYTE,
+    LIPOCYTE, NITROCYTE, PHAGOCYTE, PHOTOCYTE, SECROCYTE, VIROCYTE, is_motile,
+};
 use crate::components::{Cell, LIMIT, MIN_DIVISION_AGE, Position, radius};
 use crate::genome::Genome;
 use crate::terrain::tile_index;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 const STEP: f32 = 1. / 30.;
+const SIGNAL_DECAY: f32 = 0.997;
+const TOXIN_DECAY: f32 = 0.999;
 
 impl Simulation {
     pub(super) fn step(&mut self) {
@@ -26,6 +32,8 @@ impl Simulation {
         let mut new_bonds = Vec::new();
         let bonded = self.linked_ids();
         let vertical_drift = self.settings.vertical_drift();
+        let gravity = self.settings.gravity;
+        let viscosity = self.settings.viscosity;
         let mut spatial = std::mem::take(&mut self.spatial);
         spatial.clear();
         for &(_, e) in &entities {
@@ -39,45 +47,70 @@ impl Simulation {
             let m = *g.mode(c.mode);
             c.age += STEP;
             c.cooldown = (c.cooldown - STEP).max(0.);
+            c.signal = c.signal.map(|v| (v * SIGNAL_DECAY).clamp(-100., 100.));
+            c.toxin = (c.toxin * TOXIN_DECAY).clamp(0., 100.);
+            c.mass -= c.toxin * STEP * 0.02;
             let t = &mut self.tiles[tile_index(p.x, p.y)];
-            let gain = if m.kind == 0 {
-                t.light * 0.14 * STEP
-            } else if m.kind == 1 {
-                let eaten = (0.18 * STEP).min(t.food);
-                t.food -= eaten;
-                eaten * 1.6
+            let gain = match m.kind {
+                PHOTOCYTE => t.light * 0.14 * STEP,
+                PHAGOCYTE => {
+                    let eaten = (0.18 * STEP).min(t.food);
+                    t.food -= eaten;
+                    eaten * 1.6
+                }
+                // Nitrogen fixation is independent of light and food. The
+                // resulting mass is shared through adhesion like any nutrient.
+                NITROCYTE => m.signal.max(0.) / 60. * 0.06 * STEP,
+                _ => 0.,
+            };
+            let upkeep = match m.kind {
+                LIPOCYTE => 0.004,
+                KERATINOCYTE => 0.014,
+                _ => 0.025,
+            };
+            let effort = if is_motile(m.kind) {
+                m.speed * 0.0003
             } else {
                 0.
             };
-            c.mass += gain - STEP * (if m.kind == 4 { 0.014 } else { 0.025 } + m.speed * 0.0003);
+            c.mass += gain - STEP * (upkeep + effort);
             if mutation_roll < t.radiation * STEP * 0.035 {
                 let modes = g.modes_mut();
                 let index = ((mutation_gene * modes.len() as f32) as usize).min(modes.len() - 1);
                 let target = &mut modes[index];
                 if !self.settings.only_point_mutations {
-                    target.kind = (target.kind + 1) % 6;
+                    target.kind = (target.kind + 1) % COUNT;
                 }
                 target.threshold = (target.threshold + (noise - 0.5) * 0.8).clamp(1., 8.);
                 c.mutations += 1;
             }
             c.mass -= t.radiation * STEP * 0.015;
-            // A bonded flagellum supplies directed propulsion to the organism.
-            // Passive members have drag, but no independent random locomotion.
+            // A bonded flagellum or ciliocyte supplies directed propulsion to
+            // the organism. Passive members have drag, but no independent
+            // random locomotion.
             let linked = bonded.contains(&c.id);
             if !linked {
                 p.angle += (noise - 0.5) * 0.35;
             }
-            let speed = if m.kind == 2 {
-                m.speed
-            } else if linked {
-                0.
-            } else {
-                m.speed * 0.15
+            let (speed, steering) = match m.kind {
+                FLAGELLOCYTE => (m.speed * (1. + (c.signal[0] / 60.).clamp(-0.8, 1.)), 0.),
+                CILIOCYTE => (
+                    m.speed * 0.5,
+                    ((c.signal[1] - c.signal[0]) * 0.04).clamp(-0.15, 0.15),
+                ),
+                _ => (0., 0.),
             };
-            let next_x = p.x + p.angle.cos() * speed * STEP / self.settings.viscosity;
-            let next_y = p.y
-                + p.angle.sin() * speed * STEP / self.settings.viscosity
-                + vertical_drift * STEP;
+            if is_motile(m.kind) {
+                p.angle += steering * if c.mirrored { -1. } else { 1. };
+            }
+            let buoyancy = if m.kind == BUOYOCYTE {
+                -20. * gravity * m.signal.clamp(-3.3, 3.3) / viscosity
+            } else {
+                0.
+            };
+            let next_x = p.x + p.angle.cos() * speed * STEP / viscosity;
+            let next_y =
+                p.y + p.angle.sin() * speed * STEP / viscosity + (vertical_drift + buoyancy) * STEP;
             let (x, y, reached_edge) = self.boundary.constrain(next_x, next_y, c.mass, 12.);
             p.x = x;
             p.y = y;
@@ -89,6 +122,7 @@ impl Simulation {
                 continue;
             }
             if m.can_divide
+                && m.kind != GAMETE
                 && c.age + 0.000001 >= MIN_DIVISION_AGE
                 && c.mass >= m.threshold
                 && population + children.len() / 2 < LIMIT
@@ -153,21 +187,38 @@ impl Simulation {
             }
             spatial.insert(*p, e, m.kind);
         }
-        let removed: HashSet<_> = dead.iter().copied().collect();
+        let mut removed: HashSet<_> = dead.iter().copied().collect();
+        self.update_signals(&entities, &removed, &spatial);
         let protected = self.keratin_protection(&removed);
         let mut infections = Vec::new();
         let mut infected = HashSet::new();
+        let mut fused = HashSet::new();
+        let mut fusions: Vec<(hecs::Entity, hecs::Entity, f32, usize)> = Vec::new();
+        let mut cut_bonds = Vec::new();
+        let mut glue_counts: HashMap<u32, usize> = HashMap::new();
+        for &(a, b) in &self.bonds {
+            *glue_counts.entry(a).or_default() += 1;
+            *glue_counts.entry(b).or_default() += 1;
+        }
         // Stable traversal and local spatial grid bound the interaction search.
         for &(_, e) in &entities {
-            if removed.contains(&e) {
+            if removed.contains(&e) || fused.contains(&e) {
                 continue;
             }
-            let (pos, kind, cooldown) = {
+            let (pos, kind, cooldown, mode, age, mself, mass) = {
                 let (p, c, g) = self
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(e)
                     .unwrap();
-                (*p, g.mode(c.mode).kind, c.cooldown)
+                (
+                    *p,
+                    g.mode(c.mode).kind,
+                    c.cooldown,
+                    *g.mode(c.mode),
+                    c.age,
+                    c.clone(),
+                    c.mass,
+                )
             };
             let bx = (pos.x / BUCKET_SIZE) as isize;
             let by = (pos.y / BUCKET_SIZE) as isize;
@@ -178,7 +229,7 @@ impl Simulation {
                             let other = neighbor.entity;
                             let op = neighbor.position;
                             let okind = neighbor.kind;
-                            if e == other || removed.contains(&other) {
+                            if e == other || removed.contains(&other) || fused.contains(&other) {
                                 continue;
                             }
                             let d2 = (pos.x - op.x).powi(2) + (pos.y - op.y).powi(2);
@@ -186,8 +237,8 @@ impl Simulation {
                                 continue;
                             }
                             let other_id = self.world.get::<&Cell>(other).unwrap().id;
-                            if kind == 3
-                                && okind != 3
+                            if kind == VIROCYTE
+                                && okind != VIROCYTE
                                 && !protected.contains(&other_id)
                                 && !infected.contains(&other)
                                 && cooldown <= 0.
@@ -200,14 +251,82 @@ impl Simulation {
                                 self.infections += 1;
                                 break;
                             }
-                            if kind == 5 && okind != 5 && !protected.contains(&other_id) {
+                            if kind == DEVOROCYTE
+                                && okind != DEVOROCYTE
+                                && !protected.contains(&other_id)
+                            {
+                                let rate = 0.09 + mode.speed / 60. * 0.12;
                                 let taken = {
                                     let mut c = self.world.get::<&mut Cell>(other).unwrap();
-                                    let amount = (0.08 * STEP).min((c.mass - 0.1).max(0.));
+                                    let amount = (rate * STEP).min((c.mass - 0.1).max(0.));
                                     c.mass -= amount;
                                     amount
                                 };
                                 self.world.get::<&mut Cell>(e).unwrap().mass += taken * 0.8;
+                            }
+                            if kind == GLUEOCYTE
+                                && okind != GLUEOCYTE
+                                && !protected.contains(&other_id)
+                            {
+                                let other_mass = self.world.get::<&Cell>(other).unwrap().mass;
+                                let contact = radius(mass) + radius(other_mass) + 4.;
+                                let limit = (mode.signal.round() as i32).clamp(1, 5) as usize;
+                                let key = (other_id.min(mself.id), other_id.max(mself.id));
+                                if d2 <= contact * contact
+                                    && !self.bonds.contains(&key)
+                                    && glue_counts.get(&mself.id).copied().unwrap_or(0) < limit
+                                {
+                                    self.bonds.insert(key);
+                                    *glue_counts.entry(mself.id).or_default() += 1;
+                                    *glue_counts.entry(other_id).or_default() += 1;
+                                }
+                            }
+                            if kind == SECROCYTE && age >= 0.05 {
+                                match mode.subtype {
+                                    0 => {
+                                        if !protected.contains(&other_id) {
+                                            let amount = mode.signal.max(1.) / 60. * STEP * 2.;
+                                            let mut target =
+                                                self.world.get::<&mut Cell>(other).unwrap();
+                                            target.toxin = (target.toxin + amount).clamp(0., 100.);
+                                        }
+                                    }
+                                    1 => {
+                                        if !protected.contains(&other_id) {
+                                            let amount = mode.signal.max(1.) / 60. * STEP * 0.5;
+                                            let mut target =
+                                                self.world.get::<&mut Cell>(other).unwrap();
+                                            target.toxin = (target.toxin + amount).clamp(0., 100.);
+                                            target.mass -= STEP * 0.006;
+                                        }
+                                    }
+                                    2 if !protected.contains(&other_id) => {
+                                        cut_bonds
+                                            .push((other_id.min(mself.id), other_id.max(mself.id)));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if kind == GAMETE && okind == GAMETE {
+                                let (other_mass, other_mode) = {
+                                    let (other_cell, other_genome) = self
+                                        .world
+                                        .query_one_mut::<(&Cell, &Genome)>(other)
+                                        .unwrap();
+                                    (other_cell.mass, *other_genome.mode(other_cell.mode))
+                                };
+                                if mode.subtype == other_mode.subtype {
+                                    let (survivor, victim, total, next_mode) = if mass >= other_mass
+                                    {
+                                        (e, other, mass + other_mass, mode.child_a)
+                                    } else {
+                                        (other, e, mass + other_mass, other_mode.child_a)
+                                    };
+                                    fused.insert(survivor);
+                                    fused.insert(victim);
+                                    fusions.push((survivor, victim, total, next_mode));
+                                    break;
+                                }
                             }
                             if d2 > 0.001 && d2 < 18. * 18. {
                                 let d = d2.sqrt();
@@ -226,6 +345,34 @@ impl Simulation {
                     }
                 }
             }
+        }
+        for (survivor, victim, total, next_mode) in fusions {
+            if removed.contains(&survivor) || removed.contains(&victim) {
+                continue;
+            }
+            let ok = {
+                let (cell, genome) = self
+                    .world
+                    .query_one_mut::<(&mut Cell, &Genome)>(survivor)
+                    .unwrap();
+                if next_mode < genome.len() {
+                    cell.mode = next_mode;
+                    cell.mass = total;
+                    cell.age = 0.;
+                    cell.cooldown = 3.;
+                    cell.signal = [0.; 4];
+                    true
+                } else {
+                    false
+                }
+            };
+            if ok {
+                dead.push(victim);
+                removed.insert(victim);
+            }
+        }
+        for pair in cut_bonds {
+            self.bonds.remove(&pair);
         }
         // Commit infections together: a newly infected cell cannot infect again in this tick.
         for (entity, genome) in infections {

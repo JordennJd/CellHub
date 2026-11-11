@@ -12,6 +12,136 @@ function relativeLuminance(color: number) {
 // Same 3:1 dark-dish detail threshold as scene.wgsl; body RGB stays user-defined.
 const minimumInkLuminance = 3 * (relativeLuminance(0x253e2b) + 0.05) - 0.05;
 
+function lighten(color: number, amount = 0.45) {
+  const channel = (shift: number) => Math.round(((color >> shift) & 255) * (1 - amount) + 255 * amount);
+  return `#${((channel(16) << 16) | (channel(8) << 8) | channel(0)).toString(16).padStart(6, "0")}`;
+}
+
+/** Appendages that stick out of the collision circle need extra preview padding. */
+function cellExtent(kind: number) {
+  if (kind === 2) return 2;
+  if (kind === 13 || kind === 16) return 1.45;
+  if (kind === 3 || kind === 8 || kind === 17) return 1.25;
+  if (kind === 4) return 1.1;
+  return 1;
+}
+
+/** Draw the same type-specific organelles as the WGSL scene, in local cell space. */
+function drawCellDetails(ctx: CanvasRenderingContext2D, kind: number, x: number, y: number, r: number, angle: number, ink: string, accent: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = ink;
+  ctx.fillStyle = accent;
+  const w = Math.max(0.8, r * 0.055);
+  const dot = (cx: number, cy: number, size: number, alpha = 1) => {
+    ctx.globalAlpha = alpha; ctx.beginPath(); ctx.arc(cx, cy, size, 0, Math.PI * 2); ctx.fill();
+  };
+  const disc = (cx: number, cy: number, radius: number, width = w, alpha = 1) => {
+    ctx.strokeStyle = ink; ctx.globalAlpha = alpha; ctx.lineWidth = width;
+    ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+  };
+  const line = (ax: number, ay: number, bx: number, by: number, width = w, alpha = 1) => {
+    ctx.globalAlpha = alpha; ctx.lineWidth = width;
+    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+  };
+  // Shared faint nucleus, matching the shader.
+  disc(r * 0.18, 0, r * 0.28, w, 0.28);
+  if (kind === 0) {
+    for (let i = 0; i < 5; i++) {
+      const a = i * 1.256637 + 0.35, px = Math.cos(a) * r * 0.5, py = Math.sin(a) * r * 0.5, size = Math.max(1.2, r * 0.11);
+      dot(px, py, size, 0.55); disc(px, py, size, w * 0.6, 0.8);
+    }
+  } else if (kind === 1) {
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.094395 + 0.5, px = Math.cos(a) * r * 0.35 + r * 0.32, py = Math.sin(a) * r * 0.35;
+      dot(px, py, r * 0.16, 0.32); disc(px, py, r * 0.16, w * 0.8, 0.85);
+    }
+    line(r * 0.88, r * 0.3, r * 0.88, -r * 0.3, w, 0.9);
+  } else if (kind === 2) {
+    line(-r, 0, -r * 1.45, r * 0.22, w, 0.95);
+    line(-r * 1.45, r * 0.22, -r * 1.9, -r * 0.12, w, 0.95);
+    dot(-r, 0, r * 0.11, 0.6);
+  } else if (kind === 3) {
+    for (let i = 0; i < 8; i++) {
+      const a = i * Math.PI / 4;
+      line(Math.cos(a) * r * 0.94, Math.sin(a) * r * 0.94, Math.cos(a) * r * 1.22, Math.sin(a) * r * 1.22, w * 0.8, 0.85);
+    }
+    disc(0, 0, r * 0.56, w * 0.6, 0.5);
+  } else if (kind === 4) {
+    disc(0, 0, r * 0.72, w, 0.8);
+    for (let i = 0; i < 6; i++) {
+      const a = i * 1.047198 + 0.52;
+      ctx.fillStyle = ink; dot(Math.cos(a) * r * 0.72, Math.sin(a) * r * 0.72, Math.max(0.9, r * 0.06), 0.7);
+    }
+  } else if (kind === 5) {
+    line(r * 0.25, r * 0.42, r * 0.82, 0, w, 0.95);
+    line(r * 0.25, -r * 0.42, r * 0.82, 0, w, 0.95);
+    disc(0, 0, r * 0.55, w * 0.7, 0.6);
+  } else if (kind === 6) {
+    const px = -r * 0.08;
+    dot(px, 0, r * 0.55, 0.25); disc(px, 0, r * 0.55, w, 0.9); dot(px - r * 0.18, 0, r * 0.12, 0.35);
+  } else if (kind === 7) {
+    dot(0, 0, r * 0.46, 0.3); disc(0, 0, r * 0.46, w, 0.9); dot(-r * 0.14, r * 0.16, r * 0.1, 0.5);
+  } else if (kind === 8) {
+    ctx.fillStyle = ink;
+    for (let i = 0; i < 6; i++) {
+      const a = i * 1.047198;
+      dot(Math.cos(a) * r * 1.08, Math.sin(a) * r * 1.08, Math.max(1, r * 0.09), 0.9);
+    }
+    disc(0, 0, r * 0.5, w * 0.6, 0.45);
+  } else if (kind === 9) {
+    ctx.fillStyle = ink;
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2 + Math.PI / 4;
+      dot(Math.cos(a) * r * 0.45, Math.sin(a) * r * 0.45, r * 0.1, 0.85);
+    }
+    disc(0, 0, r * 0.62, w * 0.5, 0.45);
+  } else if (kind === 10) {
+    for (const sign of [1, -1]) {
+      const px = r * 0.4, py = sign * r * 0.42;
+      dot(px, py, r * 0.15, 0.4); disc(px, py, r * 0.15, w * 0.8, 0.9);
+      line(r * 0.15, 0, px, py, w * 0.5, 0.5);
+    }
+  } else if (kind === 11) {
+    const px = r * 0.42;
+    dot(px, 0, r * 0.2, 0.3); disc(px, 0, r * 0.2, w * 0.8, 0.9);
+    ctx.fillStyle = ink; dot(px, 0, r * 0.07, 0.9);
+    disc(px, 0, r * 0.34, w * 0.5, 0.45);
+  } else if (kind === 12) {
+    for (let i = -2; i <= 2; i++) {
+      const offset = i * r * 0.22;
+      line(-r * 0.55, offset, r * 0.55, offset, w * 0.55, 0.8);
+    }
+  } else if (kind === 13) {
+    line(-r * 0.05, 0, -r * 1.22, 0, w, 0.9);
+    line(-r * 1.22, 0, -r * 1.4, r * 0.3, w * 0.7, 0.9);
+    line(-r * 1.22, 0, -r * 1.4, -r * 0.3, w * 0.7, 0.9);
+    dot(r * 0.1, 0, r * 0.18, 0.4);
+  } else if (kind === 14) {
+    for (let i = 0; i < 3; i++) {
+      const a = i * 2.094395 + 0.5, px = Math.cos(a) * r * 0.3 + r * 0.3, py = Math.sin(a) * r * 0.3;
+      dot(px, py, r * 0.13, 0.45); disc(px, py, r * 0.13, w * 0.7, 0.85);
+    }
+    line(r * 0.55, 0, r * 0.9, 0, w * 0.6, 0.7);
+  } else if (kind === 15) {
+    dot(0, 0, r * 0.38, 0.28); disc(0, 0, r * 0.38, w, 0.9);
+    ctx.fillStyle = ink; dot(-r * 0.08, 0, r * 0.16, 0.8);
+  } else if (kind === 16) {
+    line(-r * 0.7, 0, -r * 1.35, r * 0.42, w, 0.9);
+    dot(r * 0.25, 0, r * 0.14, 0.5); disc(0, 0, r * 0.6, w * 0.5, 0.4);
+  } else if (kind === 17) {
+    for (let i = 0; i < 12; i++) {
+      const a = i * Math.PI / 6;
+      line(Math.cos(a) * r, Math.sin(a) * r, Math.cos(a) * r * 1.18, Math.sin(a) * r * 1.18, w * 0.7, 0.85);
+    }
+    disc(0, 0, r * 0.55, w * 0.5, 0.45);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
 /** Preview owns a separate laboratory: its clock and cells never affect the game. */
 export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initialMode: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -66,10 +196,11 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
       const positions = new Map<number, number>();
       for (let i = 0; i < cells.length; i += STRIDE) {
         positions.set(cells[i], i);
-        left = Math.min(left, cells[i + 1] - cells[i + 3]);
-        right = Math.max(right, cells[i + 1] + cells[i + 3]);
-        top = Math.min(top, cells[i + 2] - cells[i + 3]);
-        bottom = Math.max(bottom, cells[i + 2] + cells[i + 3]);
+        const extent = cells[i + 3] * cellExtent(cells[i + 4]);
+        left = Math.min(left, cells[i + 1] - extent);
+        right = Math.max(right, cells[i + 1] + extent);
+        top = Math.min(top, cells[i + 2] - extent);
+        bottom = Math.max(bottom, cells[i + 2] + extent);
       }
       const scale = Math.min((width - 40) / Math.max(right - left, 80), (height - 40) / Math.max(bottom - top, 80));
       const x = (index: number) => width / 2 + (cells[index + 1] - (left + right) / 2) * scale;
@@ -83,7 +214,8 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
       }
       for (let i = 0; i < cells.length; i += STRIDE) {
         const radius = Math.max(2, cells[i + 3] * scale);
-        const color = cells[i + 10] >= 0 ? cells[i + 10] : TYPES[cells[i + 4]]?.color ?? 0xa4db71;
+        const kind = cells[i + 4];
+        const color = cells[i + 10] >= 0 ? cells[i + 10] : TYPES[kind]?.color ?? 0xa4db71;
         const cellColor = `#${color.toString(16).padStart(6, "0")}`;
         const ink = cells[i + 10] >= 0 && relativeLuminance(color) < minimumInkLuminance
           ? "#dce6dc" : cellColor;
@@ -93,16 +225,8 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
         ctx.beginPath(); ctx.arc(x(i), y(i), radius, 0, Math.PI * 2);
         ctx.globalAlpha = 0.22; ctx.fill();
         ctx.globalAlpha = 1; ctx.stroke();
-        ctx.globalAlpha = 0.9;
-        ctx.fillStyle = ink;
-        ctx.beginPath(); ctx.arc(x(i), y(i), Math.max(1, radius * 0.23), 0, Math.PI * 2); ctx.fill();
-        ctx.globalAlpha = 1;
-        const angle = cells[i + 9], handedness = cells[i + 11] ? -1 : 1;
-        ctx.beginPath();
-        ctx.moveTo(x(i), y(i));
-        ctx.lineTo(x(i) + Math.cos(angle) * radius * .8, y(i) + Math.sin(angle) * radius * .8);
-        ctx.lineTo(x(i) + Math.cos(angle + handedness * .5) * radius * .5, y(i) + Math.sin(angle + handedness * .5) * radius * .5);
-        ctx.stroke();
+        const accent = lighten(cells[i + 10] >= 0 && relativeLuminance(color) < minimumInkLuminance ? 0xdce6dc : color);
+        drawCellDetails(ctx, kind, x(i), y(i), radius, cells[i + 9], ink, accent);
       }
     }
     draw();

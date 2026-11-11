@@ -7,10 +7,12 @@ mod environment;
 mod persistence;
 mod tools;
 mod spatial;
+mod signals;
 mod step;
 #[cfg(test)]
 mod tests;
 
+use crate::cell_types::{CILIOCYTE, FLAGELLOCYTE, LIPOCYTE};
 use crate::components::{Cell, LIMIT, Position, SNAPSHOT_STRIDE, radius};
 use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, map};
@@ -277,17 +279,25 @@ impl Simulation {
         self.next_id += 1;
         let angle = self.random() * std::f32::consts::TAU;
         let (x, y, _) = self.boundary.constrain(x, y, 1., 10.);
+        // A lipocyte is born with its fat store; size is visible immediately.
+        let fat = if genome.mode(mode).kind == LIPOCYTE {
+            genome.mode(mode).signal.max(0.) * 0.5
+        } else {
+            0.
+        };
         let entity = self.world.spawn((
             Position { x, y, angle },
             Cell {
                 id,
                 mode,
-                mass: 1.,
+                mass: 1. + fat,
                 age: 0.,
                 generation: 0,
                 mutations: 0,
                 cooldown: 0.,
                 mirrored: false,
+                signal: [0.; 4],
+                toxin: 0.,
             },
             genome,
         ));
@@ -343,12 +353,10 @@ impl Simulation {
             }
             let mode = genome.mode(cell.mode);
             let is_linked = linked.contains(&cell.id);
-            let speed = if mode.kind == 2 {
-                mode.speed
-            } else if is_linked {
-                0.
-            } else {
-                mode.speed * 0.15
+            let speed = match mode.kind {
+                FLAGELLOCYTE => mode.speed,
+                CILIOCYTE => mode.speed * 0.5,
+                _ => 0.,
             };
             cells.extend([
                 cell.id as f32,

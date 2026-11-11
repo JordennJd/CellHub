@@ -82,9 +82,9 @@ export const CHALLENGES: Challenge[] = [
     {
         id: "colony", title: "Колония", target: 40, budget: 1, requires: "feeding", allowedKinds: [0, 1, 2],
         description: "Создайте популяцию не менее 40 клеток из одной исходной клетки.",
-        hint: "Одна клетка должна дать несколько поколений потомков. Проверьте режимы обеих дочерних клеток и источник питания.",
-        spoiler: "Начните с фагоцита, задайте обеим дочерям M1 и массу деления около 1,8. В слое «Пища» поместите клетку в область с насыщенным зелёным цветом.",
-        environment: { ...environment, light: 2, food: 4 }, genome: [{ ...newMode(0), threshold: 1.8, speed: 8, lifespan: 1000 }],
+        hint: "Одна клетка должна дать несколько поколений потомков. Проверьте режимы обеих дочерних клеток и источник энергии.",
+        spoiler: "Начните с фотоцита, задайте обеим дочерям M1 и массу деления около 1,8. Включите слой «Свет» и поместите клетку в хорошо освещённую область.",
+        environment: { ...environment, light: 2, food: 4 }, genome: [{ ...newMode(0), threshold: 1.8, speed: 0, lifespan: 1000 }],
     },
     {
         id: "adhesion", title: "Связанные потомки", target: 4, budget: 1, requires: "colony", allowedKinds: [0, 1, 2],

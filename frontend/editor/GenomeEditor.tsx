@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { defaultGenome, modeColor, multicellularGenome, newMode, removeMode, TYPES, type Mode, type NumericModeKey } from "../model";
+import { CHANNELS, TYPES, defaultGenome, modeColor, multicellularGenome, newMode, removeMode, subtypeLabel, subtypeOptions, typeDefaults, typeSignal, typeSpeed, usesChannel, usesSpeed, usesSubtype, type Mode, type NumericModeKey } from "../model";
 import { GenomePreview } from "./GenomePreview";
 import "./editor.css";
 
@@ -44,10 +44,14 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
   function update<K extends keyof Mode>(key: K, value: Mode[K]) {
     onChange(genome.map((item, i) => i === mode ? { ...item, [key]: value } : item));
   }
+  function setType(kind: number) {
+    onChange(genome.map((item, i) => i === mode ? { ...item, kind, ...typeDefaults(kind) } : item));
+  }
   function add(copy: boolean) {
     const index = genome.length;
+    const kind = allowedKinds?.[0] ?? 0;
     const next = copy ? { ...m, name: `${m.name} — копия`, childA: m.childA === mode ? index : m.childA, childB: m.childB === mode ? index : m.childB }
-      : { ...newMode(index), kind: allowedKinds?.[0] ?? 0 };
+      : { ...newMode(index), kind, ...typeDefaults(kind) };
     onChange([...genome, next]); setEditing(index); setMessage("");
   }
   function perform() {
@@ -58,7 +62,8 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       setEditing(Math.min(mode, next.length - 1));
       setMessage("Ссылки на удалённый режим перенаправлены к соседнему.");
     } else {
-      onChange(confirm === "example" ? multicellularGenome() : defaultGenome().map(g => ({ ...g, kind: allowedKinds?.[0] ?? 0 })));
+      const kind = allowedKinds?.[0] ?? 0;
+      onChange(confirm === "example" ? multicellularGenome() : defaultGenome().map(g => ({ ...g, kind, ...typeDefaults(kind) })));
       onInitialModeChange(0); setEditing(0); setMessage("");
     }
     setConfirm(null);
@@ -87,10 +92,25 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       <div className="genome-mode-actions"><button onClick={() => add(false)}>Добавить режим</button><button onClick={() => add(true)}>Копировать</button><button disabled={genome.length === 1} onClick={() => setConfirm("remove")}>Удалить</button></div>
     </section>
     <ModeName key={`${mode}:${m.name}`} value={m.name} onChange={name => update("name", name)} />
-    <label className="genome-cell-type">Тип клетки<select value={m.kind} onChange={e => update("kind", Number(e.target.value))}>
+    <label className="genome-cell-type">Тип клетки<select value={m.kind} onChange={e => setType(Number(e.target.value))}>
       {TYPES.map((t, i) => <option value={i} key={i} disabled={!allowed(i)}>{t.name}{allowed(i) ? "" : " — недоступен в задании"}</option>)}
     </select></label>
     <p className="genome-type-help">{TYPES[m.kind].info}</p>
+    <section className="genome-type-section"><h3>Параметры типа</h3>
+      {usesSpeed(m.kind) && typeSpeed(m.kind) && setting(typeSpeed(m.kind)!.label, "speed", 0, 60, 1, typeSpeed(m.kind)!.help)}
+      {usesChannel(m.kind) && <label>Канал сигнала<select value={m.channel} onChange={e => update("channel", Number(e.target.value))}>
+        {CHANNELS.map((channel, i) => <option key={channel} value={i}>{channel}</option>)}
+      </select></label>}
+      {usesSubtype(m.kind) && <label>{subtypeLabel(m.kind)}<select value={m.subtype} onChange={e => update("subtype", Number(e.target.value))}>
+        {subtypeOptions(m.kind).map((option, i) => <option key={option} value={i}>{option}</option>)}
+      </select></label>}
+      {typeSignal(m.kind) && setting(typeSignal(m.kind)!.label, "signal", typeSignal(m.kind)!.min, typeSignal(m.kind)!.max, typeSignal(m.kind)!.step, typeSignal(m.kind)!.help)}
+      {m.kind === 16 && <label>После слияния<select value={m.childA} onChange={e => update("childA", Number(e.target.value))}>
+        {genome.map((g, i) => <option key={i} value={i}>{g.name} · {TYPES[g.kind].name}</option>)}
+      </select></label>}
+      {m.kind === 15 && <p>Путь 1 — дочерняя клетка A, путь 2 — дочерняя клетка B. Порог каждого сигнала 0,5, путь 1 приоритетнее.</p>}
+      {m.kind === 16 && <p>Гамета не делится. Совместимы только гаметы одной группы; после слияния используется выбранный выше режим.</p>}
+    </section>
     <section className="genome-color-section"><h3>Цвет клетки</h3>
       <label className="genome-check"><input type="checkbox" checked={m.red !== -1} onChange={e => setColor(e.target.checked ? TYPES[m.kind].color : null)} />Свой цвет</label>
       {m.red !== -1 ? <><label className="genome-color-picker">Цвет<input aria-label="Цвет клетки" type="color" value={`#${modeColor(m).toString(16).padStart(6,"0")}`} onChange={e => setColor(Number.parseInt(e.target.value.slice(1),16))} /></label>
@@ -99,9 +119,9 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
     </section>
     <section className="genome-division">
       <h3>Деление</h3>
-      <label className="genome-check"><input type="checkbox" checked={m.canDivide} onChange={e => update("canDivide", e.target.checked)} />Разрешить деление</label>
+      {m.kind !== 16 && <label className="genome-check"><input type="checkbox" checked={m.canDivide} onChange={e => update("canDivide", e.target.checked)} />Разрешить деление</label>}
       {!m.canDivide && <p>Клетка продолжает питаться, двигаться и стареть, но не создаёт потомков.</p>}
-      <fieldset disabled={!m.canDivide}>
+      {m.kind !== 16 && <fieldset disabled={!m.canDivide}>
         <legend className="sr-only">Параметры деления</legend>
         {setting("Масса для деления", "threshold", 1, 8, 0.1, "Деление возможно при достижении этой массы и возраста 0,5 с. Рост зависит от типа клетки, доступной пищи и света.", "нг")}
         <div className="genome-children">{(["childA", "childB"] as const).map((key, index) => <section key={key}>
@@ -114,11 +134,10 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
         <details><summary>Как работают связи</summary><p>Связь между новыми дочерними клетками создаётся отдельно от наследования прежних связей родителя. Каждая дочь наследует весь геном и начинает работать в указанном режиме.</p></details>
         {setting("Доля массы дочери A", "ratio", 0.2, 0.8, 0.01, "Дочь A получает указанную долю массы, дочь B — оставшуюся. Например, 0,5 означает равное распределение.")}
         {orientation("Угол деления","angle","Поворачивает ось, вдоль которой располагаются дочерние клетки, относительно направления родителя. Зеркально отражённая клетка поворачивает её в обратную сторону.")}
-      </fieldset>
-      <p className="genome-lineage">{m.name} → {m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}</p>
+      </fieldset>}
+      <p className="genome-lineage">{m.kind === 16 ? `${m.name} → слияние → ${genome[m.childA].name}` : `${m.name} → ${m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}`}</p>
     </section>
     <section><h3>Жизненный цикл</h3>
-      {setting(m.kind === 2 ? "Скорость жгутика" : "Подвижность", "speed", 0, 60, 1, m.kind === 2 ? "Жгутик двигает клетку и связанные с ней клетки. Более высокая скорость увеличивает расход массы." : "Задаёт подвижность свободной клетки. Связанная клетка без жгутика сама не перемещает организм.")}
       {setting("Продолжительность жизни", "lifespan", 20, 1000, 10, "После этого возраста клетка погибает, если старение включено в настройках среды.", "с")}
     </section>
     <details className="genome-examples"><summary>Начать с готового генома</summary>

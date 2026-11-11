@@ -77,7 +77,7 @@ test("independent daughter directions, handedness and colors survive all current
   Object.assign(genome[1], { mirrorB: true, red: 1, green: 0, blue: 0 });
   const encoded = flatten(genome);
   assert.equal(encoded.length, 2 + genome.length * MODE_STRIDE);
-  assert.equal(encoded[0], -3);
+  assert.equal(encoded[0], -4);
   assert.equal(encoded[1], genome.length);
   assert.deepEqual(inflate(encoded), genome);
   assert.deepEqual(parseGenome(serializeGenome(genome)), genome);
@@ -113,7 +113,7 @@ test("extended genomes reject mixed colors, nonfinite angles, missing fields and
     {red:0,green:NaN,blue:0}, {green:undefined},
   ]) assert.throws(()=>parseGenome(JSON.stringify({version:3,modes:[{...newMode(0),...change}]})));
   const valid=flatten([newMode(0)]);
-  for(const [index,value] of [[1,0],[1,2],[1,1.5],[2+14,.5],[2+12,4],[2+16,NaN]]) {
+  for(const [index,value] of [[1,0],[1,2],[1,1.5],[2+14,.5],[2+12,4],[2+16,NaN],[2+19,4],[2+20,16],[2+21,61]]) {
     const broken=valid.slice();broken[index]=value;assert.throws(()=>inflate(broken));
   }
   assert.throws(()=>inflate(valid.slice(0,-1)));

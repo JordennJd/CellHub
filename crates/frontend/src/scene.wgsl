@@ -63,22 +63,181 @@ struct CellOut {
     o.world=a.yz+o.local;o.pos=project(o.world);o.radius=radius;o.kind=u32(b.x);o.angle=c.y;o.mutations=c.x;o.selected=u32(a.x==camera.selected);o.custom_color=c.z;return o;
 }
 fn segment_distance(p:vec2f,a:vec2f,b:vec2f)->f32 {let v=b-a;let t=clamp(dot(p-a,v)/max(dot(v,v),0.0001),0.,1.);return length(p-a-v*t);}
+fn disc(p:vec2f,c:vec2f,radius:f32)->f32 {return coverage(length(p-c)-radius);}
+fn ring(p:vec2f,c:vec2f,radius:f32,width:f32)->f32 {return coverage(abs(length(p-c)-radius)-width);}
+fn stroke(p:vec2f,a:vec2f,b:vec2f,width:f32)->f32 {return coverage(segment_distance(p,a,b)-width);}
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
-    let palette=array<u32,6>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u);
-    var color=rgb(palette[min(o.kind,5u)]);
+    // Cell Lab's roster: every type keeps a distinct hue and organelle pattern.
+    let palette=array<u32,18>(
+        0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,
+        0xe8d17au,0x8fd8c0u,0xd4a6e8u,0x7bb98au,0xe6a26bu,0x9cc7e8u,
+        0xd98c9cu,0xc9b3e8u,0xa8c98au,0xe3b52eu,0xf2a6c4u,0x8ed0a1u);
+    var color=rgb(palette[min(o.kind,17u)]);
     if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
-    let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
+    let r=o.radius;let local=o.local;let d=length(local);
+    let direction=vec2f(cos(o.angle),sin(o.angle));
+    let side=vec2f(-direction.y,direction.x);
+    let width=max(r*0.045,0.8/camera.zoom);
     let halo=coverage(d-r-1./camera.zoom);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.6/camera.zoom);
-    let nucleus=coverage(length(o.local-direction*r*0.2)-r*0.29);
-    let tail=coverage(segment_distance(o.local,-direction*r,-direction*r*2.)-0.6/camera.zoom);
-    let mutation=coverage(length(o.local-vec2f(r*0.55,-r*0.55))-2.);
     let selection=coverage(abs(d-r-4./camera.zoom)-0.75/camera.zoom);
     // Keep custom body RGB; lift only details that fall below 3:1 against the dish.
     var ink=color;
     let minimum_ink_luminance=3.*(relative_luminance(rgb(0x253e2bu))+0.05)-0.05;
     if o.custom_color>=0. && relative_luminance(color)<minimum_ink_luminance {ink=rgb(0xdce6dcu);}
-    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*0.22);out=over(out,ink,outline);out=over(out,ink,nucleus*0.9);
-    if o.kind==2u {out=over(out,ink,tail);}
+    let accent=mix(ink,vec3f(1.),0.45);
+    var out=over(vec4f(0.),color,halo*0.08);out=over(out,color,body*0.22);out=over(out,ink,outline);
+    // A faint shared nucleus anchors every type; the organelle below tells them apart.
+    out=over(out,ink,coverage(length(local-direction*r*0.18)-r*0.28)*0.28);
+    if o.kind==0u {
+        // Photocyte: chloroplasts in a ring.
+        for (var i=0;i<5;i++) {
+            let a=f32(i)*1.256637+0.35;
+            let p=vec2f(cos(a),sin(a))*r*0.5;
+            let size=max(r*0.11,1.2/camera.zoom);
+            out=over(out,accent,disc(local,p,size)*0.55);
+            out=over(out,ink,ring(local,p,size,width*0.45)*0.8);
+        }
+    }
+    if o.kind==1u {
+        // Phagocyte: food vacuoles and a feeding mouth.
+        for (var i=0;i<3;i++) {
+            let a=f32(i)*2.094395+0.5;
+            let p=direction*r*0.32+vec2f(cos(a),sin(a))*r*0.35;
+            out=over(out,accent,disc(local,p,r*0.16)*0.32);
+            out=over(out,ink,ring(local,p,r*0.16,width*0.7)*0.85);
+        }
+        out=over(out,ink,stroke(local,direction*r*0.88+side*r*0.3,direction*r*0.88-side*r*0.3,width)*0.9);
+    }
+    if o.kind==2u {
+        // Flagellocyte: a two-joint flagellum trails the body.
+        let base=-direction*r;
+        let middle=-direction*r*1.45+side*r*0.22;
+        let tip=-direction*r*1.9-side*r*0.12;
+        out=over(out,ink,stroke(local,base,middle,max(width,0.7/camera.zoom))*0.95);
+        out=over(out,ink,stroke(local,middle,tip,max(width,0.7/camera.zoom))*0.95);
+        out=over(out,accent,disc(local,base,r*0.11)*0.6);
+    }
+    if o.kind==3u {
+        // Virocyte: a crown of infectivity spikes.
+        for (var i=0;i<8;i++) {
+            let a=f32(i)*0.785398;
+            let dirv=direction*cos(a)+side*sin(a);
+            out=over(out,ink,stroke(local,dirv*r*0.94,dirv*r*1.22,width*0.8)*0.85);
+        }
+        out=over(out,ink,ring(local,vec2f(0.),r*0.56,width*0.5)*0.5);
+    }
+    if o.kind==4u {
+        // Keratinocyte: a thick armour shell and inner plates.
+        out=over(out,ink,ring(local,vec2f(0.),r*0.72,width)*0.8);
+        out=over(out,ink,ring(local,vec2f(0.),r+2.4/camera.zoom,0.8/camera.zoom)*0.55);
+        for (var i=0;i<6;i++) {
+            let a=f32(i)*1.047198+0.52;
+            out=over(out,ink,disc(local,vec2f(cos(a),sin(a))*r*0.72,max(r*0.06,0.9/camera.zoom))*0.7);
+        }
+    }
+    if o.kind==5u {
+        // Devorocyte: a wide jaw and a digesting stomach.
+        out=over(out,ink,stroke(local,direction*r*0.25+side*r*0.42,direction*r*0.82,width)*0.95);
+        out=over(out,ink,stroke(local,direction*r*0.25-side*r*0.42,direction*r*0.82,width)*0.95);
+        out=over(out,ink,ring(local,vec2f(0.),r*0.55,width*0.65)*0.6);
+    }
+    if o.kind==6u {
+        // Lipocyte: one oversized fat vacuole.
+        let p=-direction*r*0.08;
+        out=over(out,accent,disc(local,p,r*0.55)*0.25);
+        out=over(out,ink,ring(local,p,r*0.55,width)*0.9);
+        out=over(out,accent,disc(local,p-direction*r*0.18,r*0.12)*0.35);
+    }
+    if o.kind==7u {
+        // Buoyocyte: a gas vesicle with a highlight.
+        out=over(out,accent,disc(local,vec2f(0.),r*0.46)*0.3);
+        out=over(out,ink,ring(local,vec2f(0.),r*0.46,width)*0.9);
+        out=over(out,accent,disc(local,vec2f(-r*0.14,r*0.16),r*0.1)*0.5);
+    }
+    if o.kind==8u {
+        // Glueocyte: adhesive knobs around the membrane.
+        for (var i=0;i<6;i++) {
+            let a=f32(i)*1.047198;
+            let dirv=direction*cos(a)+side*sin(a);
+            out=over(out,ink,disc(local,dirv*r*1.08,max(r*0.09,1./camera.zoom))*0.9);
+        }
+        out=over(out,ink,ring(local,vec2f(0.),r*0.5,width*0.55)*0.45);
+    }
+    if o.kind==9u {
+        // Nitrocyte: nitrogen-fixing nodules.
+        for (var i=0;i<4;i++) {
+            let a=f32(i)*1.570796+0.785398;
+            out=over(out,ink,disc(local,vec2f(cos(a),sin(a))*r*0.45,r*0.1)*0.85);
+        }
+        out=over(out,ink,ring(local,vec2f(0.),r*0.62,width*0.45)*0.45);
+    }
+    if o.kind==10u {
+        // Stereocyte: two directional eyes wired to the centre.
+        let eye_a=direction*r*0.4+side*r*0.42;
+        let eye_b=direction*r*0.4-side*r*0.42;
+        out=over(out,accent,disc(local,eye_a,r*0.15)*0.4);
+        out=over(out,ink,ring(local,eye_a,r*0.15,width*0.75)*0.9);
+        out=over(out,accent,disc(local,eye_b,r*0.15)*0.4);
+        out=over(out,ink,ring(local,eye_b,r*0.15,width*0.75)*0.9);
+        out=over(out,ink,stroke(local,direction*r*0.15,eye_a,width*0.45)*0.5);
+        out=over(out,ink,stroke(local,direction*r*0.15,eye_b,width*0.45)*0.5);
+    }
+    if o.kind==11u {
+        // Senseocyte: a single lens with a receiving ring.
+        let p=direction*r*0.42;
+        out=over(out,accent,disc(local,p,r*0.2)*0.3);
+        out=over(out,ink,ring(local,p,r*0.2,width*0.75)*0.9);
+        out=over(out,ink,disc(local,p,r*0.07)*0.9);
+        out=over(out,ink,ring(local,p,r*0.34,width*0.45)*0.45);
+    }
+    if o.kind==12u {
+        // Myocyte: parallel contractile fibres.
+        for (var i:i32=-2;i<=2;i=i+1) {
+            let offset=f32(i)*r*0.22;
+            out=over(out,ink,stroke(local,-direction*r*0.55+side*offset,direction*r*0.55+side*offset,width*0.55)*0.8);
+        }
+    }
+    if o.kind==13u {
+        // Neurocyte: soma, axon and two terminal branches.
+        let start=-direction*r*0.05;
+        let end=-direction*r*1.22;
+        out=over(out,ink,stroke(local,start,end,max(width,0.8/camera.zoom))*0.9);
+        out=over(out,ink,stroke(local,end,end+side*r*0.3-direction*r*0.18,width*0.65)*0.9);
+        out=over(out,ink,stroke(local,end,end-side*r*0.3-direction*r*0.18,width*0.65)*0.9);
+        out=over(out,accent,disc(local,direction*r*0.1,r*0.18)*0.4);
+    }
+    if o.kind==14u {
+        // Secrocyte: secretory vesicles feeding a duct.
+        for (var i=0;i<3;i++) {
+            let a=f32(i)*2.094395+0.5;
+            let p=direction*r*0.3+vec2f(cos(a),sin(a))*r*0.3;
+            out=over(out,accent,disc(local,p,r*0.13)*0.45);
+            out=over(out,ink,ring(local,p,r*0.13,width*0.65)*0.85);
+        }
+        out=over(out,ink,stroke(local,direction*r*0.55,direction*r*0.9,width*0.55)*0.7);
+    }
+    if o.kind==15u {
+        // Stemocyte: a large, pale nucleus ready to differentiate.
+        out=over(out,accent,disc(local,vec2f(0.),r*0.38)*0.28);
+        out=over(out,ink,ring(local,vec2f(0.),r*0.38,width)*0.9);
+        out=over(out,ink,disc(local,-direction*r*0.08,r*0.16)*0.8);
+    }
+    if o.kind==16u {
+        // Gamete: a hooked mating tail and a pronucleus.
+        out=over(out,ink,stroke(local,-direction*r*0.7,-direction*r*1.35+side*r*0.42,max(width,0.7/camera.zoom))*0.9);
+        out=over(out,accent,disc(local,direction*r*0.25,r*0.14)*0.5);
+        out=over(out,ink,ring(local,vec2f(0.),r*0.6,width*0.45)*0.4);
+    }
+    if o.kind==17u {
+        // Ciliocyte: a comb of beating cilia around the rim.
+        for (var i=0;i<12;i++) {
+            let a=f32(i)*0.523599;
+            let dirv=direction*cos(a)+side*sin(a);
+            out=over(out,ink,stroke(local,dirv*r,dirv*r*1.18,width*0.65)*0.85);
+        }
+        out=over(out,ink,ring(local,vec2f(0.),r*0.55,width*0.45)*0.45);
+    }
+    let mutation=coverage(length(local-vec2f(r*0.55,-r*0.55))-2.);
     if o.mutations>0. {out=over(out,vec3f(1.),mutation);}
     if o.selected!=0u {out=over(out,vec3f(1.),selection);}
     out*=coverage(dish_distance(o.world));

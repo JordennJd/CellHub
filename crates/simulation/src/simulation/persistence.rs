@@ -48,7 +48,7 @@ impl Simulation {
     pub(super) fn encode_state(&self) -> Vec<f64> {
         let s = self.settings;
         let mut values = vec![
-            3.,
+            4.,
             self.seed as f64,
             self.rng as f64,
             self.tick as f64,
@@ -100,6 +100,11 @@ impl Simulation {
                 c.mutations as f64,
                 c.cooldown as f64,
                 c.mirrored as u8 as f64,
+                c.signal[0] as f64,
+                c.signal[1] as f64,
+                c.signal[2] as f64,
+                c.signal[3] as f64,
+                c.toxin as f64,
             ]);
             let genes = genome.values();
             values.push(genes.len() as f64);
@@ -125,7 +130,7 @@ impl Simulation {
         }
         let mut input = Reader { values, offset: 0 };
         let version = input.integer(u32::MAX)?;
-        if !(1..=3).contains(&version) {
+        if !(1..=4).contains(&version) {
             return Err("Неподдерживаемая версия сохранения".into());
         }
         let seed = input.integer(u32::MAX)?;
@@ -195,6 +200,21 @@ impl Simulation {
                 mutations: input.integer(u32::MAX)?,
                 cooldown: input.float(0., f32::MAX)?,
                 mirrored: if version >= 2 { input.flag()? } else { false },
+                signal: if version >= 4 {
+                    [
+                        input.float(-100., 100.)?,
+                        input.float(-100., 100.)?,
+                        input.float(-100., 100.)?,
+                        input.float(-100., 100.)?,
+                    ]
+                } else {
+                    [0.; 4]
+                },
+                toxin: if version >= 4 {
+                    input.float(0., 100.)?
+                } else {
+                    0.
+                },
             };
             let length = input.integer(1_200_000)? as usize;
             if input.values.len().saturating_sub(input.offset) < length {
@@ -205,13 +225,13 @@ impl Simulation {
                 .collect::<Result<Vec<_>, _>>()?;
             let genome = decode_checked(&genes)?;
             // The ordinary input ABI clamps sliders; stored state must never be silently changed.
-            if (if version == 1 {
-                genome.legacy_values()
-            } else {
-                genome.values()
-            }) != genes
-                || cell.mode >= genome.len()
-            {
+            // World v1 stored v2 rows; v2 and v3 stored v3 rows; v4 stores full rows.
+            let reencoded = match version {
+                1 => genome.legacy_values(),
+                2 | 3 => genome.values_v3(),
+                _ => genome.values(),
+            };
+            if reencoded != genes || cell.mode >= genome.len() {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
             }
             let entity = restored.world.spawn((position, cell, genome));

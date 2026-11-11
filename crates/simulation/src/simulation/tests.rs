@@ -39,6 +39,191 @@ fn only_phagocytes_consume_substrate_food() {
 }
 
 #[test]
+fn all_eighteen_archetypes_round_trip_and_spawn() {
+    for kind in 0..crate::cell_types::COUNT {
+        let genes = mode_genes(kind, |_| {});
+        assert_eq!(
+            crate::genome::decode_checked(&genes).unwrap().values(),
+            genes
+        );
+        let mut s = quiet_world();
+        s.spawn(500., 500., 0, &genes).unwrap();
+        assert_eq!(s.snapshot()[4], kind as f32, "kind={kind}");
+    }
+}
+
+#[test]
+fn lipocyte_stores_fat_and_insulates_signal_diffusion() {
+    let mut s = quiet_world();
+    let neuro = mode_genes(13, |m| {
+        m.signal = 60.;
+        m.channel = 0;
+    });
+    let lipo = mode_genes(6, |m| m.signal = 10.);
+    let photo = mode_genes(0, |_| {});
+    let source = s.spawn(500., 500., 0, &neuro).unwrap();
+    let fat = s.spawn(522., 500., 0, &lipo).unwrap();
+    let target = s.spawn(544., 500., 0, &photo).unwrap();
+    s.bonds.extend([(source, fat), (fat, target)]);
+    s.advance(30);
+    let signal = |id| s.world.get::<&Cell>(entity(&s, id)).unwrap().signal[0];
+    assert!(signal(source) > 10.);
+    assert!(signal(target) < 0.01, "lipocyte must insulate the graph");
+    assert!(s.world.get::<&Cell>(entity(&s, fat)).unwrap().mass > 4.5);
+}
+
+#[test]
+fn senseocyte_converts_a_stimulus_into_its_selected_channel() {
+    let genes = mode_genes(11, |m| {
+        m.speed = 30.;
+        m.signal = 60.;
+        m.subtype = 1; // food
+        m.channel = 2; // S3
+    });
+    let mut s = quiet_world();
+    s.configure_environment(super::environment::Environment {
+        light: 0.,
+        food: 3.,
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let id = s.spawn(2000., 1300., 0, &genes).unwrap();
+    s.advance(2);
+    let cell = s.world.get::<&Cell>(entity(&s, id)).unwrap();
+    assert!(cell.signal[2] > 10.);
+    assert!(cell.signal[0].abs() < 0.01);
+}
+
+#[test]
+fn stemocyte_differentiates_on_path_one_signal() {
+    let mut genes = crate::genome::decode_checked(&modern_genes(2))
+        .unwrap()
+        .values();
+    genes[2] = 15.; // mode 0: stemocyte
+    genes[2 + 2] = 1.; // path 1
+    genes[2 + 8] = 0.;
+    genes[24] = 0.; // mode 1: photocyte
+    genes[24 + 8] = 0.;
+    let mut s = quiet_world();
+    let id = s.spawn(500., 500., 0, &genes).unwrap();
+    {
+        let mut cell = s.world.get::<&mut Cell>(entity(&s, id)).unwrap();
+        cell.age = MIN_DIVISION_AGE;
+        cell.signal[0] = 1.;
+    }
+    s.advance(1);
+    assert_eq!(s.cell_mode(id), 1);
+    assert_eq!(s.snapshot()[4], 0.);
+}
+
+#[test]
+fn myocyte_shortens_its_adhesion_and_ciliocyte_swims() {
+    let myo = mode_genes(12, |m| m.speed = 30.);
+    let passive = mode_genes(0, |_| {});
+    let mut s = quiet_world();
+    let a = s.spawn(500., 500., 0, &myo).unwrap();
+    let b = s.spawn(522., 500., 0, &passive).unwrap();
+    s.bonds.insert((a, b));
+    s.world.get::<&mut Cell>(entity(&s, a)).unwrap().signal[0] = 60.;
+    s.advance(1);
+    let rows = s.snapshot();
+    let distance = (rows[1] - rows[13]).hypot(rows[2] - rows[14]);
+    assert!(distance < 20.5, "distance={distance}");
+
+    let cilia = mode_genes(17, |m| m.speed = 30.);
+    let mut s = quiet_world();
+    let id = s.spawn(500., 1000., 0, &cilia).unwrap();
+    s.world.get::<&mut Position>(entity(&s, id)).unwrap().angle = 0.;
+    s.advance(30);
+    assert!(s.snapshot()[1] > 505.);
+}
+
+#[test]
+fn glueocyte_attaches_to_an_unprotected_neighbour() {
+    let glue = mode_genes(8, |m| m.signal = 3.);
+    let passive = mode_genes(0, |_| {});
+    let mut s = quiet_world();
+    let a = s.spawn(500., 500., 0, &glue).unwrap();
+    let b = s.spawn(514., 500., 0, &passive).unwrap();
+    s.advance(1);
+    assert!(s.bonds.contains(&(a.min(b), a.max(b))));
+}
+
+#[test]
+fn gametes_fuse_into_the_larger_cells_post_fertilization_mode() {
+    let mut genes = crate::genome::decode_checked(&modern_genes(2))
+        .unwrap()
+        .values();
+    genes[2] = 16.; // mode 0: gamete
+    genes[2 + 2] = 1.; // mode after fertilization
+    genes[2 + 8] = 0.;
+    genes[24] = 0.;
+    genes[24 + 8] = 0.;
+    let mut s = quiet_world();
+    s.spawn(500., 500., 0, &genes).unwrap();
+    s.spawn(514., 500., 0, &genes).unwrap();
+    s.advance(1);
+    assert_eq!(s.world.len(), 1);
+    let cell = s.world.query::<&Cell>().iter().next().unwrap().1.clone();
+    assert_eq!(cell.mode, 1);
+    assert!(cell.mass > 1.9);
+}
+
+#[test]
+fn buoyocyte_density_and_nitrocyte_fixation_are_physical() {
+    let buoy = mode_genes(7, |m| m.signal = 1.);
+    let mut s = quiet_world();
+    s.configure_environment(super::environment::Environment {
+        gravity: 1.,
+        density: 0.,
+        viscosity: 1.,
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    s.spawn(500., 1000., 0, &buoy).unwrap();
+    s.advance(30);
+    assert!(s.snapshot()[2] < 990.);
+
+    let nitro = mode_genes(9, |m| m.signal = 60.);
+    let mut n = quiet_world();
+    n.configure_environment(super::environment::Environment {
+        light: 0.,
+        food: 0.,
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let id = n.spawn(500., 500., 0, &nitro).unwrap();
+    n.advance(30);
+    assert!(n.world.get::<&Cell>(entity(&n, id)).unwrap().mass > 1.02);
+}
+
+#[test]
+fn secrocyte_cyanide_poisons_but_keratin_shields_a_bonded_neighbour() {
+    let run = |shielded: bool| {
+        let mut s = quiet_world();
+        let secro = mode_genes(14, |m| {
+            m.signal = 60.;
+            m.subtype = 0;
+        });
+        let target = mode_genes(0, |_| {});
+        let a = s.spawn(500., 500., 0, &secro).unwrap();
+        let b = s.spawn(512., 500., 0, &target).unwrap();
+        if shielded {
+            let shield = s.spawn(512., 520., 0, &mode_genes(4, |_| {})).unwrap();
+            s.bonds.insert((b, shield));
+        }
+        s.advance(3);
+        let _ = a;
+        s.world.get::<&Cell>(entity(&s, b)).unwrap().toxin
+    };
+    assert!(run(false) > 0.01);
+    assert!(run(true) < 0.001);
+}
+
+#[test]
 fn bond_energy_is_synchronous_conservative_and_independent_of_entity_order() {
     let make = |reverse: bool, masses: &[f32], edges: &[(u32, u32)]| {
         let mut s = quiet_world();
@@ -257,13 +442,24 @@ fn version_two_world_retains_mirroring_with_default_environment_extensions() {
         .unwrap()
         .mirrored = true;
     let current = original.encode_state();
-    let mut legacy = current[..14].to_vec();
-    legacy[0] = 2.;
-    legacy.extend_from_slice(&current[17..]);
+    let legacy = without_v4_state(&current, 2);
     let mut restored = Simulation::new(123);
     restored.restore_checked(&legacy).unwrap();
     assert_eq!(restored.encode_state(), current);
     assert_eq!(restored.snapshot()[11], 1.);
+}
+
+#[test]
+fn version_three_world_migrates_with_default_signals_and_toxins() {
+    let mut original = quiet_world();
+    original.spawn(500., 500., 0, &modern_genes(2)).unwrap();
+    original.advance(5);
+    let current = original.encode_state();
+    let legacy = without_v4_state(&current, 3);
+    let mut restored = Simulation::new(123);
+    restored.restore_checked(&legacy).unwrap();
+    assert_eq!(restored.encode_state(), current);
+    assert_eq!(restored.snapshot()[4], original.snapshot()[4]);
 }
 
 #[test]
@@ -347,7 +543,15 @@ fn version_three_genomes_reject_malformed_extra_fields() {
     let genes = crate::genome::decode_checked(&modern_genes(1))
         .unwrap()
         .values();
-    for (index, value) in [(1, 2.), (2 + 12, 4.), (2 + 14, 0.5), (2 + 16, 0.5)] {
+    for (index, value) in [
+        (1, 2.),
+        (2 + 12, 4.),
+        (2 + 14, 0.5),
+        (2 + 16, 0.5),
+        (2 + 19, 4.),
+        (2 + 20, 16.),
+        (2 + 21, 61.),
+    ] {
         let mut invalid = genes.clone();
         invalid[index] = value;
         assert!(
@@ -635,6 +839,19 @@ fn modern_genes(count: usize) -> Vec<f32> {
         })
         .collect()
 }
+
+/// Build a version-4 genome with a single non-dividing mode of `kind`.
+fn mode_genes(kind: u8, configure: impl FnOnce(&mut crate::genome::Mode)) -> Vec<f32> {
+    let mut genome = crate::genome::decode_checked(&modern_genes(1)).unwrap();
+    {
+        let mode = &mut genome.modes_mut()[0];
+        mode.kind = kind;
+        mode.speed = 0.;
+        mode.can_divide = false;
+        configure(mode);
+    }
+    genome.values()
+}
 fn entity(s: &Simulation, id: u32) -> Entity {
     s.world
         .query::<&Cell>()
@@ -654,6 +871,36 @@ fn mature_all(s: &mut Simulation) {
     for (_, c) in s.world.query_mut::<&mut Cell>() {
         c.age = MIN_DIVISION_AGE;
     }
+}
+
+/// Rewrite a version-4 state as version 2 or 3 by dropping signal/toxin and
+/// re-encoding every genome with the older ABI. Version 2 also predates
+/// only-point-mutations, gravity and density, whose header values disappear.
+fn without_v4_state(state: &[f64], version: u32) -> Vec<f64> {
+    let tiles_end = 18 + crate::terrain::GRID * crate::terrain::GRID * 5;
+    let header_end = if version >= 3 { 17 } else { 14 };
+    let mut output = state[..header_end].to_vec();
+    output[0] = version as f64;
+    // Tile count is at index 17 for both legacy layouts.
+    output.extend_from_slice(&state[17..tiles_end]);
+    let count = state[tiles_end] as usize;
+    output.push(count as f64);
+    let mut offset = tiles_end + 1;
+    for _ in 0..count {
+        output.extend_from_slice(&state[offset..offset + 11]);
+        offset += 11 + 5;
+        let length = state[offset] as usize;
+        let genes: Vec<f32> = state[offset + 1..offset + 1 + length]
+            .iter()
+            .map(|v| *v as f32)
+            .collect();
+        let legacy_genes = crate::genome::decode_checked(&genes).unwrap().values_v3();
+        output.push(legacy_genes.len() as f64);
+        output.extend(legacy_genes.into_iter().map(f64::from));
+        offset += 1 + length;
+    }
+    output.extend_from_slice(&state[offset..]);
+    output
 }
 #[test]
 fn all_three_adhesion_flags_are_independent() {

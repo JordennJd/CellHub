@@ -1,6 +1,8 @@
 //! Genome archetypes, validation and ABI encoding.
 
-pub(crate) const MODE_STRIDE: usize = 19;
+use crate::cell_types::COUNT;
+
+pub(crate) const MODE_STRIDE: usize = 22;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Mode {
@@ -21,6 +23,12 @@ pub(crate) struct Mode {
     pub(crate) mirror_a: bool,
     pub(crate) mirror_b: bool,
     pub(crate) color: [f32; 3],
+    /// Signal channel S1..S4 used by sensors, neurons and stem cells.
+    pub(crate) channel: u8,
+    /// Type-specific selector (sense kind, secreted substance, gamete group).
+    pub(crate) subtype: u8,
+    /// Signed type-specific value: signal strength, density, fat, bond cap...
+    pub(crate) signal: f32,
 }
 
 impl Default for Mode {
@@ -43,6 +51,9 @@ impl Default for Mode {
             mirror_a: false,
             mirror_b: false,
             color: [-1.; 3],
+            channel: 0,
+            subtype: 0,
+            signal: 0.,
         }
     }
 }
@@ -63,8 +74,40 @@ impl Genome {
         &mut self.0
     }
 
-    /// Encode the genome back into the flat float ABI.
+    /// Encode the genome back into the flat float ABI (version 4).
     pub(crate) fn values(&self) -> Vec<f32> {
+        let mut output = vec![-4., self.len() as f32];
+        output.extend(self.0.iter().flat_map(|m| {
+            [
+                m.kind as f32,
+                m.threshold,
+                m.child_a as f32,
+                m.child_b as f32,
+                m.ratio,
+                m.speed,
+                m.angle,
+                m.lifespan,
+                m.can_divide as u8 as f32,
+                m.bind_children as u8 as f32,
+                m.keep_a as u8 as f32,
+                m.keep_b as u8 as f32,
+                m.child_angle_a,
+                m.child_angle_b,
+                m.mirror_a as u8 as f32,
+                m.mirror_b as u8 as f32,
+                m.color[0],
+                m.color[1],
+                m.color[2],
+                m.channel as f32,
+                m.subtype as f32,
+                m.signal,
+            ]
+        }));
+        output
+    }
+
+    /// Encode the genome as the previous version-3 ABI for old world saves.
+    pub(crate) fn values_v3(&self) -> Vec<f32> {
         let mut output = vec![-3., self.len() as f32];
         output.extend(self.0.iter().flat_map(|m| {
             [
@@ -102,21 +145,26 @@ impl Genome {
 
 #[allow(clippy::approx_constant)] // Genes intentionally use a compact ±3.14 radian clamp.
 pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
-    // v1 used eight modes of eight numbers, v2 raw rows of twelve; v3 adds a header.
+    // v1 used eight modes of eight numbers, v2 raw rows of twelve; v3 added a
+    // header and daughter details, v4 adds channel/subtype/signal fields.
+    let version4 = values.first() == Some(&-4.);
     let version3 = values.first() == Some(&-3.);
-    let count_hint = if version3 {
+    let versioned = version4 || version3;
+    let count_hint = if versioned {
         values.get(1).copied().unwrap_or(0.)
     } else {
         0.
     };
-    let values = if version3 {
+    let values = if versioned {
         values.get(2..).unwrap_or(&[])
     } else {
         values
     };
-    let legacy = !version3 && values.len() == 64;
-    let stride = if version3 {
+    let legacy = !versioned && values.len() == 64;
+    let stride = if version4 {
         MODE_STRIDE
+    } else if version3 {
+        19
     } else if legacy {
         8
     } else {
@@ -126,17 +174,17 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
     if count == 0
         || !values.len().is_multiple_of(stride)
         || values.iter().any(|v| !v.is_finite())
-        || (version3 && count_hint != count as f32)
+        || (versioned && count_hint != count as f32)
     {
         return Err(
-            "Genome must contain finite numbers in v3 rows of 19, v2 rows of 12 or 64 legacy numbers"
+            "Genome must contain finite numbers in v4 rows of 22, v3 rows of 19, v2 rows of 12 or 64 legacy numbers"
                 .into(),
         );
     }
     let mut modes = vec![Mode::default(); count];
     for (m, v) in modes.iter_mut().zip(values.chunks_exact(stride)) {
         if v[0].fract() != 0.
-            || !(0. ..=5.).contains(&v[0])
+            || !(0. ..=COUNT as f32 - 1.).contains(&v[0])
             || [v[2], v[3]]
                 .iter()
                 .any(|n| n.fract() != 0. || *n < 0. || *n >= count as f32)
@@ -144,7 +192,7 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
         {
             return Err("Invalid archetype type, child reference or adhesion flag".into());
         }
-        if version3
+        if versioned
             && (v[12..14]
                 .iter()
                 .any(|a| a.abs() > std::f32::consts::PI + 0.000001)
@@ -154,8 +202,17 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
         {
             return Err("Invalid daughter angle, mirror flag or color".into());
         }
+        if version4
+            && (v[19].fract() != 0.
+                || !(0. ..=3.).contains(&v[19])
+                || v[20].fract() != 0.
+                || !(0. ..=15.).contains(&v[20])
+                || !(-60. ..=60.).contains(&v[21]))
+        {
+            return Err("Invalid signal channel, subtype or strength".into());
+        }
         *m = Mode {
-            kind: v[0].clamp(0., 5.) as u8,
+            kind: v[0] as u8,
             threshold: v[1].clamp(1., 8.),
             child_a: v[2] as usize,
             child_b: v[3] as usize,
@@ -167,23 +224,26 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
             bind_children: !legacy && v[9] == 1.,
             keep_a: !legacy && v[10] == 1.,
             keep_b: !legacy && v[11] == 1.,
-            child_angle_a: if version3 {
+            child_angle_a: if versioned {
                 v[12].clamp(-std::f32::consts::PI, std::f32::consts::PI)
             } else {
                 0.
             },
-            child_angle_b: if version3 {
+            child_angle_b: if versioned {
                 v[13].clamp(-std::f32::consts::PI, std::f32::consts::PI)
             } else {
                 0.
             },
-            mirror_a: version3 && v[14] == 1.,
-            mirror_b: version3 && v[15] == 1.,
-            color: if version3 {
+            mirror_a: versioned && v[14] == 1.,
+            mirror_b: versioned && v[15] == 1.,
+            color: if versioned {
                 [v[16], v[17], v[18]].map(|c| if c == -1. { c } else { c.clamp(0., 1.) })
             } else {
                 [-1.; 3]
             },
+            channel: if version4 { v[19] as u8 } else { 0 },
+            subtype: if version4 { v[20] as u8 } else { 0 },
+            signal: if version4 { v[21] } else { 0. },
         };
     }
     Ok(Genome(modes))

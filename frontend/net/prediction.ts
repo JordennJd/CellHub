@@ -194,12 +194,12 @@ export class PredictionWorld {
     genome: Float32Array,
     now = performance.now(),
   ) {
-    // `flatten` prepends a two-value ABI header before the 19-float rows.
+    // `flatten` prepends a two-value ABI header before the 22-float rows.
     const index = 2 + mode * MODE_STRIDE;
     if (index < 0 || index + MODE_STRIDE > genome.length) return;
     const kind = Math.round(genome[index]);
     const geneSpeed = genome[index + 5];
-    const speed = kind === 2 ? geneSpeed : geneSpeed * 0.15;
+    const speed = kind === 2 ? geneSpeed : kind === 17 ? geneSpeed * 0.5 : 0;
     const id = this.nextGhostId--;
     this.pendingBySeq.set(seq, id);
     this.ghosts.set(id, {
