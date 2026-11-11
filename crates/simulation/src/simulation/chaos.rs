@@ -4,7 +4,9 @@ use super::Simulation;
 use super::boundary::Boundary;
 use crate::components::{Cell, LIMIT, Position, radius};
 use crate::genome::{Genome, Mode, decode_checked};
-use crate::terrain::{CHAOS_GRID, CHAOS_SIZE, Tile, chaos_map, index, random};
+#[cfg(test)]
+use crate::terrain::{CHAOS_GRID, index};
+use crate::terrain::{CHAOS_SIZE, Tile, chaos_map, random};
 use wasm_bindgen::prelude::*;
 
 pub(super) const HISTORY_LIMIT: usize = 300;
@@ -57,7 +59,12 @@ pub(super) fn daylight(tick: u32) -> f32 {
 }
 
 /// Analytic seeded orbits keep clouds independent of biology and spawn RNG.
+#[cfg(test)]
 pub(super) fn clouds(seed: u32, tick: u32) -> [[f32; 6]; 3] {
+    clouds_rect(seed, tick, CHAOS_SIZE, CHAOS_SIZE)
+}
+
+fn clouds_rect(seed: u32, tick: u32, width: f32, height: f32) -> [[f32; 6]; 3] {
     let mut rng = (seed ^ 0xc8013ea4).max(1);
     std::array::from_fn(|i| {
         let phase = random(&mut rng) * std::f32::consts::TAU;
@@ -67,21 +74,37 @@ pub(super) fn clouds(seed: u32, tick: u32) -> [[f32; 6]; 3] {
         let orbit = 1000. + i as f32 * 300.;
         let omega = std::f32::consts::TAU / period;
         [
-            CHAOS_SIZE / 2. + libm::cosf(a) * orbit,
-            CHAOS_SIZE / 2. + libm::sinf(a * 1.3 + phase) * orbit * 0.8,
+            width / 2. + libm::cosf(a) * orbit * width / CHAOS_SIZE,
+            height / 2. + libm::sinf(a * 1.3 + phase) * orbit * 0.8 * height / CHAOS_SIZE,
             radius,
             0.55 + i as f32 * 0.15,
-            -libm::sinf(a) * orbit * omega,
-            libm::cosf(a * 1.3 + phase) * orbit * 0.8 * 1.3 * omega,
+            -libm::sinf(a) * orbit * omega * width / CHAOS_SIZE,
+            libm::cosf(a * 1.3 + phase) * orbit * 0.8 * 1.3 * omega * height / CHAOS_SIZE,
         ]
     })
 }
 
 #[wasm_bindgen]
 impl Simulation {
-    pub fn start_chaos(&mut self, seed: u32, genes: &[f32]) -> Result<(), JsError> {
+    pub fn start_chaos(
+        &mut self,
+        seed: u32,
+        genes: &[f32],
+        width: Option<f32>,
+    ) -> Result<(), JsError> {
         let pool = decode_checked(genes).map_err(|e| JsError::new(&e))?;
-        self.start_chaos_checked(seed, pool);
+        if let Some(width) = width {
+            if !width.is_finite()
+                || width < CHAOS_SIZE * 0.5
+                || width > CHAOS_SIZE * 4.
+                || width % 64. != 0.
+            {
+                return Err(JsError::new("Некорректная ширина поля"));
+            }
+            self.start_chaos_in_bounds(seed, pool, width, CHAOS_SIZE, true);
+        } else {
+            self.start_chaos_checked(seed, pool);
+        }
         Ok(())
     }
 
@@ -117,6 +140,9 @@ impl Simulation {
     pub fn world_size(&self) -> f32 {
         self.boundary.size()
     }
+    pub fn world_width(&self) -> f32 {
+        self.boundary.width()
+    }
 
     /// Header followed by three clouds (x,y,r,intensity,vx,vy).
     pub fn chaos_info(&self) -> Vec<f64> {
@@ -136,10 +162,15 @@ impl Simulation {
             chaos.pool.len() as f64,
         ];
         values.extend(
-            clouds(self.seed, self.tick)
-                .into_iter()
-                .flatten()
-                .map(f64::from),
+            clouds_rect(
+                self.seed,
+                self.tick,
+                self.boundary.width(),
+                self.boundary.size(),
+            )
+            .into_iter()
+            .flatten()
+            .map(f64::from),
         );
         values
     }
@@ -161,12 +192,28 @@ impl Simulation {
 
 impl Simulation {
     pub(super) fn start_chaos_checked(&mut self, seed: u32, pool: Genome) {
+        self.start_chaos_in_bounds(seed, pool, CHAOS_SIZE, CHAOS_SIZE, false);
+    }
+
+    pub(super) fn start_chaos_in_bounds(
+        &mut self,
+        seed: u32,
+        pool: Genome,
+        width: f32,
+        height: f32,
+        rectangle: bool,
+    ) {
         let track_divisions = self.division_events.is_some();
         *self = Self::new(seed);
         self.set_division_event_tracking(track_divisions);
         self.boundary = Boundary::Chaos;
         self.chaos = Some(Chaos::new(seed, pool));
         self.tiles = self.chaos.as_ref().unwrap().baseline.clone();
+        self.spatial = super::spatial::SpatialGrid::with_size(width, height);
+        if rectangle {
+            self.set_rectangular_dish(width, height)
+                .expect("validated chaos bounds");
+        }
         self.refresh_chaos_fields();
         for i in 0..132 {
             self.chaos_arrival(i % 11 == 0, false);
@@ -181,10 +228,15 @@ impl Simulation {
             return;
         };
         let light = daylight(self.tick) * self.settings.light;
-        let clouds = clouds(self.seed, self.tick);
+        let clouds = clouds_rect(
+            self.seed,
+            self.tick,
+            self.boundary.width(),
+            self.boundary.size(),
+        );
         for (i, (tile, base)) in self.tiles.iter_mut().zip(&chaos.baseline).enumerate() {
-            let x = (i % CHAOS_GRID) as f32 * 64. + 32.;
-            let y = (i / CHAOS_GRID) as f32 * 64. + 32.;
+            let x = (i % self.boundary.columns()) as f32 * 64. + 32.;
+            let y = (i / self.boundary.columns()) as f32 * 64. + 32.;
             let mut radiation = base.radiation;
             for cloud in clouds {
                 let falloff = (1.
@@ -241,9 +293,11 @@ impl Simulation {
         };
         let mut center = None;
         for _ in 0..64 {
-            let x = 80. + random(&mut chaos.rng) * (CHAOS_SIZE - 160.);
-            let y = 80. + random(&mut chaos.rng) * (CHAOS_SIZE - 160.);
-            if libm::hypotf(x - CHAOS_SIZE / 2., y - CHAOS_SIZE / 2.) > CHAOS_SIZE / 2. - 100. {
+            let x = 80. + random(&mut chaos.rng) * (self.boundary.width() - 160.);
+            let y = 80. + random(&mut chaos.rng) * (self.boundary.size() - 160.);
+            if !matches!(self.boundary, Boundary::Rectangle { .. })
+                && libm::hypotf(x - CHAOS_SIZE / 2., y - CHAOS_SIZE / 2.) > CHAOS_SIZE / 2. - 100.
+            {
                 continue;
             }
             if self
@@ -257,7 +311,7 @@ impl Simulation {
             {
                 continue;
             }
-            let tile = self.tiles[index(x, y, CHAOS_GRID)];
+            let tile = self.tiles[self.boundary.tile(x, y)];
             if chaos.viable && tile.radiation > 0.5 {
                 continue;
             }
@@ -387,6 +441,40 @@ mod tests {
             let n = ticks.min(120);
             sim.advance(n);
             ticks -= n;
+        }
+    }
+
+    #[test]
+    fn rectangular_worlds_keep_scale_corners_resources_and_exact_saves() {
+        let mut sandbox = Simulation::new(91);
+        sandbox.set_rectangular_dish(6144., 3072.).unwrap();
+        let id = sandbox.spawn(6000., 100., 1, &pool().values()).unwrap();
+        let tile = sandbox.boundary.tile(6000., 100.);
+        assert_eq!(sandbox.tiles.len(), 96 * 48);
+        let food = sandbox.tiles[tile].food;
+        sandbox.advance(1);
+        assert!(sandbox.tiles[tile].food < food);
+        let row = sandbox.snapshot();
+        assert_eq!(row[0], id as f32);
+        assert!(row[1] > 5900. && row[2] < 200.);
+        let mut chaos = Simulation::new(91);
+        chaos.start_chaos_in_bounds(91, pool(), 12288., 6144., true);
+        assert_eq!(chaos.world_width(), sandbox.world_width() * 2.);
+        assert_eq!(chaos.world_size(), sandbox.world_size() * 2.);
+        assert_eq!(chaos.tiles.len(), sandbox.tiles.len() * 4);
+        for sim in [&mut sandbox, &mut chaos] {
+            let state = sim.encode_state();
+            let mut restored = Simulation::new(1);
+            restored.restore_checked(&state).unwrap();
+            assert_eq!(restored.encode_state(), state);
+            sim.advance(120);
+            restored.advance(120);
+            assert_eq!(sim.encode_state(), restored.encode_state());
+            let width = sim.world_width();
+            let height = sim.world_size();
+            sim.reset();
+            assert_eq!(sim.world_width(), width);
+            assert_eq!(sim.world_size(), height);
         }
     }
 
@@ -619,7 +707,7 @@ mod tests {
         let sandbox = Simulation::new(17);
         let mut v5 = sandbox.encode_state();
         v5[0] = 5.;
-        v5.remove(19);
+        v5.drain(19..22);
         sim.restore_checked(&v5).unwrap();
         assert_eq!(sim.world_size(), 3072.);
         assert!(sim.chaos.is_none());

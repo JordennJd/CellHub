@@ -9,9 +9,9 @@ export function SlotName({ name, onRename }: { name: string; onRename: (name: st
   }
   return <label className="select-label slot-name">
     Имя слота
-    <input type="text" value={draft} onChange={(e) => setDraft(e.target.value)}
+    <input type="text" maxLength={40} value={draft} onChange={(e) => setDraft(e.target.value)}
       onBlur={commit} onKeyDown={(e) => {
-        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
         if (e.key === "Escape") { e.preventDefault(); setDraft(name); }
       }} />
   </label>;

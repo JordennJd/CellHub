@@ -40,29 +40,38 @@ test('zoom cancels held placement and release does not create a cell', () => {
   }
 });
 
-test('dish hit region includes its rim but excludes square corners', () => {
-  assert(isPointInDish({x:500,y:500},1000));
-  for(const point of [{x:0,y:500},{x:1000,y:500},{x:500,y:0},{x:500,y:1000}]) assert(isPointInDish(point,1000));
-  for(const point of [{x:0,y:0},{x:1000,y:1000},{x:50,y:50},{x:500,y:1001}]) assert(!isPointInDish(point,1000));
+test('queued capture release from a previous click does not cancel the next held stroke', () => {
+  const {send,placed,timeouts,cleanup}=controlsFixture();
+  try {
+    send('pointerdown');send('pointerup',{buttons:0});
+    send('pointerdown');send('lostpointercapture');
+    send('pointermove',{clientX:240});
+    for(const callback of [...timeouts.values()]) callback();
+    assert.deepEqual(placed,[{x:500,y:500},{x:540,y:500}]);
+    send('pointerup',{buttons:0});
+  } finally {cleanup();}
 });
 
-test('clicks and repeated hold only place inside the visible round dish', () => {
-  const { send, placed, timeouts, intervals, cleanup } = controlsFixture({x:500,y:500,zoom:0.4},1000);
+test('rectangular field includes corners and rejects points outside its bounds', () => {
+  assert(isPointInDish({x:500,y:500},1000));
+  for(const point of [{x:0,y:500},{x:1000,y:500},{x:500,y:0},{x:500,y:1000}]) assert(isPointInDish(point,1000));
+  for(const point of [{x:0,y:0},{x:1000,y:1000},{x:50,y:50}]) assert(isPointInDish(point,1000));
+  for(const point of [{x:-1,y:50},{x:1001,y:500},{x:500,y:1001}]) assert(!isPointInDish(point,1000));
+  assert(isPointInDish({x:1800,y:900},1000,2000));
+  assert(!isPointInDish({x:2001,y:900},1000,2000));
+});
+
+test('clicks and moving holds can place in rectangular corners', () => {
+  const {send,placed,timeouts,intervals,cleanup}=controlsFixture({x:500,y:500,zoom:0.4},1000);
   try {
-    send('pointerdown',{clientX:20,clientY:20});
-    send('pointerup',{clientX:20,clientY:20,buttons:0});
-    assert.equal(placed.length,0,'empty square corners are not part of the dish');
-    send('pointerdown',{clientX:20,clientY:20});
-    for(const callback of [...timeouts.values()]) callback();
-    assert.equal(placed.length,0,'long press also respects the circular boundary');
-    send('pointermove',{clientX:100,clientY:200});
-    for(const callback of [...intervals.values()]) callback();
-    assert.deepEqual(placed,[{x:250,y:500}],'moving an active hold into the dish places normally');
-    send('pointermove',{clientX:20,clientY:20});
-    for(const callback of [...intervals.values()]) callback();
-    send('pointerup',{clientX:20,clientY:20,buttons:0});
-    assert.equal(placed.length,1,'moving back outside stops placing and release adds nothing');
-  } finally { cleanup(); }
+    send('pointerdown',{clientX:20,clientY:20}); send('pointerup',{clientX:20,clientY:20,buttons:0});
+    assert.deepEqual(placed,[{x:50,y:50}]);
+    send('pointerdown',{clientX:20,clientY:20}); for(const cb of [...timeouts.values()]) cb();
+    send('pointermove',{clientX:100,clientY:200}); for(const cb of [...intervals.values()]) cb();
+    assert.deepEqual(placed,[{x:50,y:50},{x:50,y:50},{x:250,y:500}]);
+    send('pointermove',{clientX:420,clientY:200}); for(const cb of [...intervals.values()]) cb();
+    send('pointerup',{clientX:420,buttons:0}); assert.equal(placed.length,3);
+  } finally {cleanup();}
 });
 
 test('captured release outside canvas does not place in an offscreen part of the dish', () => {
@@ -80,11 +89,11 @@ test('full dish fit follows viewport resizing, while a manually changed view is 
   const fitted = fitDishCamera(initial,3000);
   assert.equal(fitted.x,1500);
   assert.equal(fitted.y,1500);
-  assert(Math.abs(fitted.zoom * 3000 - 558)<1e-9);
+  assert(Math.abs(fitted.zoom * 3000 - 600)<1e-9);
   const resized = resizeDishCamera(fitted,initial,portrait,3000);
   assert.equal(resized.x,1500);
   assert.equal(resized.y,1500);
-  assert(Math.abs(resized.zoom * 3000 - 390 * 0.93)<1e-9,'shorter side leaves a 7% margin around the full dish');
+  assert(Math.abs(resized.zoom * 3000 - 390)<1e-9,'full rectangular field fits without an artificial circular margin');
   for(const manual of [{...fitted,x:1510},{...fitted,zoom:0.8}]) {
     assert.deepEqual(resizeDishCamera(manual,initial,portrait,3000),manual);
   }

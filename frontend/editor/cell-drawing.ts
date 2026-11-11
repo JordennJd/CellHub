@@ -1,0 +1,237 @@
+import { TYPES } from "../model";
+
+function relativeLuminance(color: number) {
+  const linear = (channel: number) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * linear((color >> 16) & 255)
+    + 0.7152 * linear((color >> 8) & 255) + 0.0722 * linear(color & 255);
+}
+// Same 3:1 dark-dish detail threshold as scene.wgsl; body RGB stays user-defined.
+const minimumInkLuminance = 3 * (relativeLuminance(0x253e2b) + 0.05) - 0.05;
+const tau = Math.PI * 2;
+export const cellExtents = [1, 1, 2.05, 1.25, 1, 1.27, 1.45, 1, 1, 1.15, 1.45, 1.3, 1, 1, 1, 1, 1, 1.3];
+
+function polar(radius: number, angle: number): [number, number] {
+  return [radius * Math.cos(angle), radius * Math.sin(angle)];
+}
+
+function buildCellMarks() {
+  const membrane = new Path2D();
+  membrane.arc(0, 0, 1, 0, tau);
+  const innerRing = new Path2D();
+  innerRing.arc(0, 0, 0.72, 0, tau);
+  const flagellum = new Path2D(`
+    M -0.91 -0.08
+    C -1.11 -0.04 -1.25 -0.25 -1.45 -0.21
+    C -1.67 -0.17 -1.75 0.12 -2.02 0.06
+    C -1.76 0.20 -1.61 -0.09 -1.44 -0.12
+    C -1.24 -0.15 -1.10 0.09 -0.91 0.08 Z
+  `);
+  const chloroplasts = new Path2D(`
+    M -0.67 -0.29 C -0.71 -0.52 -0.46 -0.65 -0.33 -0.48
+    C -0.25 -0.35 -0.44 -0.24 -0.58 -0.22 Q -0.65 -0.21 -0.67 -0.29 Z
+    M 0.04 -0.68 C 0.12 -0.78 0.36 -0.71 0.35 -0.58
+    C 0.34 -0.45 0.20 -0.39 0.08 -0.45 Q -0.05 -0.50 0.04 -0.68 Z
+    M 0.48 -0.18 C 0.52 -0.33 0.73 -0.28 0.77 -0.11
+    C 0.80 0.00 0.67 0.13 0.55 0.09 Q 0.43 0.04 0.48 -0.18 Z
+    M 0.28 0.40 C 0.40 0.24 0.62 0.32 0.61 0.45
+    C 0.59 0.64 0.35 0.72 0.27 0.58 Q 0.21 0.51 0.28 0.40 Z
+    M -0.42 0.38 C -0.29 0.31 -0.12 0.43 -0.14 0.57
+    C -0.18 0.73 -0.39 0.72 -0.50 0.60 Q -0.57 0.48 -0.42 0.38 Z
+  `);
+  const rods = new Path2D();
+  for (let i = 0; i < 17; i++) {
+    const angle = i * tau / 17;
+    rods.moveTo(...polar(0.96, angle));
+    rods.lineTo(...polar(1.20, angle));
+  }
+  const teeth = new Path2D();
+  for (let i = 0; i < 19; i++) {
+    const angle = i * tau / 19;
+    teeth.moveTo(...polar(0.97, angle - 0.078));
+    teeth.lineTo(...polar(1.25, angle));
+    teeth.lineTo(...polar(0.97, angle + 0.078));
+    teeth.closePath();
+  }
+  const tufts = new Path2D();
+  for (let i = 0; i < 5; i++) {
+    const angle = i * tau / 5;
+    for (const side of [-1, 1]) {
+      const joint = polar(1.17, angle + side * 0.14);
+      tufts.moveTo(...polar(0.97, angle + side * 0.10));
+      tufts.lineTo(...joint);
+      tufts.lineTo(...polar(1.39, angle + side * 0.12));
+      tufts.moveTo(...joint);
+      tufts.lineTo(...polar(1.34, angle + side * 0.28));
+    }
+  }
+  const lipid = new Path2D();
+  lipid.arc(0, 0, 0.69, 0, tau);
+  const vacuole = new Path2D();
+  vacuole.arc(-0.18, 0, 0.61, 0, tau);
+  const adhesive = new Path2D();
+  for (let i = 0; i < 33; i++) {
+    const angle = i * tau / 33;
+    adhesive.moveTo(...polar(0.98, angle - 0.04));
+    adhesive.lineTo(...polar(1.14, angle));
+    adhesive.lineTo(...polar(0.98, angle + 0.04));
+    adhesive.closePath();
+  }
+  const stereo = new Path2D();
+  for (const end of [0, Math.PI]) {
+    for (let i = 0; i < 7; i++) {
+      stereo.moveTo(...polar(0.96, end));
+      stereo.lineTo(...polar(1.42, end + (i - 3) * 0.105));
+    }
+  }
+  const sensory = new Path2D();
+  for (let i = 0; i < 9; i++) {
+    const angle = i * tau / 9;
+    sensory.moveTo(...polar(0.96, angle));
+    sensory.lineTo(...polar(1.10, angle));
+    for (const side of [-1, 1]) {
+      sensory.moveTo(...polar(1.10, angle));
+      sensory.lineTo(...polar(1.255, angle + side * 0.084));
+    }
+  }
+  const neural = new Path2D();
+  for (let i = 0; i < 6; i++) {
+    const angle = i * tau / 6;
+    const [x, y] = polar(0.58, angle);
+    neural.moveTo(x + 0.20 * Math.cos(angle), y + 0.20 * Math.sin(angle));
+    neural.ellipse(x, y, 0.20, 0.115, angle, 0, tau);
+  }
+  const muscle = new Path2D();
+  for (let i = 0; i < 4; i++) {
+    const y = (i - 1.5) * 0.36;
+    const halfWidth = Math.sqrt(0.84 ** 2 - y ** 2);
+    muscle.moveTo(-halfWidth, y + 0.12 * halfWidth ** 2);
+    muscle.quadraticCurveTo(0, y - 0.12 * halfWidth ** 2, halfWidth, y + 0.12 * halfWidth ** 2);
+  }
+  const vesicles = new Path2D();
+  for (const [count, radial, radius] of [[9, 0.70, 0.075], [5, 0.38, 0.045]]) {
+    for (let i = 0; i < count; i++) {
+      const [x, y] = polar(radial, i * tau / count);
+      vesicles.moveTo(x + radius, y);
+      vesicles.arc(x, y, radius, 0, tau);
+    }
+  }
+  const stem = new Path2D();
+  stem.arc(0.10, 0, 0.66, 0, tau);
+  stem.arc(-0.10, 0, 0.45, 0, tau, true);
+  const scallops = new Path2D();
+  for (let i = 0; i <= 140; i++) {
+    const angle = i * tau / 140;
+    const position = polar(0.75 + 0.075 * Math.cos(angle * 7), angle);
+    if (i === 0) scallops.moveTo(...position);
+    else scallops.lineTo(...position);
+  }
+  scallops.closePath();
+  const cilia = new Path2D();
+  for (let i = 0; i < 28; i++) {
+    const angle = i * tau / 28;
+    const side = Math.sin(angle) >= 0 ? 1 : -1;
+    cilia.moveTo(...polar(0.97, angle));
+    cilia.bezierCurveTo(...polar(1.08, angle + side * 0.01),
+      ...polar(1.20, angle + side * 0.05), ...polar(1.27, angle + side * 0.09));
+  }
+  return {
+    membrane, innerRing, flagellum, chloroplasts, rods, teeth, tufts,
+    lipid, vacuole, adhesive, stereo, sensory, neural, muscle, vesicles, stem, scallops, cilia,
+  };
+}
+
+let cellMarks: ReturnType<typeof buildCellMarks> | undefined;
+
+export function drawCell(ctx: CanvasRenderingContext2D, cells: Float32Array, i: number, x: number, y: number, radius: number) {
+  const marks = cellMarks ??= buildCellMarks();
+  const kind = cells[i + 4];
+  const color = cells[i + 10] >= 0 ? cells[i + 10] : TYPES[kind]?.color ?? 0xa4db71;
+  const bodyColor = `#${color.toString(16).padStart(6, "0")}`;
+  const ink = cells[i + 10] >= 0 && relativeLuminance(color) < minimumInkLuminance ? "#dce6dc" : bodyColor;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(cells[i + 9]);
+  ctx.scale(radius, cells[i + 11] ? -radius : radius);
+  ctx.fillStyle = bodyColor;
+  ctx.globalAlpha = 0.22;
+  ctx.fill(marks.membrane);
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 1.5 / radius;
+  ctx.globalAlpha = 1;
+  ctx.stroke(marks.membrane);
+
+  ctx.fillStyle = ink;
+  ctx.lineWidth = 0.085;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  switch (kind) {
+    case 0:
+      ctx.fillStyle = "#57a73f";
+      ctx.fill(marks.chloroplasts);
+      break;
+    case 2: ctx.fill(marks.flagellum); break;
+    case 3: ctx.stroke(marks.rods); break;
+    case 4: ctx.stroke(marks.innerRing); break;
+    case 5: ctx.fill(marks.teeth); break;
+    case 6: ctx.stroke(marks.tufts); break;
+    case 7:
+      ctx.fillStyle = "#a77c51";
+      ctx.globalAlpha = 0.85;
+      ctx.fill(marks.lipid);
+      ctx.globalAlpha = 1;
+      break;
+    case 8: ctx.stroke(marks.vacuole); break;
+    case 9: ctx.fill(marks.adhesive); break;
+    case 10:
+      ctx.lineWidth = 0.045;
+      ctx.stroke(marks.stereo);
+      ctx.stroke(marks.neural);
+      break;
+    case 11:
+      ctx.lineWidth = 0.045;
+      ctx.stroke(marks.sensory);
+      ctx.stroke(marks.neural);
+      break;
+    case 12: ctx.stroke(marks.muscle); break;
+    case 13:
+      ctx.lineWidth = 0.05;
+      ctx.stroke(marks.neural);
+      break;
+    case 14:
+      ctx.lineWidth = 0.045;
+      ctx.stroke(marks.vesicles);
+      break;
+    case 15:
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = "#df7777";
+      ctx.fill(marks.stem);
+      ctx.rotate(Math.PI);
+      ctx.fillStyle = "#79a9e1";
+      ctx.fill(marks.stem);
+      ctx.rotate(-Math.PI);
+      break;
+    case 16:
+      ctx.lineWidth = 0.07;
+      ctx.stroke(marks.scallops);
+      break;
+    case 17:
+      ctx.lineWidth = 0.036;
+      ctx.stroke(marks.cilia);
+      break;
+  }
+  ctx.fillStyle = ink;
+  ctx.globalAlpha = 0.9;
+  ctx.beginPath();
+  if (kind === 16) {
+    ctx.arc(0, 0, Math.max(0.24, 1 / radius), Math.PI / 2, Math.PI * 1.5);
+    ctx.closePath();
+  } else {
+    ctx.arc(kind === 8 ? 0.55 : 0, 0, Math.max(kind === 8 ? 0.16 : 0.21, 1 / radius), 0, tau);
+  }
+  ctx.fill();
+  ctx.restore();
+}
+

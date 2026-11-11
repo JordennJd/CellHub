@@ -92,6 +92,37 @@ input[type=range] {
   width:100%;
   accent-color:var(--accent);
 }
+.slider-control,.range>.slider-control {
+  display:block;
+  position:relative;
+  height:36px;
+  width:100%;
+}
+.slider-control::before {
+  content:"";
+  position:absolute;
+  inset:8px 0;
+  border-radius:4px;
+  background:linear-gradient(to right,#aac887 0% var(--progress),#455d35 var(--progress) 100%);
+  pointer-events:none;
+}
+.slider-control input[type=range],.genome-editor .slider-control input[type=range] {
+  appearance:none;
+  -webkit-appearance:none;
+  display:block;
+  position:relative;
+  width:100%;
+  height:36px;
+  margin:0;
+  background:transparent;
+  cursor:ew-resize;
+}
+.slider-control input::-webkit-slider-runnable-track { height:20px; background:transparent; }
+.slider-control input::-moz-range-track { height:20px; background:transparent; }
+.slider-control input::-webkit-slider-thumb { appearance:none; width:4px; height:20px; border-radius:2px; background:#dfedc8; }
+.slider-control input::-moz-range-thumb { width:4px; height:20px; border:0; border-radius:2px; background:#dfedc8; }
+.slider-ends { position:absolute; inset:0; display:flex; align-items:center; justify-content:space-between; padding:0 8px; pointer-events:none; font-size:10px; color:#162411; }
+.slider-ends span:last-child { color:#dfedc8; }
 input[type=checkbox] {
   accent-color:var(--accent);
   width:18px;

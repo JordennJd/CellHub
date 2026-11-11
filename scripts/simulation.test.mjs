@@ -20,6 +20,26 @@ const genes = () =>
     Array.from({ length: 8 }, () => [0, 2.4, 0, 0, 0.5, 12, 0.8, 240]).flat(),
   );
 
+test("rectangular WASM worlds preserve wide coordinates and exact checkpoints", () => {
+  const sim = new Simulation(42), restored = new Simulation(1);
+  try {
+    sim.set_rectangular_dish(6144, 3072);
+    sim.spawn(6000, 100, 0, genes());
+    assert.equal(sim.world_width(), 6144);
+    assert.equal(sim.world_size(), 3072);
+    assert.equal(sim.terrain().length, 96 * 48 * 4);
+    const state = sim.export_state();
+    restored.restore_state(state);
+    assert.deepEqual(restored.export_state(), state);
+    assert(restored.snapshot()[1] > 5900);
+    sim.start_chaos(42, model.flatten(model.chaosGenome()), 12288);
+    assert.equal(sim.world_width(), 12288);
+    assert.equal(sim.world_size(), 6144);
+    restored.restore_state(sim.export_state());
+    assert.deepEqual(restored.export_state(), sim.export_state());
+  } finally { sim.free(); restored.free(); }
+});
+
 test("real WASM multicellular nutrition sustains specialists and keratin blocks infection", () => {
   const sim = new Simulation(42);
   const mode = (kind, child = 0) => [kind, 8, child, child, .5, 0, 0, 1000, 0, 0, 0, 0];

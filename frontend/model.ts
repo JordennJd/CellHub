@@ -468,6 +468,7 @@ export type Command = WorldCommand
     type: "reset";
     requestId?: string;
     level?: string;
+    bounds?: { width: number; height: number };
     chaos?: { seed: number; genome: Float32Array };
   }
   | { type: "export"; requestId: string }
@@ -507,5 +508,6 @@ export type Frame = {
   divisions?: Float32Array;
   previewRequestId?: number;
   worldSize?: number;
+  worldWidth?: number;
   chaos?: { info: Float64Array; history: Float32Array; events: Uint32Array };
 };

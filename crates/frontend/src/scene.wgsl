@@ -1,4 +1,4 @@
-struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32, padding: f32 }
+struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32, padding: f32, extent: vec4f }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var terrain: texture_2d<f32>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
@@ -19,7 +19,7 @@ fn relative_luminance(color:vec3f)->f32 {
 // Premultiplied alpha compositing, matching the separate original shapes.
 fn over(base:vec4f,color:vec3f,a:f32)->vec4f {return vec4f(color*a,a)+base*(1.-a);}
 fn coverage(distance:f32)->f32 {let aa=max(fwidth(distance),0.001);return 1.-smoothstep(-aa*0.5,aa*0.5,distance);}
-fn dish_distance(world:vec2f)->f32 {return length(world-vec2f(camera.padding*0.5))-camera.padding*0.5;}
+fn dish_distance(world:vec2f)->f32 {let q=abs(world-camera.extent.xy*0.5)-camera.extent.xy*0.5;return length(max(q,vec2f(0.)))+min(max(q.x,q.y),0.);}
 fn grain(uv: vec2f) -> f32 {
     return textureSample(material, material_sampler, uv).r - 0.5;
 }
@@ -32,7 +32,7 @@ struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
     let w=o.world;
     let distance=dish_distance(w);
     let mask=coverage(distance);
-    let ij=vec2u(clamp(w/64.,vec2f(0.),vec2f(camera.padding/64.-1.)));let t=textureLoad(terrain,vec2i(ij),0);
+    let ij=vec2u(clamp(w/64.,vec2f(0.),camera.extent.zw-vec2f(1.)));let t=textureLoad(terrain,vec2i(ij),0);
     var color=vec4f(rgb(0x253e2bu),1.);
     if camera.padding>3072. && camera.layer==0. {
         let colors=array<u32,10>(0x425b31u,0x294c3fu,0x365344u,0x4d4933u,0x4b3851u,0x41543au,0x293d48u,0x3d603au,0x4b5052u,0x355648u);

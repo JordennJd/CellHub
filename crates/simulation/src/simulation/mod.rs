@@ -99,7 +99,13 @@ impl Simulation {
             let enabled = chaos.enabled;
             let rate = chaos.rate;
             let viable = chaos.viable;
-            self.start_chaos_checked(self.seed, initial_pool);
+            self.start_chaos_in_bounds(
+                self.seed,
+                initial_pool,
+                self.boundary.width(),
+                self.boundary.size(),
+                matches!(self.boundary, Boundary::Rectangle { .. }),
+            );
             let chaos = self.chaos.as_mut().unwrap();
             chaos.pool = pool;
             chaos.enabled = enabled;
@@ -119,7 +125,51 @@ impl Simulation {
         let track_divisions = self.division_events.is_some();
         *self = Self::new(self.seed);
         self.boundary = boundary;
+        if let Boundary::Rectangle { width, height } = boundary {
+            self.set_rectangular_dish(width, height)
+                .expect("valid retained bounds");
+        }
         self.set_division_event_tracking(track_divisions);
+    }
+
+    /// Rectangular worlds keep their physical bounds when a viewport is resized.
+    pub fn set_rectangular_dish(&mut self, width: f32, height: f32) -> Result<(), JsError> {
+        let base = if self.chaos.is_some() {
+            crate::terrain::CHAOS_SIZE
+        } else {
+            crate::components::SIZE
+        };
+        if !width.is_finite()
+            || height != base
+            || width < base * 0.5
+            || width > base * 4.
+            || width % 64. != 0.
+            || !self.entities.is_empty()
+        {
+            return Err(JsError::new("Некорректный размер нового поля"));
+        }
+        self.boundary = Boundary::Rectangle { width, height };
+        self.spatial = SpatialGrid::with_size(width, height);
+        self.tiles = if let Some(c) = &mut self.chaos {
+            c.baseline = crate::terrain::chaos_map_rect(
+                self.seed,
+                (width / 64.) as usize,
+                (height / 64.) as usize,
+            );
+            c.baseline.clone()
+        } else {
+            crate::terrain::map_rect((width / 64.) as usize, (height / 64.) as usize)
+        };
+        self.configure_environment(self.settings)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    pub fn use_rectangular_geometry(&mut self) {
+        self.boundary = Boundary::Rectangle {
+            width: self.boundary.width(),
+            height: self.boundary.size(),
+        };
+        self.spatial = SpatialGrid::with_size(self.boundary.width(), self.boundary.size());
     }
 
     /// Opt in for the local laboratory without changing the native server map.

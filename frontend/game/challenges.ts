@@ -5,7 +5,7 @@ export type TutorialStep = { id: string; title: string; description: string; req
 export type TutorialContext = { genome: Mode[]; initialMode: number; inserted: number; running: boolean; frame: Frame | null; selected: boolean; savedGenome: boolean };
 export type Tutorial = { id: string; title: string; description: string; steps: TutorialStep[]; genome: Mode[]; environment: PlateData["environment"] };
 export const TUTORIAL_STEPS: TutorialStep[] = [
-    { id: "place", requirement: "place", title: "Поместите клетку", description: "Выберите слой «Свет» и инструмент «Поместить». Нажмите на жёлтую область в верхней левой части чашки." },
+    { id: "place", requirement: "place", title: "Поместите клетку", description: "Выберите слой «Свет». ЛКМ или касанием нажмите на жёлтую область в верхней левой части чашки." },
     { id: "run", requirement: "run", title: "Запустите время", description: "Снимите паузу, чтобы клетка начала расти." },
     { id: "divide", requirement: "divide", title: "Дождитесь деления", description: "Наблюдайте, как из одной клетки получаются две. При необходимости ускорьте время." },
     { id: "inspect", requirement: "inspect", title: "Изучите клетку", description: "Выберите диагностику и нажмите на клетку. Сравните её массу и возраст." },
@@ -15,23 +15,23 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
 export const TUTORIALS: Tutorial[] = [
     { id: "microscope", title: "Микроскоп", description: "Помещение клетки, течение времени, деление, диагностика и сохранение.",
         steps: TUTORIAL_STEPS, genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }], environment: { ...DEFAULT_ENVIRONMENT, radiation: 0, light: 2 } },
-    { id: "genome", title: "Редактор генома", description: "Несколько режимов, начальная клетка и разные дочерние роли.",
+    { id: "genome", title: "Редактор генома", description: "Несколько слотов, начальная клетка и разные дочерние роли.",
         genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }], environment: { ...DEFAULT_ENVIRONMENT, radiation: 0, light: 2, food: 3 },
         steps: [
-            { id: "modes", requirement: "modes", title: "Добавьте режим", description: "В редакторе нажмите «Добавить режим». Каждый режим задаёт поведение клетки, а весь геном сохраняется у потомков." },
-            { id: "initial", requirement: "initial", title: "Выберите начальный режим", description: "В поле «Начальный режим» выберите M2. Это отдельный выбор: просмотр настроек M1 не должен менять режим новой клетки." },
-            { id: "branches", requirement: "branches", title: "Назначьте разные режимы дочерям", description: "Откройте настройки M2. Разрешите деление и назначьте дочери A режим M1, дочери B — M2." },
-            { id: "place", requirement: "place", title: "Поместите конструкцию", description: "Поместите клетку на свету. Она начинает жизнь в режиме, который указан в поле «Начальный режим»." },
-            { id: "divide", requirement: "divide", title: "Проверьте деление", description: "Запустите время и дождитесь потомков. Их поведение определяется назначенными режимами." },
+            { id: "modes", requirement: "modes", title: "Добавьте слот", description: "В редакторе нажмите «Добавить слот». Каждый слот задаёт поведение клетки, а весь геном сохраняется у потомков." },
+            { id: "initial", requirement: "initial", title: "Выберите начальный слот", description: "В поле «Начальный слот» выберите M2. Это отдельный выбор: просмотр настроек M1 не должен менять слот новой клетки." },
+            { id: "branches", requirement: "branches", title: "Назначьте разные слоты дочерям", description: "Откройте настройки M2. Разрешите деление и назначьте дочери A слот M1, дочери B — M2." },
+            { id: "place", requirement: "place", title: "Поместите конструкцию", description: "Поместите клетку на свету. Она начинает жизнь в слоте, который указан в поле «Начальный слот»." },
+            { id: "divide", requirement: "divide", title: "Проверьте деление", description: "Запустите время и дождитесь потомков. Их поведение определяется назначенными слотами." },
             { id: "save", requirement: "save", title: "Сохраните конструкцию", description: "Сохраните геном под отдельным именем, чтобы вернуться к нему позже." },
         ] },
     { id: "organism", title: "Многоклеточный организм", description: "Разделение ролей и связи между потомками.",
         genome: [{ ...newMode(0), speed: 0, threshold: 1.2, lifespan: 1000 }], environment: { ...DEFAULT_ENVIRONMENT, radiation: 0, light: 2, food: 3 },
         steps: [
-            { id: "roles", requirement: "roles", title: "Задайте три клеточные роли", description: "Создайте три режима: M1-фотоцит, M2-фагоцит и M3-жгутикоцит. Для M3 отключите деление и установите скорость 15." },
-            { id: "adhesion", requirement: "adhesion", title: "Свяжите дочерние клетки", description: "В M1 назначьте дочерям M2 и M3, включите «Связать дочерние клетки». Начальным режимом оставьте M1." },
+            { id: "roles", requirement: "roles", title: "Задайте три клеточные роли", description: "Создайте три слота: M1-фотоцит, M2-фагоцит и M3-жгутикоцит. Для M3 отключите деление и установите скорость 15." },
+            { id: "adhesion", requirement: "adhesion", title: "Свяжите дочерние клетки", description: "В M1 назначьте дочерям M2 и M3, включите «Связать дочерние клетки». Начальным слотом оставьте M1." },
             { id: "place", requirement: "place", title: "Поместите организм", description: "Выберите слой «Свет», поместите M1 в жёлтую область в верхней левой части чашки и запустите время." },
-            { id: "livingBond", requirement: "livingBond", title: "Наблюдайте связанные роли", description: "Дождитесь связанной пары: фагоцит питается, жгутикоцит двигает организм. При необходимости исправьте режимы и начните заново." },
+            { id: "livingBond", requirement: "livingBond", title: "Наблюдайте связанные роли", description: "Дождитесь связанной пары: фагоцит питается, жгутикоцит двигает организм. При необходимости исправьте слоты и начните заново." },
             { id: "save", requirement: "save", title: "Сохраните организм", description: "Сохраните геном, чтобы использовать его в другом эксперименте." },
         ] },
 ];

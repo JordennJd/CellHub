@@ -1,3 +1,4 @@
+import { Slider } from "./Slider";
 import {
   GAMETE_GROUP_COUNT, PROGRAM_INPUTS, PROGRAM_TARGETS, SECRETIONS, SENSORS, TYPES, newProgram,
   type Mode, type NumericModeKey, type Program,
@@ -21,9 +22,8 @@ export function Setting({ label, help, value, min, max, step, unit = "", onChang
           if (Number.isFinite(value)) onChange(Math.min(max, Math.max(min, value)));
         }} />
     </label>
-    <input aria-label={`${label}: ползунок`} type="range" value={value} min={min} max={max} step={step}
-      onChange={e => onChange(Number(e.target.value))} />
-    <details><summary>О параметре</summary><p>{help}</p></details>
+    <Slider label={`${label}: ползунок`} value={value} min={min} max={max} step={step} onChange={onChange}/>
+    <details><summary aria-label={`Справка: ${label}`} title={`Справка: ${label}`}>?</summary><p>{help}</p></details>
   </div>;
 }
 
@@ -164,9 +164,9 @@ export function CellSettings({ mode, genome, onChange }: CellSettingsProps) {
       onChange={value => onChange({ [key]: value })} />;
   return <>
     {mode.kind === 3 && <section><h3>Передача генома</h3>
-      <ModeReference label="Копировать начиная с режима" value={mode.virusCopyFrom} genome={genome}
+      <ModeReference label="Копировать начиная с слота" value={mode.virusCopyFrom} genome={genome}
         emptyLabel="Весь геном" onChange={virusCopyFrom => onChange({ virusCopyFrom })} />
-      <p>При выбранном режиме копируются он и два поколения его потомков.</p>
+      <p>При выбранном слоте копируются он и два поколения его потомков.</p>
     </section>}
     {mode.kind === 8 && <section><h3>Плавучесть</h3>
       {setting("Плотность клетки", "density", -3.3, 3.3, 0.1, "Определяет всплытие и оседание при включённой гравитации.")}
@@ -191,17 +191,17 @@ export function CellSettings({ mode, genome, onChange }: CellSettingsProps) {
     </section>}
     {mode.kind === 15 && <section><h3>Дифференциация</h3>
       <Channel value={mode.signalChannel} onChange={signalChannel => onChange({ signalChannel })} />
-      <ModeReference label="Режим перехода A" value={mode.transitionA} genome={genome}
+      <ModeReference label="Слот перехода A" value={mode.transitionA} genome={genome}
         onChange={transitionA => onChange({ transitionA })} />
       {setting("Порог перехода A", "transitionThresholdA", -1000, 1000, 0.1, "Переход A готов, когда входной сигнал превышает этот порог. Он имеет приоритет перед переходом B.")}
-      <ModeReference label="Режим перехода B" value={mode.transitionB} genome={genome}
+      <ModeReference label="Слот перехода B" value={mode.transitionB} genome={genome}
         onChange={transitionB => onChange({ transitionB })} />
       {setting("Порог перехода B", "transitionThresholdB", -1000, 1000, 0.1, "Переход B выполняется, если готов его сигнал и не выбран переход A. Уравнения могут задавать условия вместо сигнала.")}
     </section>}
     {mode.kind === 16 && <section><h3>Слияние гамет</h3>
       <label className="genome-cell-type">Совместимость гамет
         <select value={mode.compatibleMode} onChange={e => onChange({ compatibleMode: Number(e.target.value) })}>
-          <optgroup label="Режим партнёра">
+          <optgroup label="Слот партнёра">
             {genome.map((partner, index) => <option key={index} value={index}>{partner.name} · {TYPES[partner.kind].name}</option>)}
           </optgroup>
           <optgroup label="Группа совместимости">
@@ -210,7 +210,7 @@ export function CellSettings({ mode, genome, onChange }: CellSettingsProps) {
           </optgroup>
         </select>
       </label>
-      <ModeReference label="Режим потомка" value={mode.offspringMode} genome={genome}
+      <ModeReference label="Слот потомка" value={mode.offspringMode} genome={genome}
         onChange={offspringMode => onChange({ offspringMode })} />
       <label className="genome-check"><input type="checkbox" checked={mode.telomeres >= 0}
         onChange={e => onChange({ telomeres: e.target.checked ? 16 : -1 })} />Ограничить число поколений потомка</label>

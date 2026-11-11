@@ -3,7 +3,6 @@
 use crate::components::Position;
 
 const BUCKET_SIZE: f32 = 32.;
-const GRID_SIZE: usize = (crate::terrain::CHAOS_SIZE / BUCKET_SIZE) as usize;
 const MAX_BUCKETS_PER_BODY: usize = 16;
 
 #[derive(Clone, Copy)]
@@ -31,12 +30,14 @@ impl Bounds {
     }
 }
 
-fn bucket(value: f32) -> usize {
-    ((value / BUCKET_SIZE) as usize).min(GRID_SIZE - 1)
+fn bucket(value: f32, count: usize) -> usize {
+    ((value / BUCKET_SIZE) as usize).min(count - 1)
 }
 
 #[derive(Default)]
 pub(super) struct SpatialGrid {
+    columns: usize,
+    rows: usize,
     buckets: Vec<Vec<usize>>,
     occupied: Vec<usize>,
     large: Vec<usize>,
@@ -45,8 +46,16 @@ pub(super) struct SpatialGrid {
 
 impl SpatialGrid {
     pub(super) fn new() -> Self {
+        Self::with_size(crate::components::SIZE, crate::components::SIZE)
+    }
+
+    pub(super) fn with_size(width: f32, height: f32) -> Self {
+        let columns = (width / BUCKET_SIZE).ceil() as usize;
+        let rows = (height / BUCKET_SIZE).ceil() as usize;
         Self {
-            buckets: (0..GRID_SIZE * GRID_SIZE).map(|_| Vec::new()).collect(),
+            columns,
+            rows,
+            buckets: (0..columns * rows).map(|_| Vec::new()).collect(),
             ..Self::default()
         }
     }
@@ -69,10 +78,10 @@ impl SpatialGrid {
             min_y,
             max_x,
             max_y,
-            first_x: bucket(min_x),
-            first_y: bucket(min_y),
-            last_x: bucket(max_x),
-            last_y: bucket(max_y),
+            first_x: bucket(min_x, self.columns),
+            first_y: bucket(min_y, self.rows),
+            last_x: bucket(max_x, self.columns),
+            last_y: bucket(max_y, self.rows),
         };
         let index = self.bounds.len();
         self.bounds.push(bounds);
@@ -84,7 +93,7 @@ impl SpatialGrid {
         }
         for y in bounds.first_y..=bounds.last_y {
             for x in bounds.first_x..=bounds.last_x {
-                let key = y * GRID_SIZE + x;
+                let key = y * self.columns + x;
                 if self.buckets[key].is_empty() {
                     self.occupied.push(key);
                 }
@@ -102,7 +111,7 @@ impl SpatialGrid {
         };
         let buckets = rows.flat_map(move |y| {
             (bounds.first_x..=bounds.last_x).flat_map(move |x| {
-                self.buckets[y * GRID_SIZE + x]
+                self.buckets[y * self.columns + x]
                     .iter()
                     .copied()
                     .filter(move |&other| {

@@ -28,7 +28,7 @@ function frame() {
   const info = sim.chaos_info(), history = sim.chaos_history(), events = sim.chaos_events();
   ctx.postMessage({
     type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, level, divisions,
-    worldSize: sim.world_size(), chaos: info.length ? { info, history, events } : undefined,
+    worldSize: sim.world_size(), worldWidth: sim.world_width(), chaos: info.length ? { info, history, events } : undefined,
     ...(previewRequestId === undefined ? {} : { previewRequestId }),
   }, [
     info.buffer, history.buffer, events.buffer,
@@ -186,6 +186,7 @@ function apply(c: Command) {
         }
         const nextScheduled = readScheduled(state.scheduled, state.values[3]);
         sim.restore_state(new Float64Array(state.values));
+        sim.use_rectangular_geometry();
         previewRequestId = undefined;
         scheduled = nextScheduled;
         speed = 0;
@@ -221,8 +222,8 @@ function apply(c: Command) {
           sim.load_level_json(c.level);
         } else if (c.chaos) {
           if (!Number.isInteger(c.chaos.seed) || c.chaos.seed < 0 || c.chaos.seed > 0xffffffff) throw new Error("Некорректный seed");
-          sim.start_chaos(c.chaos.seed, c.chaos.genome);
-        } else sim.reset();
+          sim.start_chaos(c.chaos.seed, c.chaos.genome, c.bounds?.width ?? 6144);
+        } else { sim.reset(); if (c.bounds) sim.set_rectangular_dish(c.bounds.width, c.bounds.height); }
         previewRequestId = undefined;
         scheduled = [];
         speed = 0;
@@ -290,7 +291,7 @@ async function createSimulation() {
 try {
   const initialized = await createSimulation();
   sim = initialized.sim;
-  sim.set_circular_dish(true);
+  sim.use_rectangular_geometry();
   sim.set_division_event_tracking(true);
   ctx.postMessage({ type: "ready", threaded: initialized.threaded });
   let needFrame = true;

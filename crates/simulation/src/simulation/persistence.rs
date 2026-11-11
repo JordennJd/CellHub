@@ -8,8 +8,8 @@ use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, norm
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// v8 adds the campaign owner class on top of v7 recoil/chaos data.
-const VERSION: u32 = 8;
+/// v9 combines rectangular dimensions with the v8 campaign owner class.
+const VERSION: u32 = 9;
 
 fn is_main_v4(values: &[f64]) -> bool {
     // The deployed v4 writes the tile count immediately after fluid density.
@@ -76,7 +76,11 @@ impl Simulation {
             s.gravity as f64,
             s.density as f64,
             s.nitrogen as f64,
-            matches!(self.boundary, Boundary::Circle | Boundary::Chaos) as u8 as f64,
+            match self.boundary {
+                Boundary::Circle | Boundary::Chaos => 1.,
+                Boundary::Rectangle { .. } => 2.,
+                Boundary::Square => 0.,
+            },
         ];
         values.push(self.chaos.is_some() as u8 as f64);
         if let Some(c) = &self.chaos {
@@ -101,6 +105,7 @@ impl Simulation {
             values.push(c.events.len() as f64);
             values.extend(c.events.iter().flatten().map(|&n| n as f64));
         }
+        values.extend([self.boundary.width() as f64, self.boundary.size() as f64]);
         values.push(self.tiles.len() as f64);
         for tile in &self.tiles {
             values.extend(
@@ -251,11 +256,22 @@ impl Simulation {
             },
         };
         restored.settings.validate()?;
-        if has_resources && input.flag()? {
-            restored.boundary = Boundary::Circle;
+        if has_resources {
+            let shape = input.integer(if version >= 9 { 2 } else { 1 })?;
+            if shape == 1 {
+                restored.boundary = Boundary::Circle;
+            }
+            if shape == 2 {
+                restored.boundary = Boundary::Rectangle {
+                    width: 3072.,
+                    height: 3072.,
+                };
+            }
         }
+        let saved_circle = matches!(restored.boundary, Boundary::Circle);
+        let saved_rectangle = matches!(restored.boundary, Boundary::Rectangle { .. });
         if has_chaos_header && input.flag()? {
-            if !matches!(restored.boundary, Boundary::Circle) {
+            if !saved_circle && !saved_rectangle {
                 return Err("Некорректная геометрия мира хаоса".into());
             }
             if input.integer(1)? != 1 {
@@ -318,12 +334,44 @@ impl Simulation {
             restored.chaos = Some(chaos);
             restored.boundary = Boundary::Chaos;
         }
-        let grid = (restored.boundary.size() / 64.) as usize;
-        if input.integer((crate::terrain::CHAOS_GRID * crate::terrain::CHAOS_GRID) as u32)? as usize
-            != grid * grid
-        {
+        if version >= 9 {
+            let width = input.float(64., 24576.)?;
+            let height = input.float(64., 6144.)?;
+            let base = if restored.chaos.is_some() {
+                crate::terrain::CHAOS_SIZE
+            } else {
+                crate::components::SIZE
+            };
+            if height != base || width % 64. != 0. || width < height * 0.5 || width > height * 4. {
+                return Err("Некорректные размеры поля".into());
+            }
+            let circle = saved_circle;
+            if circle && width != height {
+                return Err("Некорректная круглая геометрия".into());
+            }
+            if saved_rectangle {
+                restored.boundary = Boundary::Rectangle { width, height };
+            } else if width != height {
+                return Err("Размеры квадратного поля не совпадают".into());
+            }
+            let columns = (width / 64.) as usize;
+            let rows = (height / 64.) as usize;
+            restored.tiles = if let Some(chaos) = &mut restored.chaos {
+                chaos.baseline = crate::terrain::chaos_map_rect(seed, columns, rows);
+                chaos.baseline.clone()
+            } else {
+                crate::terrain::map_rect(columns, rows)
+            };
+        }
+        let columns = restored.boundary.columns();
+        let rows = restored.boundary.rows();
+        if input.integer(384 * 96)? as usize != columns * rows {
             return Err("Некорректный размер среды".into());
         }
+        restored.spatial = super::spatial::SpatialGrid::with_size(
+            restored.boundary.width(),
+            restored.boundary.size(),
+        );
         // Rich chaos biomes can exceed the classic capacity of 1 before the
         // global 5x multiplier: food <= 6.5 and nitrates <= 7.5.
         let resource_max = if restored.chaos.is_some() { 8. } else { 5. };
@@ -378,7 +426,7 @@ impl Simulation {
                 return Err("Некорректный идентификатор клетки".into());
             }
             let position = Position {
-                x: input.float(0., restored.boundary.size())?,
+                x: input.float(0., restored.boundary.width())?,
                 y: input.float(0., restored.boundary.size())?,
                 angle: input.float(-f32::MAX, f32::MAX)?,
             };
@@ -514,7 +562,7 @@ mod tests {
         // v8 cell records carry the owner class after `anchored`; v6 does not.
         recoil_v6.remove(recoil_v6.len() - 5);
         recoil_v6[0] = 6.;
-        recoil_v6.remove(19); // classic v6 has no chaos header
+        recoil_v6.drain(19..22); // classic v6 has no chaos header or dimensions
         let mut restored = Simulation::new(1);
         restored.restore_checked(&recoil_v6).unwrap();
         assert_eq!(restored.encode_state(), current);
@@ -532,6 +580,12 @@ mod tests {
         // two recoil components.
         chaos_v6.remove(chaos_v6.len() - 5);
         chaos_v6[0] = 6.;
+        let tiles = chaos_v6
+            .iter()
+            .position(|&v| v == chaos.tiles.len() as f64)
+            .unwrap();
+        chaos_v6.drain(tiles - 2..tiles);
+        // One cell, no bonds: old chaos v6 lacks the two recoil components.
         let end = chaos_v6.len();
         chaos_v6.drain(end - 3..end - 1);
         restored.restore_checked(&chaos_v6).unwrap();

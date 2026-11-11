@@ -6,7 +6,7 @@ use super::program::{SECRETION_RATE_TARGET, SIGNAL_CHANNELS, SPEED_TARGET, contr
 use crate::cell_types::{
     LIPOCYTE, NEUROCYTE, SECROCYTE, SENSEOCYTE, STEREOCYTE, blocks_signals, is_motile,
 };
-use crate::components::{Cell, Position, SIZE, radius};
+use crate::components::{Cell, Position, radius};
 use crate::genome::Genome;
 use crate::terrain::Tile;
 #[cfg(test)]
@@ -18,7 +18,6 @@ const SENSE_RANGE: f32 = 96.;
 const SENSE_LIPOCYTES: u8 = 7;
 const SENSE_MOTILE_CELLS: u8 = 8;
 const POINT_BUCKET: f32 = 128.;
-const POINT_GRID: usize = (crate::terrain::CHAOS_SIZE / POINT_BUCKET) as usize;
 const SECRETION_NITROGEN: f32 = 0.2;
 
 struct Body {
@@ -45,29 +44,38 @@ struct Updated {
 /// Static point buckets suit sensory queries, whose range is larger than a
 /// contact radius. Query order depends only on bucket order and stable cell IDs.
 struct PointGrid {
+    columns: usize,
+    rows: usize,
     buckets: Vec<Vec<usize>>,
 }
 
-fn bucket(value: f32) -> usize {
-    ((value / POINT_BUCKET) as usize).min(POINT_GRID - 1)
+fn bucket(value: f32, count: usize) -> usize {
+    ((value / POINT_BUCKET) as usize).min(count - 1)
 }
 
 impl PointGrid {
-    fn new(bodies: &[Body]) -> Self {
-        let mut buckets = vec![Vec::new(); POINT_GRID * POINT_GRID];
+    fn new(bodies: &[Body], boundary: Boundary) -> Self {
+        let columns = (boundary.width() / POINT_BUCKET).ceil() as usize;
+        let rows = (boundary.size() / POINT_BUCKET).ceil() as usize;
+        let mut buckets = vec![Vec::new(); columns * rows];
         for (index, body) in bodies.iter().enumerate() {
-            buckets[bucket(body.position.y) * POINT_GRID + bucket(body.position.x)].push(index);
+            buckets[bucket(body.position.y, rows) * columns + bucket(body.position.x, columns)]
+                .push(index);
         }
-        Self { buckets }
+        Self {
+            columns,
+            rows,
+            buckets,
+        }
     }
 
     fn nearby(&self, p: Position, range: f32) -> impl Iterator<Item = usize> + '_ {
-        let left = bucket(p.x - range);
-        let right = bucket(p.x + range);
-        let top = bucket(p.y - range);
-        let bottom = bucket(p.y + range);
+        let left = bucket(p.x - range, self.columns);
+        let right = bucket(p.x + range, self.columns);
+        let top = bucket(p.y - range, self.rows);
+        let bottom = bucket(p.y + range, self.rows);
         (top..=bottom).flat_map(move |y| {
-            (left..=right).flat_map(move |x| self.buckets[y * POINT_GRID + x].iter().copied())
+            (left..=right).flat_map(move |x| self.buckets[y * self.columns + x].iter().copied())
         })
     }
 }
@@ -77,17 +85,11 @@ fn distance_squared(a: Position, b: Position) -> f32 {
 }
 
 fn wall_distance(p: Position, boundary: Boundary) -> f32 {
-    match boundary {
-        Boundary::Square => p.x.min(p.y).min(SIZE - p.x).min(SIZE - p.y),
-        Boundary::Circle | Boundary::Chaos => {
-            boundary.size() / 2.
-                - libm::hypotf(p.x - boundary.size() / 2., p.y - boundary.size() / 2.)
-        }
-    }
+    boundary.wall_distance(p.x, p.y)
 }
 
 fn field_sample(tiles: &[Tile], p: Position, sensor: u8, boundary: Boundary) -> f32 {
-    let tile = tiles[crate::terrain::index(p.x, p.y, (boundary.size() / 64.) as usize)];
+    let tile = tiles[boundary.tile(p.x, p.y)];
     match sensor {
         0 => tile.light,
         1 => tile.food,
@@ -132,7 +134,7 @@ fn stimulus(
     ];
     let mut result = if stereo {
         let offset = |sign: f32| Position {
-            x: (body.position.x + side[0] * 32. * sign).clamp(0., boundary.size()),
+            x: (body.position.x + side[0] * 32. * sign).clamp(0., boundary.width()),
             y: (body.position.y + side[1] * 32. * sign).clamp(0., boundary.size()),
             angle: body.position.angle,
         };
@@ -275,7 +277,7 @@ impl Simulation {
             }
             state.toxin = (f64::from(state.toxin) + delta[SIGNAL_CHANNELS]).max(0.) as f32;
         }
-        let grid = PointGrid::new(&bodies);
+        let grid = PointGrid::new(&bodies, self.boundary);
         let largest_radius = bodies
             .iter()
             .map(|body| radius(body.cell.mass))
@@ -315,11 +317,8 @@ impl Simulation {
             updated[i].nitrogen = (updated[i].nitrogen - rate * step * 0.02).max(0.);
             updated[i].mass = (updated[i].mass - rate * step * 0.005).max(0.);
             if mode.secretion == 1 {
-                let tile = &mut self.tiles[crate::terrain::index(
-                    source.position.x,
-                    source.position.y,
-                    (self.boundary.size() / 64.) as usize,
-                )];
+                let tile =
+                    &mut self.tiles[self.boundary.tile(source.position.x, source.position.y)];
                 let stripped = (rate * step * 0.25)
                     .min(tile.covered_food)
                     .min((tile.capacity - tile.food).max(0.));

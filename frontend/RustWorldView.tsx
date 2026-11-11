@@ -21,6 +21,7 @@ type RustWorldViewProps = WorldViewProps & {
 
 export function RustWorldView(props: RustWorldViewProps) {
   const worldSize = props.frame?.worldSize ?? WORLD;
+  const worldWidth = props.frame?.worldWidth ?? worldSize;
   const host = useRef<HTMLDivElement>(null),
     live = useRef(props);
   live.current = props;
@@ -74,7 +75,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           terrain[tile * 4 + 2] = field[tile] ?? 0;
         }
       }
-      instance.set_frame(animator.sample(performance.now()) ?? next.cells, terrain, next.links);
+      instance.set_frame(animator.sample(performance.now()) ?? next.cells, terrain, next.links, worldWidth, worldSize);
       appliedFrame.current = next;
       appliedProjectionLayer.current = layer;
     } catch (e) {
@@ -128,7 +129,7 @@ export function RustWorldView(props: RustWorldViewProps) {
       const value = document.createElement("canvas");
       value.style.width = "100%";
       value.style.height = "100%";
-      value.setAttribute("aria-label", "Чашка с клетками");
+      value.setAttribute("aria-label", "Поле с клетками");
       el.appendChild(value);
       return value;
     };
@@ -138,7 +139,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     let viewport = measure();
     const reset = () => {
       viewport = measure();
-      Object.assign(camera.current, fitDishCamera(viewport, worldSize));
+      Object.assign(camera.current, fitDishCamera(viewport, worldSize, worldWidth));
       applyView(true);
       reportView(true);
     };
@@ -154,7 +155,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           }
         }
       }
-      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), worldSize));
+      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), worldSize, worldWidth));
       applyView(true);
       reportView(true);
     };
@@ -162,7 +163,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     const resizeObserver = new ResizeObserver(() => {
       const next = measure();
       if (!next.width || !next.height || (next.width === viewport.width && next.height === viewport.height)) return;
-      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, worldSize));
+      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, worldSize, worldWidth));
       viewport = next;
       applyView(true);
       reportView(true);
@@ -173,8 +174,9 @@ export function RustWorldView(props: RustWorldViewProps) {
     const addControls = () => {
       removeControls = bindCanvasControls(canvas, {
         camera: camera.current,
-        worldSize,
+        worldSize, worldWidth,
         tool: () => live.current.tool,
+        mouseTool: () => live.current.tool === "move" ? "move" : "place",
         onView: (final) => { applyView(); reportView(final); },
         onPoint: (p, action) => {
           let id: number | null = null, best = Infinity;
@@ -250,6 +252,6 @@ export function RustWorldView(props: RustWorldViewProps) {
         instance.free();
       }
     };
-  }, [worldSize]);
+  }, [worldSize, worldWidth]);
   return <div className="world" ref={host} />;
 }

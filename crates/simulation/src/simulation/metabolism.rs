@@ -10,7 +10,7 @@ use crate::cell_types::{
 };
 use crate::components::{Cell, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position};
 use crate::genome::Genome;
-use crate::terrain::index;
+
 use std::collections::BTreeMap;
 
 const MIN_CELL_MASS: f32 = 0.18;
@@ -24,7 +24,7 @@ impl Simulation {
     ) -> MetabolismScratch {
         let population = entities.len();
         let settings = self.settings;
-        let grid = (self.boundary.size() / 64.) as usize;
+        let boundary = self.boundary;
         let chaos = self.chaos.is_some();
         let passive_drift = settings.vertical_drift();
         let momentum_decay = libm::expf(-MOMENTUM_DRAG * settings.viscosity * STEP);
@@ -55,7 +55,7 @@ impl Simulation {
                 let order = scratch.indices[entity.id() as usize];
                 Body {
                     order,
-                    tile: index(p.x, p.y, grid),
+                    tile: boundary.tile(p.x, p.y),
                     result: MetabolismResult {
                         motion: ContactMotion {
                             path: [*p; 2],

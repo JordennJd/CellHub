@@ -21,7 +21,7 @@ const input=async(selector,value)=>{await evaluate(`(()=>{const el=document.quer
 const select=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing select');el.value=${JSON.stringify(String(value))};el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
 const screenshot=async path=>{const r=await call('Page.captureScreenshot',{format:'png'});await writeFile(path,Buffer.from(r.data,'base64'));};
 const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("document.querySelector('#mode-sandbox-title').closest('button').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
-const clickWorld=async(x,y,button='left')=>{const point=await evaluate(`(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();const z=Math.min(r.width,r.height)/3072*.93;return{x:r.x+r.width/2+(${x}-1536)*z,y:r.y+r.height/2+(${y}-1536)*z};})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button,clickCount:1,...point});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button,clickCount:1,...point});};
+const clickWorld=async(x,y,button='left')=>{const point=await evaluate(`(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();const f=window.__cellhubFrame,w=f.worldWidth??3072,h=f.worldSize??3072,z=Math.min(r.width/w,r.height/h);return{x:r.x+r.width/2+(${x}-w/2)*z,y:r.y+r.height/2+(${y}-h/2)*z};})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button,clickCount:1,...point});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button,clickCount:1,...point});};
 const confirm=async()=>{if(await evaluate("!!document.querySelector('[role=dialog]')"))await click('Подтвердить',"document.querySelector('[role=dialog]')");};
 try{
  await call('Runtime.enable');await call('Page.enable');
@@ -45,7 +45,7 @@ try{
  await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');
  // Inspection must leave an independently edited draft intact.
  await input('input[aria-label="Масса для деления"]',3.7);
- await click('Диагностика');await clickWorld(600,600);
+ await clickWorld(600,600,'right');
  await until("document.querySelector('.cell-details')?.textContent.includes('Масса')");
  await click('Геном',"document.querySelector('.tabs')");
  assert.equal(await evaluate("document.querySelector('input[aria-label=\"Масса для деления\"]').value"),'3.7');
@@ -78,10 +78,10 @@ try{
  await select('.genome-cell-type select',13);
  await evaluate("(()=>{const label=[...document.querySelectorAll('.genome-cell-type')].find(el=>el.textContent.startsWith('Сигнальный канал'));const el=label.querySelector('select');el.value='7';el.dispatchEvent(new Event('change',{bubbles:true}));})()");
  await input('input[aria-label="Выходной сигнал"]',-0.75);
- await click('Поместить');await clickWorld(600,600);await until('window.__cellhubFrame?.cells.length===12');
+ await clickWorld(600,600);await until('window.__cellhubFrame?.cells.length===12');
  await click('Один шаг');await until('window.__cellhubFrame.stats[0]===1');
  assert.equal(await evaluate('window.__cellhubFrame.details[7]'),-0.75);
- await click('Диагностика');await clickWorld(600,600);
+ await clickWorld(600,600,'right');
  await until("document.querySelector('.cell-details') && document.body.innerText.includes('S8')");
  assert(await evaluate("[...document.querySelectorAll('.cell-details div')].some(row=>row.querySelector('dt')?.textContent==='S8'&&row.querySelector('dd')?.textContent==='-0.750')"));
  const signalPlateName=`Eight signals ${suffix}`;

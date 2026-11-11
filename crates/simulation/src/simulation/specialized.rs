@@ -8,7 +8,7 @@ use super::program::{
     DIFFERENTIATION_B_TARGET, controlled_value,
 };
 use crate::cell_types::{BUOYOCYTE, CILIOCYTE, GAMETE, GLUEOCYTE, LIPOCYTE, STEMOCYTE};
-use crate::components::{Cell, MAX_RECOIL_MOMENTUM, MIN_DIVISION_AGE, Position, SIZE, radius};
+use crate::components::{Cell, MAX_RECOIL_MOMENTUM, MIN_DIVISION_AGE, Position, radius};
 use crate::genome::{Genome, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
@@ -67,17 +67,7 @@ pub(super) fn buoyant_drift(
 }
 
 fn on_wall(boundary: Boundary, position: Position, mass: f32) -> bool {
-    let gap = match boundary {
-        Boundary::Square => position
-            .x
-            .min(position.y)
-            .min(SIZE - position.x)
-            .min(SIZE - position.y),
-        Boundary::Circle | Boundary::Chaos => {
-            let center = boundary.size() / 2.;
-            center - libm::hypotf(position.x - center, position.y - center)
-        }
-    };
+    let gap = boundary.wall_distance(position.x, position.y);
     gap <= radius(mass).max(12.) + 0.5
 }
 

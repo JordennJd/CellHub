@@ -5,7 +5,7 @@ export async function verifyTouchControls({call,evaluate,until,delay,screenshot,
  await call('Page.navigate',{url});await openSandbox();
  assert(await evaluate('document.documentElement.scrollWidth<=window.innerWidth'));
  assert.equal(await evaluate("document.querySelectorAll('.tool-bar button').length"),6);
- const center=await evaluate("(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2,z:Math.min(r.width,r.height)/3072*.93};})()");
+ const center=await evaluate("(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect(),f=window.__cellhubFrame,w=f.worldWidth,h=f.worldSize;return{x:r.x+r.width/2,y:r.y+r.height/2,worldX:w/2,z:Math.min(r.width/w,r.height/h)};})()");
  const finger=(id,x,y)=>({id,x,y,radiusX:2,radiusY:2});
  const touch=(type,touchPoints)=>call('Input.dispatchTouchEvent',{type,touchPoints});
  const tap=async(x,y)=>{await touch('touchStart',[finger(1,x,y)]);await touch('touchEnd',[]);await delay(100);};
@@ -19,7 +19,7 @@ export async function verifyTouchControls({call,evaluate,until,delay,screenshot,
  assert.equal(await evaluate('window.__cellhubFrame.cells.length'),12,'pinch must not place a cell');
  await tap(center.x,center.y);await until('window.__cellhubFrame.cells.length===24');
  const rows=await evaluate('Array.from(window.__cellhubFrame.cells)');
- assert(Math.abs(rows[13]-(1536-20/(center.z*130/70)))<2,'pinch preserves moving midpoint anchor');
+ assert(Math.abs(rows[13]-(center.worldX-20/(center.z*130/70)))<2,'pinch preserves moving midpoint anchor');
  await touch('touchStart',[finger(1,center.x-65,center.y),finger(2,center.x+65,center.y)]);
  await touch('touchMove',[finger(1,center.x-35,center.y),finger(2,center.x+35,center.y)]);
  await touch('touchEnd',[finger(1,center.x-35,center.y)]);await touch('touchMove',[finger(1,center.x-15,center.y+10)]);await touch('touchEnd',[]);

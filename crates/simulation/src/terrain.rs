@@ -23,8 +23,13 @@ pub(crate) fn tile_index(x: f32, y: f32) -> usize {
     index(x, y, GRID)
 }
 
+#[cfg(test)]
 pub(crate) fn index(x: f32, y: f32, grid: usize) -> usize {
-    ((y / 64.) as usize).min(grid - 1) * grid + ((x / 64.) as usize).min(grid - 1)
+    index_rect(x, y, grid, grid)
+}
+
+pub(crate) fn index_rect(x: f32, y: f32, columns: usize, rows: usize) -> usize {
+    ((y / 64.) as usize).min(rows - 1) * columns + ((x / 64.) as usize).min(columns - 1)
 }
 
 pub(crate) const CHAOS_GRID: usize = 96;
@@ -54,6 +59,10 @@ pub(crate) fn random(rng: &mut u32) -> f32 {
 /// Seeded scattered regions, blended at their boundaries and modulated by
 /// continuous resource patches. Each biome has an anchor inside the dish.
 pub(crate) fn chaos_map(seed: u32) -> Vec<Tile> {
+    chaos_map_rect(seed, CHAOS_GRID, CHAOS_GRID)
+}
+
+pub(crate) fn chaos_map_rect(seed: u32, columns: usize, rows: usize) -> Vec<Tile> {
     let mut rng = (seed ^ 0x9e3779b9).max(1);
     let phase = random(&mut rng) * std::f32::consts::TAU;
     let anchors: Vec<_> = (0..30)
@@ -71,10 +80,10 @@ pub(crate) fn chaos_map(seed: u32) -> Vec<Tile> {
             )
         })
         .collect();
-    (0..CHAOS_GRID * CHAOS_GRID)
+    (0..columns * rows)
         .map(|i| {
-            let x = (i % CHAOS_GRID) as f32 / CHAOS_GRID as f32;
-            let y = (i / CHAOS_GRID) as f32 / CHAOS_GRID as f32;
+            let x = (i % columns) as f32 / columns as f32;
+            let y = (i / columns) as f32 / rows as f32;
             let wx = x + 0.025 * libm::sinf(y * 23. + phase);
             let wy = y + 0.025 * libm::cosf(x * 19. - phase);
             let mut nearest = [(f32::MAX, 0); 2];
@@ -109,10 +118,14 @@ pub(crate) fn chaos_map(seed: u32) -> Vec<Tile> {
 }
 
 pub(crate) fn map() -> Vec<Tile> {
-    (0..GRID * GRID)
+    map_rect(GRID, GRID)
+}
+
+pub(crate) fn map_rect(columns: usize, rows: usize) -> Vec<Tile> {
+    (0..columns * rows)
         .map(|i| {
-            let x = (i % GRID) as f32 / GRID as f32;
-            let y = (i / GRID) as f32 / GRID as f32;
+            let x = (i % columns) as f32 / columns as f32;
+            let y = (i / columns) as f32 / rows as f32;
             let (light, radiation, capacity, biome) =
                 if (x - 0.77).powi(2) + (y - 0.27).powi(2) < 0.035 {
                     (0.35, 0.7, 0.45, 3.)

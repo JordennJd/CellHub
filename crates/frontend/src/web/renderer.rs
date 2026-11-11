@@ -11,7 +11,8 @@ use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
 const TERRAIN_SIZE: u32 = 96;
-const TERRAIN_STRIDE: u32 = TERRAIN_SIZE * 16;
+const TERRAIN_WIDTH: u32 = 384;
+const TERRAIN_STRIDE: u32 = TERRAIN_WIDTH * 16;
 const TERRAIN_BYTES: u64 = (TERRAIN_STRIDE * TERRAIN_SIZE) as u64;
 
 pub(super) struct RendererState {
@@ -36,7 +37,7 @@ pub(super) struct RendererState {
     link_count: u32,
     atlas: wgpu::Texture,
     material: wgpu::Texture,
-    view: [f32; 8],
+    view: [f32; 12],
     dirty: bool,
     destroyed: bool,
     gpu_error: Arc<Mutex<Option<String>>>,
@@ -129,7 +130,9 @@ impl RendererState {
         canvas.set_width(pw);
         canvas.set_height(ph);
         surface.configure(&device, &config);
-        let view = [width, height, 1536., 1536., 1., 0., -1., 3072.];
+        let view = [
+            width, height, 1536., 1536., 1., 0., -1., 3072., 3072., 3072., 48., 48.,
+        ];
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera"),
             contents: bytemuck::cast_slice(&view),
@@ -140,7 +143,7 @@ impl RendererState {
         let terrain = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("terrain"),
             size: wgpu::Extent3d {
-                width: TERRAIN_SIZE,
+                width: TERRAIN_WIDTH,
                 height: TERRAIN_SIZE,
                 depth_or_array_layers: 1,
             },
@@ -165,7 +168,7 @@ impl RendererState {
                 rows_per_image: Some(TERRAIN_SIZE),
             },
             wgpu::Extent3d {
-                width: TERRAIN_SIZE,
+                width: TERRAIN_WIDTH,
                 height: TERRAIN_SIZE,
                 depth_or_array_layers: 1,
             },
@@ -411,15 +414,27 @@ impl RendererState {
         cells: &[f32],
         terrain: &[f32],
         links: &[u32],
+        width: f32,
+        height: f32,
     ) -> Result<(), JsValue> {
-        if ![48 * 48 * 4, 96 * 96 * 4].contains(&terrain.len())
+        let columns = (width / 64.) as u32;
+        let rows = (height / 64.) as u32;
+        if !width.is_finite()
+            || !height.is_finite()
+            || width % 64. != 0.
+            || height % 64. != 0.
+            || columns == 0
+            || columns > TERRAIN_WIDTH
+            || rows == 0
+            || rows > TERRAIN_SIZE
+            || terrain.len() != (columns * rows * 4) as usize
             || terrain.iter().any(|v| !v.is_finite())
         {
-            return Err(error("Invalid render snapshot"));
+            return Err(error("Invalid terrain dimensions"));
         }
         self.set_geometry(cells, links)?;
-        let grid = if terrain.len() == 96 * 96 * 4 { 96 } else { 48 };
-        self.view[7] = grid as f32 * 64.;
+        self.view[7] = height;
+        self.view[8..12].copy_from_slice(&[width, height, columns as f32, rows as f32]);
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.terrain,
@@ -430,12 +445,12 @@ impl RendererState {
             bytemuck::cast_slice(terrain),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(grid * 16),
-                rows_per_image: Some(grid),
+                bytes_per_row: Some(columns * 16),
+                rows_per_image: Some(rows),
             },
             wgpu::Extent3d {
-                width: grid,
-                height: grid,
+                width: columns,
+                height: rows,
                 depth_or_array_layers: 1,
             },
         );

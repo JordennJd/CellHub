@@ -1,3 +1,4 @@
+import { useTouchControls } from "../input/useTouchControls";
 import { CellDetails } from "./CellDetails";
 import { useEffect, useRef, useState } from 'react';
 import { CELL_DETAILS_STRIDE, STRIDE, TYPES, defaultGenome, type Mode } from '../model';
@@ -43,6 +44,7 @@ function failure(error: unknown) {
 }
 
 export function Arena({ onExit }: { onExit: () => void }) {
+    const touchControls = useTouchControls();
     const arena = useArena();
     const [serverUrl] = useState(defaultServerUrl);
     const [playerName] = useState(storedPlayer);
@@ -198,7 +200,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
         arena.setNotice('Геном загружен в редактор арены.');
     }
 
-    return <div className="laboratory arena-shell">
+    return <div className="laboratory arena-shell" data-controls={touchControls ? "touch" : "mouse"}>
         <header className="app-header">
             <button onClick={exit}>← Меню</button>
             <h1>{room ? `Арена · ${room.name}` : 'Арена'}</h1>
@@ -207,10 +209,10 @@ export function Arena({ onExit }: { onExit: () => void }) {
         <main className="lab-layout">
             <section className="microscope" aria-label="Общая сцена арены">
                 <div className="canvas-actions">
-                    <div className="canvas-view-controls" role="group" aria-label="Масштаб чашки">
+                    <div className="canvas-view-controls" role="group" aria-label="Масштаб поля">
                         <button aria-label="Уменьшить масштаб" onClick={() => setZoomStep(value => value - 1)}>−</button>
                         <button aria-label="Увеличить масштаб" onClick={() => setZoomStep(value => value + 1)}>+</button>
-                        <button onClick={() => setRecenter(value => value + 1)}>Вся чашка</button>
+                        <button onClick={() => setRecenter(value => value + 1)}>Всё поле</button>
                     </div>
                     <label><span className="sr-only">Показать слой</span>
                         <select value={layer} onChange={event => setLayer(event.target.value)}>
@@ -234,26 +236,23 @@ export function Arena({ onExit }: { onExit: () => void }) {
                                 arena.setError('В этом браузере не удалось открыть изображение арены.');
                         }}/>
                     {!online && <div className="canvas-note" role="status">Подключение к серверу арены…</div>}
-                    {online && !count && <div className="canvas-note">Сервер прислал пустую сцену. Выберите «Поместить» и создайте первую клетку.</div>}
+                    {online && !count && <div className="canvas-note">Поле свободно. Поместите первую клетку.</div>}
                 </div>
-                <div className="tool-bar" role="toolbar" aria-label="Инструменты арены">
+                {touchControls && <div className="tool-bar" role="toolbar" aria-label="Инструменты арены">
                     {[['place', 'Поместить'], ['select', 'Диагностика'], ['pan', 'Обзор']].map(([value, label]) =>
                         <button key={value} aria-pressed={tool === value} onClick={() => setTool(value)}>{label}</button>)}
-                </div>
-                <p className="control-hint">
-                    {tool === 'place' ? 'Нажатие создаёт клетку на сервере.' : tool === 'pan' ? 'Перетаскивайте чашку для обзора.' : 'Нажмите на клетку, чтобы получить её геном с сервера.'}
-                    {' '}Время и биология принадлежат серверу. Колесо или щипок — масштаб.
-                </p>
+                </div>}
+                <p className="control-hint">{touchControls ? 'Касание — действие · Перетаскивание — обзор · Щипок — масштаб' : 'ЛКМ — поместить · ПКМ — выбрать · Зажатое колёсико — обзор · Колесо — масштаб'}</p>
                 <div className="transport">
                     <div className={`arena-status ${online ? 'online' : ''}`} role="status">
                         <span className="arena-status-dot" aria-hidden="true"/>
-                        {online ? 'СЕРВЕР' : 'ОФЛАЙН'}
-                        <small>{arena.sync?.seen ?? 0}/{arena.sync?.total ?? 36}</small>
+                        {online ? 'В сети' : 'Нет соединения'}
+
                     </div>
                     <div className="world-stats">
-                        <span>Тик <strong>{arena.sync?.lastTick ?? 0}</strong></span>
+                        <span>Время <strong>{((arena.sync?.lastTick ?? 0) / 30).toFixed(1)} с</strong></span>
                         <span>Клеток <strong>{count}</strong></span>
-                        <span>Чанки <strong>{arena.sync?.seen ?? 0}/{arena.sync?.total ?? 36}</strong></span>
+
                     </div>
                     <button disabled={!online || !arena.host} onClick={resetWorld}
                         title={!arena.host ? 'Очистить мир может только создатель комнаты' : undefined}>
@@ -280,7 +279,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                         {cell ? <>
                             <h3>Выбранная клетка</h3>
                             <dl className="cell-details">
-                                {[['Тип', TYPES[cell[4]]?.name], ['Режим', diagnostic?.genome[diagnostic.mode]?.name ?? '…'],
+                                {[['Тип', TYPES[cell[4]]?.name], ['Слот', diagnostic?.genome[diagnostic.mode]?.name ?? '…'],
                                     ['Постоянных связей', connections], ['Зеркальность', cell[11] ? 'Да' : 'Нет'],
                                     ['Масса', `${cell[5].toFixed(2)} нг`], ['Азот', nitrogen === undefined ? '…' : `${(nitrogen * 100).toFixed(1)}%`],
                                     ['Возраст', `${cell[6].toFixed(1)} с`], ['Поколение', cell[7]],

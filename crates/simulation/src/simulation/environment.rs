@@ -1,7 +1,7 @@
 //! User-controlled substrate settings; changing them preserves resource depletion.
 
 use super::Simulation;
-use crate::terrain::{chaos_map, map};
+use crate::terrain::{chaos_map_rect, map_rect};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Environment {
@@ -63,9 +63,9 @@ impl Simulation {
     pub(super) fn configure_environment(&mut self, settings: Environment) -> Result<(), String> {
         settings.validate()?;
         for (tile, baseline) in self.tiles.iter_mut().zip(if self.chaos.is_some() {
-            chaos_map(self.seed)
+            chaos_map_rect(self.seed, self.boundary.columns(), self.boundary.rows())
         } else {
-            map()
+            map_rect(self.boundary.columns(), self.boundary.rows())
         }) {
             let fraction = if tile.capacity > 0. {
                 tile.food / tile.capacity
