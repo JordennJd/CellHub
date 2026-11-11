@@ -321,6 +321,148 @@ fn minimum_age_prevents_instant_division_after_boost() {
     assert!(s.world.query::<&Cell>().iter().all(|(_, c)| c.age == 0.));
 }
 
+fn recoil_fixture(bind_children: bool, keep_a: bool) -> (Simulation, u32, Vec<f32>) {
+    let mut sim = quiet_world();
+    sim.configure_environment(super::environment::Environment {
+        light: 0.,
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    let passive = Mode {
+        can_divide: false,
+        speed: 0.,
+        ..Mode::default()
+    };
+    let genes = Genome::from_modes(vec![
+        Mode {
+            can_divide: true,
+            threshold: 1.,
+            speed: 0.,
+            angle: 0.,
+            ratio: 0.75,
+            child_a: 1,
+            child_b: 1,
+            bind_children,
+            keep_a,
+            ..Mode::default()
+        },
+        passive,
+    ])
+    .values();
+    let parent = sim.spawn(500., 500., 0, &genes).unwrap();
+    sim.boost_cell(parent).unwrap();
+    (sim, parent, genes)
+}
+
+#[test]
+fn unbound_division_gives_unequal_daughters_equal_and_opposite_momentum() {
+    let (mut sim, _, _) = recoil_fixture(false, false);
+    sim.advance(15);
+    assert_eq!(sim.world.len(), 2);
+    let a = entity(&sim, 2);
+    let b = entity(&sim, 3);
+    let position = |sim: &Simulation, cell| *sim.world.get::<&Position>(cell).unwrap();
+    let (a_before, b_before) = (position(&sim, a), position(&sim, b));
+    let a_recoil = {
+        let a = sim.world.get::<&Cell>(a).unwrap();
+        let b = sim.world.get::<&Cell>(b).unwrap();
+        assert!(a.mass > b.mass);
+        for (a_pos, b_pos) in [(a_before.x, b_before.x), (a_before.y, b_before.y)] {
+            let center = (a_pos * a.mass + b_pos * b.mass) / (a.mass + b.mass);
+            assert!((center - 500.).abs() < 0.0001);
+        }
+        assert_eq!(a.recoil, b.recoil.map(|value| -value));
+        assert!(
+            a.recoil[0] * (a_before.x - b_before.x) + a.recoil[1] * (a_before.y - b_before.y) > 0.
+        );
+        a.recoil
+    };
+
+    sim.advance(1);
+
+    let (a_after, b_after) = (position(&sim, a), position(&sim, b));
+    let forward = (a_after.x - a_before.x) * a_recoil[0] + (a_after.y - a_before.y) * a_recoil[1];
+    let backward = (b_before.x - b_after.x) * a_recoil[0] + (b_before.y - b_after.y) * a_recoil[1];
+    assert!(
+        backward > forward && forward > 0.,
+        "lighter daughter moves farther"
+    );
+    let damped = sim.world.get::<&Cell>(a).unwrap().recoil;
+    assert!(
+        libm::hypotf(damped[0], damped[1]) < libm::hypotf(a_recoil[0], a_recoil[1]),
+        "viscosity damps recoil"
+    );
+}
+
+#[test]
+fn bound_sisters_share_parent_velocity_without_new_recoil() {
+    for momentum in [[0., 0.], [0.4, -0.2]] {
+        let (mut sim, parent, _) = recoil_fixture(true, false);
+        sim.advance(14);
+        sim.world
+            .get::<&mut Cell>(entity(&sim, parent))
+            .unwrap()
+            .recoil = momentum;
+        sim.advance(1);
+        assert_eq!(sim.links(), vec![2, 3]);
+        let a = sim.world.get::<&Cell>(entity(&sim, 2)).unwrap();
+        let b = sim.world.get::<&Cell>(entity(&sim, 3)).unwrap();
+        if momentum == [0.; 2] {
+            assert_eq!(a.recoil, momentum);
+            assert_eq!(b.recoil, momentum);
+        } else {
+            for (component, initial) in momentum.into_iter().enumerate() {
+                let a_speed = a.recoil[component] / a.mass;
+                let b_speed = b.recoil[component] / b.mass;
+                assert!(a_speed * initial > 0.);
+                assert!((a_speed - b_speed).abs() < 0.00001);
+            }
+        }
+    }
+}
+
+#[test]
+fn ejection_moves_the_retained_organism_through_its_adhesive_bond() {
+    let divided = || {
+        let (mut sim, parent, genes) = recoil_fixture(false, true);
+        let neighbor = sim.spawn(522., 500., 1, &genes).unwrap();
+        sim.bonds.insert((parent, neighbor));
+        sim.world
+            .get::<&mut Position>(entity(&sim, parent))
+            .unwrap()
+            .angle = 0.;
+        sim.advance(15);
+        assert_eq!(sim.links(), vec![neighbor, 3]);
+        (sim, neighbor)
+    };
+    let (mut recoiling, neighbor) = divided();
+    let (mut control, _) = divided();
+    for (_, cell) in control.world.query_mut::<&mut Cell>() {
+        cell.recoil = [0.; 2];
+    }
+    let x = |sim: &Simulation, id| sim.world.get::<&Position>(entity(sim, id)).unwrap().x;
+    recoiling.advance(5);
+    control.advance(5);
+    assert_eq!(recoiling.links(), vec![neighbor, 3]);
+    assert!(x(&recoiling, neighbor) > x(&control, neighbor));
+    assert!(x(&recoiling, 3) > x(&control, 3));
+    assert!(x(&recoiling, 4) < x(&control, 4));
+    let neighbor_entity = entity(&recoiling, neighbor);
+    assert!(
+        recoiling
+            .world
+            .get::<&Cell>(neighbor_entity)
+            .unwrap()
+            .recoil[0]
+            > 0.
+    );
+    recoiling.remove_cell(3).unwrap();
+    let before = x(&recoiling, neighbor);
+    recoiling.advance(1);
+    assert!(x(&recoiling, neighbor) > before);
+}
+
 #[test]
 fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mut s = quiet_world();
@@ -346,7 +488,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let rows = s.snapshot();
     assert_eq!(rows.len(), 24);
     let split_axis = (noise - 0.5) * 0.35 + 0.2;
-    assert!((rows[9] - (split_axis - 0.3)).abs() < 0.00001);
+    assert!((rows[9] - (split_axis + 0.3)).abs() < 0.00001);
     assert!((rows[21] - (split_axis + std::f32::consts::PI - 0.4)).abs() < 0.00001);
     assert_eq!(rows[11], 1.);
     assert_eq!(rows[23], 0.);
@@ -370,7 +512,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mirrored_axis = (noise - 0.5) * 0.35 - 0.2;
     assert_eq!(rows[11], 0.);
     assert_eq!(rows[23], 1.);
-    assert!((rows[9] - (mirrored_axis + 0.3)).abs() < 0.00001);
+    assert!((rows[9] - (mirrored_axis - 0.3)).abs() < 0.00001);
     assert!((rows[21] - (mirrored_axis + std::f32::consts::PI + 0.4)).abs() < 0.00001);
 }
 
@@ -677,7 +819,7 @@ fn corrupt_world_restore_is_atomic() {
     let state = s.encode_state();
     let mut variants = vec![vec![], state[..state.len() - 1].to_vec()];
     for (index, value) in [
-        (0, 7.),
+        (0, state[0] + 1.),
         (2, 0.),
         (4, 1.),
         (8, f64::NAN),
@@ -688,7 +830,8 @@ fn corrupt_world_restore_is_atomic() {
         (16, -4.),
         (17, -1.),
         (18, 2.),
-        (19, 0.),
+        (19, 2.),
+        (20, 0.),
     ] {
         let mut corrupt = state.clone();
         corrupt[index] = value;
@@ -948,30 +1091,33 @@ fn mature_all(s: &mut Simulation) {
 }
 #[test]
 fn all_three_adhesion_flags_are_independent() {
-    for bits in 0..8 {
-        let mut s = quiet_world();
-        let mut g = modern_genes(1);
-        g[1] = 1.;
-        g[9] = (bits & 1 != 0) as u8 as f32;
-        g[10] = (bits & 2 != 0) as u8 as f32;
-        g[11] = (bits & 4 != 0) as u8 as f32;
-        let parent = s.spawn(500., 500., 0, &g).unwrap();
-        let neighbor = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
-        s.bonds.insert((parent, neighbor));
-        mature_all(&mut s);
-        s.advance(1);
-        let mut expected = BTreeSet::new();
-        if bits & 1 != 0 {
-            expected.insert((3, 4));
+    for (angle, near_flag, near_daughter) in [(0., 2, 3), (std::f32::consts::PI, 4, 4)] {
+        for bits in 0..8 {
+            let mut s = quiet_world();
+            let mut g = modern_genes(1);
+            g[1] = 1.;
+            g[9] = (bits & 1 != 0) as u8 as f32;
+            g[10] = (bits & 2 != 0) as u8 as f32;
+            g[11] = (bits & 4 != 0) as u8 as f32;
+            let parent = s.spawn(500., 500., 0, &g).unwrap();
+            let neighbor = s.spawn(522., 500., 0, &modern_genes(1)).unwrap();
+            s.world
+                .get::<&mut Position>(entity(&s, parent))
+                .unwrap()
+                .angle = angle;
+            s.bonds.insert((parent, neighbor));
+            mature_all(&mut s);
+            s.advance(1);
+            let mut expected = BTreeSet::new();
+            if bits & 1 != 0 {
+                expected.insert((3, 4));
+            }
+            if bits & near_flag != 0 {
+                expected.insert((neighbor, near_daughter));
+            }
+            assert_eq!(s.bonds, expected, "angle={angle}, flags={bits}");
+            assert_eq!(s.world.len(), 3);
         }
-        if bits & 2 != 0 {
-            expected.insert((neighbor, 3));
-        }
-        if bits & 4 != 0 {
-            expected.insert((neighbor, 4));
-        }
-        assert_eq!(s.bonds, expected, "flags={bits}");
-        assert_eq!(s.world.len(), 3);
     }
 }
 #[test]
@@ -982,12 +1128,340 @@ fn adjacent_parents_can_divide_on_the_same_tick() {
     g[10] = 1.;
     let a = s.spawn(500., 500., 0, &g).unwrap();
     let b = s.spawn(522., 500., 0, &g).unwrap();
+    s.world.get::<&mut Position>(entity(&s, a)).unwrap().angle = 0.;
+    s.world.get::<&mut Position>(entity(&s, b)).unwrap().angle = std::f32::consts::PI;
     s.bonds.insert((a, b));
     mature_all(&mut s);
     s.advance(1);
     assert_eq!(s.links(), vec![3, 5]);
     assert_eq!(s.world.len(), 4);
 }
+
+#[test]
+fn inheritance_depends_on_candidate_contact_at_the_same_oblique_angle() {
+    for (separation, in_contact) in [(26., true), (100., false)] {
+        let mut s = quiet_world();
+        let genes = Genome::from_modes(vec![Mode {
+            threshold: 1.,
+            angle: 0.,
+            speed: 0.,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        }])
+        .values();
+        let a = s.spawn(500., 500., 0, &genes).unwrap();
+        let b = s.spawn(500. + separation, 500., 0, &genes).unwrap();
+        for id in [a, b] {
+            let entity = entity(&s, id);
+            s.world.get::<&mut Cell>(entity).unwrap().mass = 2.;
+            s.world.get::<&mut Position>(entity).unwrap().angle = std::f32::consts::FRAC_PI_3;
+        }
+        s.bonds.insert((a, b));
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.world.len(), 4);
+        let mut expected = BTreeSet::from([(3, 4), (5, 6)]);
+        if in_contact {
+            expected.extend([(3, 5), (4, 6)]);
+        }
+        assert_eq!(s.bonds, expected, "parent separation {separation}");
+    }
+}
+
+#[test]
+fn both_daughters_can_inherit_without_creating_diagonal_bonds() {
+    for turn in [0., std::f32::consts::FRAC_PI_2] {
+        let mut s = quiet_world();
+        let genes = Genome::from_modes(vec![Mode {
+            threshold: 1.,
+            angle: 0.,
+            speed: 0.,
+            child_angle_a: turn,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        }])
+        .values();
+        let founder = s.spawn(500., 500., 0, &genes).unwrap();
+        let founder = entity(&s, founder);
+        s.world.get::<&mut Cell>(founder).unwrap().mass = 4.;
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.bonds, BTreeSet::from([(2, 3)]));
+
+        let position = |sim: &Simulation, id| *sim.world.get::<&Position>(entity(sim, id)).unwrap();
+        let (a, b) = (position(&s, 2), position(&s, 3));
+        let (dx, dy) = (a.x - b.x, a.y - b.y);
+        let length = libm::hypotf(dx, dy);
+        let (ux, uy) = (dx / length, dy / length);
+        let displacement = |from: Position, to: Position| {
+            let (x, y) = (to.x - from.x, to.y - from.y);
+            (x * ux + y * uy, y * ux - x * uy)
+        };
+
+        mature_all(&mut s);
+        s.advance(1);
+        assert_eq!(s.world.len(), 4);
+        assert_eq!(s.bonds.len(), 3);
+        assert!(s.bonds.contains(&(4, 5)));
+        assert!(s.bonds.contains(&(6, 7)));
+        assert!(s.bonds.iter().any(|&(a, b)| a <= 5 && b >= 6));
+
+        if turn == 0. {
+            assert!(s.bonds.contains(&(5, 7)));
+            let chain = [6, 7, 5, 4].map(|id| position(&s, id));
+            for pair in chain.windows(2) {
+                let (along, across) = displacement(pair[0], pair[1]);
+                assert!(
+                    along > 0. && across.abs() < along * 0.001,
+                    "along={along}, across={across}"
+                );
+            }
+        } else {
+            let [a, b, c, d] = [4, 5, 6, 7].map(|id| position(&s, id));
+            let (along, across) = displacement(a, b);
+            assert!(across.abs() > 2. * along.abs());
+            let (along, across) = displacement(c, d);
+            assert!(along.abs() > 2. * across.abs());
+        }
+    }
+}
+
+fn growing_path(angle: f32, mirror: bool) -> Simulation {
+    let mut s = Simulation::new(73421);
+    s.set_circular_dish(true);
+    s.configure_environment(super::environment::Environment {
+        radiation: 0.,
+        ..Default::default()
+    })
+    .unwrap();
+    // The same founder and conditions as the preview. Each generation grows
+    // to division mass on its own, and the fourth generation stops dividing.
+    let modes = (0..=4)
+        .map(|mode| Mode {
+            threshold: 1.,
+            angle,
+            child_angle_a: -angle,
+            child_angle_b: -angle,
+            mirror_a: mirror,
+            mirror_b: mirror,
+            speed: 0.,
+            lifespan: 1000.,
+            child_a: (mode + 1).min(4),
+            child_b: (mode + 1).min(4),
+            can_divide: mode < 4,
+            bind_children: true,
+            keep_a: true,
+            keep_b: true,
+            ..Mode::default()
+        })
+        .collect();
+    s.spawn(600., 600., 0, &Genome::from_modes(modes).values())
+        .unwrap();
+    s
+}
+
+fn advance_to(sim: &mut Simulation, tick: u32) {
+    while sim.tick < tick {
+        sim.advance((tick - sim.tick).min(120));
+    }
+}
+
+fn path_positions(sim: &Simulation, count: usize) -> Vec<Position> {
+    assert_eq!(sim.world.len() as usize, count, "tick {}", sim.tick);
+    assert_eq!(sim.bonds.len(), count - 1, "tick {}", sim.tick);
+    let mut neighbors = BTreeMap::<u32, Vec<u32>>::new();
+    for &(a, b) in &sim.bonds {
+        neighbors.entry(a).or_default().push(b);
+        neighbors.entry(b).or_default().push(a);
+    }
+    assert_eq!(neighbors.len(), count);
+    assert!(neighbors.values().all(|ends| ends.len() <= 2));
+    let (&first, _) = neighbors.iter().find(|(_, ends)| ends.len() == 1).unwrap();
+    let mut order = vec![first];
+    let (mut previous, mut current) = (None, first);
+    while let Some(&next) = neighbors[&current].iter().find(|&&id| Some(id) != previous) {
+        assert!(!order.contains(&next), "a path cannot revisit a cell");
+        order.push(next);
+        previous = Some(current);
+        current = next;
+    }
+    assert_eq!(order.len(), count, "one path must reach all cells");
+    order
+        .into_iter()
+        .map(|id| *sim.world.get::<&Position>(entity(sim, id)).unwrap())
+        .collect()
+}
+
+fn path_bearings(sim: &Simulation, count: usize) -> Vec<f32> {
+    let positions = path_positions(sim, count);
+    let (first, last) = (positions[0], positions[count - 1]);
+    let (dx, dy) = (last.x - first.x, last.y - first.y);
+    positions
+        .windows(2)
+        .map(|pair| {
+            let (x, y) = (pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+            let along = x * dx + y * dy;
+            assert!(along > 0., "path backtracks at tick {}", sim.tick);
+            libm::atan2f(y * dx - x * dy, along)
+        })
+        .collect()
+}
+
+fn assert_straight_path(sim: &Simulation, count: usize) {
+    let bearings = path_bearings(sim, count);
+    assert!(
+        bearings.iter().all(|bearing| bearing.abs() < 0.001),
+        "bent path: {bearings:?}"
+    );
+}
+
+#[test]
+fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
+    let mut s = growing_path(0., false);
+    advance_to(&mut s, 150);
+    assert_straight_path(&s, 4);
+    advance_to(&mut s, 300);
+    assert_straight_path(&s, 8);
+
+    let mut restored = Simulation::new(999);
+    restored.restore_checked(&s.export_state()).unwrap();
+    advance_to(&mut s, 450);
+    advance_to(&mut restored, 450);
+    assert_straight_path(&s, 16);
+    assert_eq!(s.export_state(), restored.export_state());
+}
+
+#[test]
+fn mirrored_daughters_turn_a_tilted_straight_path_into_a_wave() {
+    let angle = 10_f32.to_radians();
+    let mut straight = growing_path(angle, false);
+    let mut mirrored = growing_path(angle, true);
+    for (tick, count) in [(150, 4), (300, 8), (450, 16)] {
+        advance_to(&mut straight, tick);
+        assert_straight_path(&straight, count);
+        advance_to(&mut mirrored, tick);
+        let bearings = path_bearings(&mirrored, count);
+        let low = bearings.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = bearings.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            (high - low - 2. * angle).abs() < 0.001,
+            "tick {tick}: {bearings:?}"
+        );
+        assert!(
+            bearings
+                .iter()
+                .all(|b| (b - low).abs() < 0.001 || (b - high).abs() < 0.001)
+        );
+        let changes = bearings
+            .windows(2)
+            .filter(|pair| (pair[1] - pair[0]).abs() > angle)
+            .count();
+        assert!(changes >= count / 2, "tick {tick}: {bearings:?}");
+    }
+}
+
+fn right_angle_growth() -> Simulation {
+    let mut s = quiet_world();
+    let genes = Genome::from_modes(vec![Mode {
+        threshold: 1.,
+        angle: std::f32::consts::FRAC_PI_2,
+        speed: 0.,
+        bind_children: true,
+        keep_a: true,
+        keep_b: true,
+        ..Mode::default()
+    }])
+    .values();
+    let founder = s.spawn(500., 500., 0, &genes).unwrap();
+    s.world.get::<&mut Cell>(entity(&s, founder)).unwrap().mass = 10.;
+    mature_all(&mut s);
+    s.advance(1);
+    assert_eq!(s.bonds, BTreeSet::from([(2, 3)]));
+    s
+}
+
+fn assert_four_cell_square(s: &Simulation) {
+    assert_eq!(s.world.len(), 4);
+    assert_eq!(s.bonds, BTreeSet::from([(4, 5), (4, 7), (5, 6), (6, 7)]));
+    let corners = [4, 7, 6, 5].map(|id| *s.world.get::<&Position>(entity(s, id)).unwrap());
+    let edges: [(f32, f32); 4] = std::array::from_fn(|i| {
+        let from = corners[i];
+        let to = corners[(i + 1) % 4];
+        (to.x - from.x, to.y - from.y)
+    });
+    let lengths = edges.map(|(x, y)| libm::hypotf(x, y));
+    for i in 0..4 {
+        let next = (i + 1) % 4;
+        let (x, y) = edges[i];
+        let (nx, ny) = edges[next];
+        assert!(
+            (lengths[i] - lengths[0]).abs() < 0.05 * lengths[0],
+            "square sides have unequal lengths: {lengths:?}"
+        );
+        assert!(
+            (x * nx + y * ny).abs() < 0.05 * lengths[i] * lengths[next],
+            "adjacent square sides are not perpendicular: {edges:?}"
+        );
+    }
+}
+
+#[test]
+fn repeated_right_angle_division_forms_a_square_then_an_eight_cell_ring() {
+    let mut s = right_angle_growth();
+    let center_clearance = |sim: &mut Simulation| {
+        let cells = sim.snapshot();
+        let count = (cells.len() / SNAPSHOT_STRIDE) as f32;
+        let rows = cells.chunks_exact(SNAPSHOT_STRIDE);
+        let cx = rows.clone().map(|row| row[1]).sum::<f32>() / count;
+        let cy = rows.clone().map(|row| row[2]).sum::<f32>() / count;
+        rows.map(|row| libm::hypotf(row[1] - cx, row[2] - cy) - row[3])
+            .fold(f32::INFINITY, f32::min)
+    };
+
+    mature_all(&mut s);
+    s.advance(1);
+    assert_four_cell_square(&s);
+    assert!(center_clearance(&mut s) > 2., "square center is occupied");
+
+    mature_all(&mut s);
+    s.advance(1);
+    assert_eq!(s.world.len(), 8);
+    assert_eq!(
+        s.bonds,
+        BTreeSet::from([
+            (8, 9),
+            (8, 15),
+            (9, 10),
+            (10, 11),
+            (11, 12),
+            (12, 13),
+            (13, 14),
+            (14, 15),
+        ]),
+        "the ring should have one continuous perimeter without cross-links"
+    );
+    assert!(center_clearance(&mut s) > 2., "ring center is occupied");
+}
+
+#[test]
+fn right_angle_division_forms_the_same_square_on_separate_ticks() {
+    for (first, second) in [(2, 3), (3, 2)] {
+        let mut s = right_angle_growth();
+        s.world.get::<&mut Cell>(entity(&s, first)).unwrap().age = MIN_DIVISION_AGE;
+        s.advance(1);
+        assert_eq!(s.world.len(), 3);
+        assert_eq!(s.bonds, BTreeSet::from([(second, 4), (second, 5), (4, 5)]));
+
+        s.world.get::<&mut Cell>(entity(&s, second)).unwrap().age = MIN_DIVISION_AGE;
+        s.advance(1);
+        assert_four_cell_square(&s);
+    }
+}
+
 #[test]
 fn organism_keeps_flagellum_and_releases_photo_offspring() {
     let mut s = quiet_world();
@@ -1000,9 +1474,9 @@ fn organism_keeps_flagellum_and_releases_photo_offspring() {
     g[12 + 8] = 0.;
     g[24] = 1.;
     g[24 + 1] = 2.4;
-    g[24 + 2] = 2.;
-    g[24 + 3] = 0.;
-    g[24 + 10] = 1.;
+    g[24 + 2] = 0.;
+    g[24 + 3] = 2.;
+    g[24 + 11] = 1.;
     s.spawn(500., 500., 0, &g).unwrap();
     mature_all(&mut s);
     s.advance(1);
@@ -1013,10 +1487,10 @@ fn organism_keeps_flagellum_and_releases_photo_offspring() {
     s.world.get::<&mut Cell>(phagocyte).unwrap().mass = 3.;
     mature_all(&mut s);
     s.advance(1);
-    assert_eq!(s.links(), vec![2, 4]);
+    assert_eq!(s.links(), vec![2, 5]);
     assert_eq!(s.cell_mode(2), 1); // non-dividing flagellum survives above its threshold
-    assert_eq!(s.cell_mode(4), 2); // continuing phagocyte inherits the bond
-    assert_eq!(s.cell_mode(5), 0); // detached photo offspring
+    assert_eq!(s.cell_mode(4), 0); // detached photo offspring
+    assert_eq!(s.cell_mode(5), 2); // nearer phagocyte inherits the bond
     assert_eq!(s.world.len(), 3);
     assert_eq!(s.deaths, 0);
 }

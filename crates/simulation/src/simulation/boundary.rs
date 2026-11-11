@@ -7,9 +7,18 @@ pub(super) enum Boundary {
     #[default]
     Square,
     Circle,
+    Chaos,
 }
 
 impl Boundary {
+    pub(super) fn size(self) -> f32 {
+        if matches!(self, Self::Chaos) {
+            crate::terrain::CHAOS_SIZE
+        } else {
+            SIZE
+        }
+    }
+
     /// Keep the full cell inside a dish, while preserving legacy square margins.
     pub(super) fn constrain(
         self,
@@ -25,8 +34,8 @@ impl Boundary {
                 !(square_margin..=SIZE - square_margin).contains(&x)
                     || !(square_margin..=SIZE - square_margin).contains(&y),
             ),
-            Self::Circle => {
-                let center = SIZE / 2.;
+            Self::Circle | Self::Chaos => {
+                let center = self.size() / 2.;
                 let dx = x - center;
                 let dy = y - center;
                 let distance = libm::hypotf(dx, dy);

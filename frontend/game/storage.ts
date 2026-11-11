@@ -9,6 +9,7 @@ export type PlateData = GenomeData & {
     environment: Environment;
     inserted: number;
     challengeId?: string;
+    mode?: "sandbox" | "chaos";
     slotNames?: string[];
     genomeNames?: Record<string, string[]>;
 };
@@ -61,6 +62,8 @@ export function validateData(kind: LibraryKind, data: unknown): GenomeData | Pla
         throw new Error("Параметры среды сохранения некорректны.");
     if (typeof data.inserted !== "number" || !Number.isSafeInteger(data.inserted) || data.inserted < 0)
         throw new Error("Счётчик помещённых клеток некорректен.");
+    if (data.mode !== undefined && data.mode !== "sandbox" && data.mode !== "chaos")
+        throw new Error("Неизвестный режим эксперимента.");
     if (data.challengeId !== undefined && (typeof data.challengeId !== "string" || data.challengeId.length > 80))
         throw new Error("Не удалось прочитать испытание сохранения.");
     if (data.slotNames !== undefined && (!Array.isArray(data.slotNames) || data.slotNames.some(n => typeof n !== "string" || n.length > 80)))
@@ -69,7 +72,7 @@ export function validateData(kind: LibraryKind, data: unknown): GenomeData | Pla
         || Object.entries(data.genomeNames).some(([key, names]) => !key || key.length > 2400000
             || !Array.isArray(names) || names.length > 1000 || names.some(n => typeof n !== "string" || !n.trim() || n.length > 80))))
         throw new Error("Имена режимов живых клеток некорректны.");
-    return { ...base, state: data.state, environment: e as PlateData["environment"], inserted: data.inserted,
+    return { ...base, ...(data.mode === undefined ? {} : { mode: data.mode as "sandbox" | "chaos" }), state: data.state, environment: e as PlateData["environment"], inserted: data.inserted,
         ...(data.challengeId === undefined ? {} : { challengeId: data.challengeId as string }),
         ...(data.slotNames === undefined ? {} : { slotNames: data.slotNames as string[] }),
         ...(data.genomeNames === undefined ? {} : { genomeNames: data.genomeNames as Record<string, string[]> }) };

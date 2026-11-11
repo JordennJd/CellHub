@@ -28,6 +28,7 @@ const WORLD = 3072;
 const SIZE_MARGIN = 12;
 const PREDICTION_HORIZON_MS = 1600;
 const SOLVER_PASSES = 12;
+const CONSTRAINT_BUDGET = 12_000;
 
 type SceneCell = {
   id: number;
@@ -134,7 +135,7 @@ export class PredictionWorld {
         cell.color = cells[i + 12];
         cell.mirrored = cells[i + 13];
         cell.nitrogen = cells[i + 14];
-        cell.details = cells.slice(i + 15, i + CELL_STRIDE);
+        cell.details.set(cells.subarray(i + 15, i + CELL_STRIDE));
         cell.syncedAt = now;
       }
       this.lastSeen.set(id, chunk.tick);
@@ -270,8 +271,11 @@ export class PredictionWorld {
     const step = Math.min(0.1, Math.max(0, dt));
     if (step === 0) return;
     const horizon = now - PREDICTION_HORIZON_MS;
+    // Large colonies stay at authoritative positions when the constraint solver
+    // cannot fit even one full pass. Biology always remains on the server.
+    const passes = Math.min(SOLVER_PASSES, Math.floor(CONSTRAINT_BUDGET / Math.max(1, this.links.size)));
     for (const cell of this.cells.values()) {
-      if (cell.syncedAt < horizon || cell.speed === 0) continue;
+      if (cell.syncedAt < horizon || cell.speed === 0 || (cell.linked && passes === 0)) continue;
       cell.x = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, cell.x + Math.cos(cell.angle) * cell.speed * step));
       cell.y = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, cell.y + Math.sin(cell.angle) * cell.speed * step));
     }
@@ -281,7 +285,7 @@ export class PredictionWorld {
       ghost.y = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, ghost.y + Math.sin(ghost.angle) * ghost.speed * step));
     }
     if (!this.links.size) return;
-    for (let pass = 0; pass < SOLVER_PASSES; pass++) {
+    for (let pass = 0; pass < passes; pass++) {
       for (const [aId, bId] of this.links.values()) {
         const a = this.cells.get(aId);
         const b = this.cells.get(bId);

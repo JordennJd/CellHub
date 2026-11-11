@@ -188,7 +188,7 @@ test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI"
     assert.equal(frame[23], 0);
     assert.equal(frame[10], 0x3399ff);
     assert.equal(frame[22], 0x3399ff);
-    assert(Math.abs(frame[21] - frame[9] - Math.PI + 0.1) < 0.00001);
+    assert(Math.abs(frame[21] - frame[9] - Math.PI + 0.7) < 0.00001);
     restored.restore_state(sim.export_state());
     assert.deepEqual(restored.snapshot(), frame);
     assert.deepEqual(restored.environment(), sim.environment());
@@ -268,6 +268,28 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
     }
     const finalState = replay => messages.find(message => message.requestId === `after-${replay}`).state;
     assert.equal(finalState(false), finalState(true));
+
+    // The real worker routes chaos resets and editor changes and serializes
+    // future pool/config commands with the same queue as sandbox commands.
+    send({type:"reset", requestId:"chaos-start", chaos:{seed:42, genome:model.flatten(model.chaosGenome())}});
+    tick();
+    assert.equal(messages.at(-1).worldSize, 6144);
+    assert.equal(messages.at(-1).chaos.info[5], 6);
+    const palette = model.flatten([{...model.newMode(0), kind:4, canDivide:false}]);
+    send({type:"chaos-pool", genome:palette, atTick:2});
+    send({type:"chaos-configure", enabled:false, rate:10, viable:false, atTick:2});
+    send({type:"export", requestId:"chaos-queue"});
+    tick();
+    const chaosSave = messages.find(message => message.requestId === "chaos-queue").state;
+    for (const replay of [false, true]) {
+      if (replay) { send({type:"restore", requestId:"chaos-reload", state:chaosSave}); tick(); }
+      send({type:"step"}); send({type:"step"}); tick();
+      assert.equal(messages.at(-1).chaos.info[2], 0);
+      assert.equal(messages.at(-1).chaos.info[9], 1);
+      send({type:"export", requestId:`chaos-after-${replay}`}); tick();
+    }
+    assert.equal(messages.find(m => m.requestId === "chaos-after-false").state,
+      messages.find(m => m.requestId === "chaos-after-true").state);
   } finally {
     globalThis.self = previousSelf;
     globalThis.setInterval = previousInterval;
@@ -293,6 +315,45 @@ test("real WASM rejects invalid commands without corrupting the world", () => {
   } finally {
     sim.free();
   }
+});
+
+test("chaos WASM uses editor slots, large terrain, timed organisms and exact checkpoints", () => {
+  const sim = new Simulation(7), restored = new Simulation(99);
+  try {
+    const pool = model.chaosGenome().map(m => ({ ...m, canDivide: false }));
+    sim.start_chaos(73421, model.flatten(pool));
+    assert.equal(sim.world_size(), 6144);
+    assert.equal(sim.terrain().length, 96 * 96 * 4);
+    assert(sim.stats()[1] >= 156);
+    assert.equal(sim.chaos_info()[5], 6);
+    const oldCell = sim.snapshot()[0];
+    const oldGenes = sim.genome(oldCell);
+    const edited = model.flatten([{ ...model.newMode(0), kind: 4, canDivide: false }]);
+    sim.set_chaos_pool(edited);
+    sim.sterilize();
+    sim.advance(120); sim.advance(59);
+    assert.equal(sim.stats()[1], 0);
+    sim.advance(1);
+    assert.equal(sim.stats()[1], 1);
+    assert.equal(sim.snapshot()[4], 4);
+    assert.equal(sim.cell_mode(sim.snapshot()[0]), 0);
+    assert.deepEqual(sim.genome(sim.snapshot()[0]), edited);
+    assert.notDeepEqual(oldGenes, edited);
+    for (let i = 0; i < 6; i++) sim.advance(120);
+    assert.equal(sim.chaos_info()[8], 1);
+    const events = sim.chaos_events();
+    assert.deepEqual(Array.from(events.slice(-3, -1)), [900, 4]);
+    assert(events.at(-1) >= 3 && events.at(-1) <= 5);
+    assert.equal(sim.links().length, (events.at(-1) - 1) * 2);
+    restored.restore_state(sim.export_state());
+    assert.deepEqual(restored.export_state(), sim.export_state());
+    sim.configure_chaos(false, 10, false);
+    restored.configure_chaos(false, 10, false);
+    for (let i = 0; i < 10; i++) { sim.advance(120); restored.advance(120); }
+    assert.deepEqual(sim.export_state(), restored.export_state());
+    assert.throws(() => sim.configure_chaos(true, 0, true));
+    assert.throws(() => sim.set_chaos_pool(new Float32Array()));
+  } finally { sim.free(); restored.free(); }
 });
 
 test("real WASM lifecycle produces transferred snapshots and reproducible descendants", () => {

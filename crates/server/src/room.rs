@@ -6,7 +6,7 @@ use cellhub_protocol::{
 use cellhub_simulation::Simulation;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing::{info, warn};
@@ -18,7 +18,7 @@ const EMPTY_ROOM_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub enum RoomEvent {
-    Binary(Arc<[u8]>),
+    Binary(axum::body::Bytes),
     Text(Arc<str>),
 }
 
@@ -44,7 +44,13 @@ pub struct RoomHandle {
     pub player_count: AtomicU32,
     pub tick: AtomicU32,
     pub population: AtomicU32,
-    pub tx: mpsc::UnboundedSender<RoomCommand>,
+    pub tx: mpsc::Sender<RoomCommand>,
+    pub step_us: AtomicU64,
+    pub stream_us: AtomicU64,
+    pub tick_us: AtomicU64,
+    pub overruns: AtomicU64,
+    pub bytes: AtomicU64,
+    pub stopping: AtomicBool,
     pub events: broadcast::Sender<RoomEvent>,
 }
 
@@ -75,7 +81,7 @@ pub fn spawn_room(
     host_name: String,
     seed: u32,
 ) -> Arc<RoomHandle> {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(1024);
     let (events, _) = broadcast::channel(96);
     let room = Arc::new(RoomHandle {
         id: id.clone(),
@@ -87,30 +93,46 @@ pub fn spawn_room(
         population: AtomicU32::new(0),
         tx,
         events,
+        step_us: AtomicU64::new(0),
+        stream_us: AtomicU64::new(0),
+        tick_us: AtomicU64::new(0),
+        overruns: AtomicU64::new(0),
+        bytes: AtomicU64::new(0),
+        stopping: AtomicBool::new(false),
     });
     let task_room = Arc::clone(&room);
     let task_registry = Arc::clone(&registry);
     tokio::spawn(async move {
-        run_room(task_room, rx, seed).await;
+        if let Err(error) = tokio::task::spawn_blocking(move || run_room(task_room, rx, seed)).await
+        {
+            warn!(%error, "room worker failed");
+        }
         task_registry.write().await.remove(&id);
         info!(%id, "room closed");
     });
     room
 }
 
-async fn run_room(
-    room: Arc<RoomHandle>,
-    mut commands: mpsc::UnboundedReceiver<RoomCommand>,
-    seed: u32,
-) {
+fn run_room(room: Arc<RoomHandle>, mut commands: mpsc::Receiver<RoomCommand>, seed: u32) {
     let mut simulation = Simulation::new(seed);
     let mut cursor = 0usize;
     let mut empty_since = Some(Instant::now());
-    let mut interval = tokio::time::interval(Duration::from_millis(1000 / TICK_RATE));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let period = Duration::from_secs_f64(1. / TICK_RATE as f64);
+    let mut deadline = Instant::now();
     loop {
-        interval.tick().await;
-        while let Ok(command) = commands.try_recv() {
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        if room.stopping.load(Ordering::Relaxed) {
+            room.broadcast(RoomEvent::json(&ServerMessage::RoomClosed {
+                reason: "Сервер останавливается.".to_owned(),
+            }));
+            break;
+        }
+        let tick_started = Instant::now();
+        // A busy player cannot starve the fixed simulation tick.
+        for _ in 0..256 {
+            let Ok(command) = commands.try_recv() else {
+                break;
+            };
             apply_command(&room, &mut simulation, &mut cursor, command);
         }
         let players = room.player_count.load(Ordering::Relaxed);
@@ -126,7 +148,11 @@ async fn run_room(
             empty_since = None;
         }
 
+        let step_started = Instant::now();
         simulation.advance(1);
+        room.step_us
+            .store(step_started.elapsed().as_micros() as u64, Ordering::Relaxed);
+        let stream_started = Instant::now();
         let stats = simulation.stats();
         let chunk_x = (cursor % CHUNKS_PER_AXIS as usize) as u32;
         let chunk_y = (cursor / CHUNKS_PER_AXIS as usize) as u32;
@@ -145,13 +171,27 @@ async fn run_room(
         };
         match chunk.encode() {
             Ok(bytes) => {
+                room.bytes
+                    .fetch_add(bytes.len() as u64 * players as u64, Ordering::Relaxed);
                 room.tick.store(chunk.tick, Ordering::Relaxed);
                 room.population.store(chunk.population, Ordering::Relaxed);
-                room.broadcast(RoomEvent::Binary(Arc::from(bytes)));
+                room.broadcast(RoomEvent::Binary(bytes.into()));
             }
             Err(error) => warn!(%error, "cannot encode room chunk"),
         }
         cursor = (cursor + 1) % CHUNK_COUNT;
+        room.stream_us.store(
+            stream_started.elapsed().as_micros() as u64,
+            Ordering::Relaxed,
+        );
+        let elapsed = tick_started.elapsed();
+        room.tick_us
+            .store(elapsed.as_micros() as u64, Ordering::Relaxed);
+        deadline += period;
+        if elapsed > period {
+            room.overruns.fetch_add(1, Ordering::Relaxed);
+            deadline = Instant::now();
+        }
     }
 }
 

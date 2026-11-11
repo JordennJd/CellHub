@@ -76,7 +76,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
                 <div className="home-mode-grid">
                     <ModeCard kind="challenge" title="Испытания" description="Задачи с заданными условиями и целями." onClick={() => setPage('challenges')}/>
                     <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
-                    <ModeCard kind="chaos" title="Хаос" description="Биомы, паразиты и сложные экосистемы."/>
+                    <ModeCard kind="chaos" title="Хаос" description="Биомы, день и ночь, мутации и самозарождение." onClick={() => onStart({ kind: 'chaos' })}/>
                     <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками." onClick={() => onStart({ kind: 'arena' })}/>
                 </div>
                 <div className="home-secondary-grid">
@@ -121,9 +121,17 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
         </main>
         {library && <Modal label="Библиотека" onClose={() => setLibrary(null)}>
             <Library kind={library} onClose={() => setLibrary(null)} onLoad={entry => {
-                const challengeId = entry.kind === 'plate' ? (entry.data as PlateData).challengeId : undefined;
-                const level = challengeId ? levels?.find(value => value.id === challengeId) : undefined;
-                onStart(entry.kind === 'plate' && level ? { kind: 'challenge', level, entry } : { kind: 'sandbox', entry });
+                if (entry.kind !== 'plate') {
+                    onStart({ kind: 'sandbox', entry });
+                    return;
+                }
+                const data = entry.data as PlateData;
+                const level = data.challengeId ? levels?.find(value => value.id === data.challengeId) : undefined;
+                if (level) {
+                    onStart({ kind: 'challenge', level, entry });
+                    return;
+                }
+                onStart({ kind: data.mode === 'chaos' ? 'chaos' : 'sandbox', challengeId: data.challengeId, entry });
             }}/>
         </Modal>}
         {settings && <Modal label="Настройки" onClose={() => setSettings(false)}><Settings onClose={() => setSettings(false)}/></Modal>}

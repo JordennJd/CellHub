@@ -19,7 +19,7 @@ fn relative_luminance(color:vec3f)->f32 {
 // Premultiplied alpha compositing, matching the separate original shapes.
 fn over(base:vec4f,color:vec3f,a:f32)->vec4f {return vec4f(color*a,a)+base*(1.-a);}
 fn coverage(distance:f32)->f32 {let aa=max(fwidth(distance),0.001);return 1.-smoothstep(-aa*0.5,aa*0.5,distance);}
-fn dish_distance(world:vec2f)->f32 {return length(world-vec2f(1536.))-1536.;}
+fn dish_distance(world:vec2f)->f32 {return length(world-vec2f(camera.padding*0.5))-camera.padding*0.5;}
 fn grain(uv: vec2f) -> f32 {
     return textureSample(material, material_sampler, uv).r - 0.5;
 }
@@ -32,8 +32,13 @@ struct TerrainOut {@builtin(position) pos:vec4f,@location(0) world:vec2f}
     let w=o.world;
     let distance=dish_distance(w);
     let mask=coverage(distance);
-    let ij=vec2u(clamp(w/64.,vec2f(0.),vec2f(47.)));let t=textureLoad(terrain,vec2i(ij),0);
+    let ij=vec2u(clamp(w/64.,vec2f(0.),vec2f(camera.padding/64.-1.)));let t=textureLoad(terrain,vec2i(ij),0);
     var color=vec4f(rgb(0x253e2bu),1.);
+    if camera.padding>3072. && camera.layer==0. {
+        let colors=array<u32,10>(0x425b31u,0x294c3fu,0x365344u,0x4d4933u,0x4b3851u,0x41543au,0x293d48u,0x3d603au,0x4b5052u,0x355648u);
+        let biome=colors[u32(clamp(t.w,0.,9.))];
+        color=vec4f(rgb(biome)*(0.85+0.15*clamp(t.x,0.,1.)),1.);
+    }
     if camera.layer==1. {color=vec4f(mix(rgb(0x253e2bu),rgb(0xe7cf7du),clamp(t.x*0.65,0.,1.)),1.);}
     if camera.layer==2. {color=vec4f(mix(rgb(0x253e2bu),rgb(0xd28ce9u),clamp(t.y*0.65,0.,1.)),1.);}
     if camera.layer==3. {color=vec4f(mix(rgb(0x253e2bu),rgb(0x75d5bdu),clamp(t.z*0.65,0.,1.)),1.);}

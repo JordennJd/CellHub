@@ -6,6 +6,9 @@ edition = "2024"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+naga = { version = "=24.0.0", features = ["wgsl-in"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wgpu = { version = "=24.0.5", default-features = false, features = ["webgpu", "webgl", "wgsl"] }
 bytemuck = "1"

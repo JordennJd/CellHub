@@ -6,10 +6,11 @@ let sim: Simulation;
 let speed = 0;
 let debt = 0;
 let last = performance.now();
+let previewRequestId: number | undefined;
 type ScheduledCommand = WorldCommand & { atTick: number };
 let scheduled: ScheduledCommand[] = [];
 const MAX_SCHEDULED_COMMANDS = 1024;
-const scheduledTypes = new Set(["spawn", "edit", "configure", "remove", "boost", "move", "sterilize"]);
+const scheduledTypes = new Set(["spawn", "edit", "configure", "remove", "boost", "move", "sterilize", "chaos-pool", "chaos-configure"]);
 const validTick = (tick: unknown): tick is number =>
   typeof tick === "number" && Number.isInteger(tick) && tick >= 0 && tick <= 0xffffffff;
 
@@ -22,8 +23,15 @@ function frame() {
     nitrates = sim.nitrates(),
     details = sim.cell_details(),
     coveredFood = sim.covered_food(),
-    level = sim.level_status();
-  ctx.postMessage({ type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, level }, [
+    level = sim.level_status(),
+    divisions = sim.take_division_events();
+  const info = sim.chaos_info(), history = sim.chaos_history(), events = sim.chaos_events();
+  ctx.postMessage({
+    type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, level, divisions,
+    worldSize: sim.world_size(), chaos: info.length ? { info, history, events } : undefined,
+    ...(previewRequestId === undefined ? {} : { previewRequestId }),
+  }, [
+    info.buffer, history.buffer, events.buffer,
     cells.buffer,
     links.buffer,
     terrain.buffer,
@@ -32,7 +40,9 @@ function frame() {
     nitrates.buffer,
     details.buffer,
     coveredFood.buffer,
+    divisions.buffer,
   ]);
+  previewRequestId = undefined;
 }
 const pending: Command[] = [];
 ctx.onmessage = ({ data }: MessageEvent<Command>) => {
@@ -56,7 +66,7 @@ function readScheduled(raw: unknown, tick: number): ScheduledCommand[] {
   return sortScheduled(raw.map(item => {
     if (!item || !scheduledTypes.has(item.type) || !validTick(item.atTick) || item.atTick <= tick)
       throw new Error("Некорректный тик отложенной команды");
-    if (item.type === "spawn" || item.type === "edit") {
+    if (item.type === "spawn" || item.type === "edit" || item.type === "chaos-pool") {
       if (!Array.isArray(item.genome) || item.genome.length > 1_200_000
         || !item.genome.every(Number.isFinite)) throw new Error("Некорректный геном отложенной команды");
       return { ...item, genome: new Float32Array(item.genome) };
@@ -126,6 +136,15 @@ function apply(c: Command) {
         speed = c.value;
         debt = 0;
         break;
+      case "chaos-pool":
+        sim.set_chaos_pool(c.genome);
+        changed = true;
+        break;
+      case "chaos-configure":
+        if (!Number.isInteger(c.rate) || c.rate < 1 || c.rate > 60) throw new Error("Недопустимая частота самозарождения");
+        sim.configure_chaos(c.enabled, c.rate, c.viable);
+        changed = true;
+        break;
       case "configure": {
         const s = c.settings;
         sim.configure(s.light, s.food, s.radiation, s.viscosity, s.aging, s.killAtEdge,
@@ -167,6 +186,7 @@ function apply(c: Command) {
         }
         const nextScheduled = readScheduled(state.scheduled, state.values[3]);
         sim.restore_state(new Float64Array(state.values));
+        previewRequestId = undefined;
         scheduled = nextScheduled;
         speed = 0;
         debt = 0;
@@ -177,6 +197,7 @@ function apply(c: Command) {
       case "preview": {
         if (!Number.isFinite(c.steps)) throw new Error("Некорректный возраст предпросмотра");
         // Preview owns a separate worker; never share this instance with a live laboratory.
+        previewRequestId = undefined;
         sim.reset();
         scheduled = [];
         sim.configure(1, 1, 0, 1, true, false);
@@ -189,6 +210,7 @@ function apply(c: Command) {
           sim.advance(chunk);
           remaining -= chunk;
         }
+        previewRequestId = "requestId" in c && typeof c.requestId === "number" ? c.requestId : undefined;
         changed = true;
         break;
       }
@@ -197,9 +219,11 @@ function apply(c: Command) {
           if (typeof c.level !== "string" || c.level.length > 20_000_000)
             throw new Error("Некорректный файл уровня");
           sim.load_level_json(c.level);
-        } else {
-          sim.reset();
-        }
+        } else if (c.chaos) {
+          if (!Number.isInteger(c.chaos.seed) || c.chaos.seed < 0 || c.chaos.seed > 0xffffffff) throw new Error("Некорректный seed");
+          sim.start_chaos(c.chaos.seed, c.chaos.genome);
+        } else sim.reset();
+        previewRequestId = undefined;
         scheduled = [];
         speed = 0;
         debt = 0;
@@ -267,6 +291,7 @@ try {
   const initialized = await createSimulation();
   sim = initialized.sim;
   sim.set_circular_dish(true);
+  sim.set_division_event_tracking(true);
   ctx.postMessage({ type: "ready", threaded: initialized.threaded });
   let needFrame = true;
   setInterval(() => {

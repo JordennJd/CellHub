@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use wasm_bindgen::prelude::*;
 use wgpu::util::DeviceExt;
 
-const TERRAIN_SIZE: u32 = 48;
+const TERRAIN_SIZE: u32 = 96;
 const TERRAIN_STRIDE: u32 = TERRAIN_SIZE * 16;
 const TERRAIN_BYTES: u64 = (TERRAIN_STRIDE * TERRAIN_SIZE) as u64;
 
@@ -129,7 +129,7 @@ impl RendererState {
         canvas.set_width(pw);
         canvas.set_height(ph);
         surface.configure(&device, &config);
-        let view = [width, height, 1536., 1536., 1., 0., -1., 0.];
+        let view = [width, height, 1536., 1536., 1., 0., -1., 3072.];
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera"),
             contents: bytemuck::cast_slice(&view),
@@ -412,13 +412,41 @@ impl RendererState {
         terrain: &[f32],
         links: &[u32],
     ) -> Result<(), JsValue> {
+        if ![48 * 48 * 4, 96 * 96 * 4].contains(&terrain.len())
+            || terrain.iter().any(|v| !v.is_finite())
+        {
+            return Err(error("Invalid render snapshot"));
+        }
+        self.set_geometry(cells, links)?;
+        let grid = if terrain.len() == 96 * 96 * 4 { 96 } else { 48 };
+        self.view[7] = grid as f32 * 64.;
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.terrain,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(terrain),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(grid * 16),
+                rows_per_image: Some(grid),
+            },
+            wgpu::Extent3d {
+                width: grid,
+                height: grid,
+                depth_or_array_layers: 1,
+            },
+        );
+        Ok(())
+    }
+
+    pub(super) fn set_geometry(&mut self, cells: &[f32], links: &[u32]) -> Result<(), JsValue> {
         if self.destroyed {
             return Err(error("Renderer destroyed"));
         }
-        if cells.len() % CELL_VALUES != 0
-            || terrain.len() != 48 * 48 * 4
-            || cells.iter().chain(terrain).any(|v| !v.is_finite())
-        {
+        if cells.len() % CELL_VALUES != 0 || cells.iter().any(|v| !v.is_finite()) {
             return Err(error("Invalid render snapshot"));
         }
         let link_instances = pack_links(cells, links).map_err(error)?;
@@ -458,25 +486,6 @@ impl RendererState {
         if !link_bytes.is_empty() {
             self.queue.write_buffer(&self.links, 0, link_bytes);
         }
-        self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.terrain,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            bytemuck::cast_slice(terrain),
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(TERRAIN_STRIDE),
-                rows_per_image: Some(TERRAIN_SIZE),
-            },
-            wgpu::Extent3d {
-                width: TERRAIN_SIZE,
-                height: TERRAIN_SIZE,
-                depth_or_array_layers: 1,
-            },
-        );
         self.count = (cells.len() / CELL_VALUES) as u32;
         self.link_count = (links.len() / 2) as u32;
         self.dirty = true;

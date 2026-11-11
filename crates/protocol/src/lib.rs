@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 pub const WORLD_SIZE: f32 = 3072.;
 pub const CHUNK_SIZE: f32 = 512.;
 pub const CHUNKS_PER_AXIS: u32 = 6;
@@ -15,7 +15,7 @@ pub const TERRAIN_GRID: usize = 48;
 pub const TERRAIN_TILES_PER_CHUNK: usize = TERRAIN_GRID / CHUNKS_PER_AXIS as usize;
 pub const CELL_STRIDE: usize = 28;
 pub const TERRAIN_STRIDE: usize = 6;
-pub const BIN_CHUNK: u8 = 1;
+pub const BIN_CHUNK: u8 = 2;
 
 pub fn chunk_of(x: f32, y: f32) -> (u8, u8) {
     let cx = (x / CHUNK_SIZE).clamp(0., (CHUNKS_PER_AXIS - 1) as f32) as u8;
@@ -170,9 +170,23 @@ impl Chunk {
         out.extend(((self.cells.len() / CELL_STRIDE) as u16).to_le_bytes());
         out.extend(((self.links.len() / 2) as u16).to_le_bytes());
         out.extend(((self.terrain.len() / TERRAIN_STRIDE) as u16).to_le_bytes());
-        out.extend([0u8; 2]);
-        for value in &self.cells {
-            out.extend(value.to_le_bytes());
+        // Omit exact +0 bit patterns; all other float bits remain unchanged.
+        // Dense rows win for unusual worlds where almost every field is set.
+        let nonzero = self.cells.iter().filter(|v| v.to_bits() != 0).count();
+        let sparse = nonzero + self.cells.len() / CELL_STRIDE < self.cells.len();
+        out.extend([u8::from(sparse), 0]);
+        for row in self.cells.chunks_exact(CELL_STRIDE) {
+            if sparse {
+                let mask = row.iter().enumerate().fold(0u32, |mask, (i, v)| {
+                    mask | (u32::from(v.to_bits() != 0) << i)
+                });
+                out.extend(mask.to_le_bytes());
+            }
+            for value in row {
+                if !sparse || value.to_bits() != 0 {
+                    out.extend(value.to_le_bytes());
+                }
+            }
         }
         for value in &self.links {
             out.extend(value.to_le_bytes());
@@ -202,13 +216,40 @@ impl Chunk {
         let cell_count = u16::from_le_bytes(bytes.get(23..25)?.try_into().ok()?) as usize;
         let link_count = u16::from_le_bytes(bytes.get(25..27)?.try_into().ok()?) as usize;
         let tile_count = u16::from_le_bytes(bytes.get(27..29)?.try_into().ok()?) as usize;
-        let expected = 1
-            + 5 * 4
-            + 2
-            + 8
-            + cell_count * CELL_STRIDE * 4
-            + link_count * 2 * 4
-            + tile_count * TERRAIN_STRIDE * 4;
+        if chunk_x >= CHUNKS_PER_AXIS as u8
+            || chunk_y >= CHUNKS_PER_AXIS as u8
+            || bytes[29] > 1
+            || bytes[30] != 0
+        {
+            return None;
+        }
+        let sparse = bytes[29] == 1;
+        let mut offset = 31;
+        let mut cells = Vec::new();
+        for _ in 0..cell_count {
+            let mask = if sparse {
+                let mask = u32_at(offset)?;
+                offset += 4;
+                if mask >> CELL_STRIDE != 0 {
+                    return None;
+                }
+                mask
+            } else {
+                (1u32 << CELL_STRIDE) - 1
+            };
+            for i in 0..CELL_STRIDE {
+                cells.push(if mask & (1 << i) != 0 {
+                    let value = f32::from_bits(u32_at(offset)?);
+                    offset += 4;
+                    value
+                } else {
+                    0.
+                });
+            }
+        }
+        let links_start = offset;
+        let terrain_start = links_start + link_count * 2 * 4;
+        let expected = terrain_start + tile_count * TERRAIN_STRIDE * 4;
         if bytes.len() != expected {
             return None;
         }
@@ -220,10 +261,6 @@ impl Chunk {
                 .map(|v| f32::from_le_bytes(*v))
                 .collect()
         };
-        let cells_start = 31;
-        let links_start = cells_start + cell_count * CELL_STRIDE * 4;
-        let terrain_start = links_start + link_count * 2 * 4;
-        let cells = floats(cells_start, cell_count * CELL_STRIDE);
         let links = bytes[links_start..links_start + link_count * 2 * 4]
             .as_chunks::<4>()
             .0
@@ -284,6 +321,32 @@ mod tests {
         let bytes = chunk.encode().unwrap();
         assert!(Chunk::decode(&bytes[..bytes.len() - 1]).is_none());
         assert!(Chunk::decode(&bytes[..8]).is_none());
+    }
+
+    #[test]
+    fn sparse_rows_preserve_float_bits_and_reject_unknown_mask_bits() {
+        let mut row = vec![0.; CELL_STRIDE];
+        row[0] = 42.;
+        row[1] = -0.;
+        row[25] = -1.;
+        let chunk = Chunk {
+            cells: row,
+            ..Chunk::default()
+        };
+        let mut bytes = chunk.encode().unwrap();
+        assert_eq!(bytes[29], 1);
+        assert_eq!(bytes.len(), 31 + 4 + 3 * 4);
+        let decoded = Chunk::decode(&bytes).unwrap();
+        assert_eq!(
+            decoded
+                .cells
+                .iter()
+                .map(|v| v.to_bits())
+                .collect::<Vec<_>>(),
+            chunk.cells.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+        );
+        bytes[34] |= 0x80;
+        assert!(Chunk::decode(&bytes).is_none());
     }
 
     #[test]

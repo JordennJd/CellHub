@@ -147,6 +147,13 @@ impl WorldRenderer {
         Ok(())
     }
 
+    /// Update cell and bond positions while reusing the uploaded terrain.
+    pub fn set_geometry(&mut self, cells: &[f32], links: &[u32]) -> Result<(), JsValue> {
+        self.state.borrow_mut().set_geometry(cells, links)?;
+        self.signal.request();
+        Ok(())
+    }
+
     pub fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
         self.state
             .borrow_mut()

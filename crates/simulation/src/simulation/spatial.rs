@@ -1,9 +1,9 @@
 //! Uniform broad phase over swept bounds. Candidate pairs are visited once per body.
 
-use crate::components::{Position, SIZE};
+use crate::components::Position;
 
 const BUCKET_SIZE: f32 = 32.;
-const GRID_SIZE: usize = (SIZE / BUCKET_SIZE) as usize;
+const GRID_SIZE: usize = (crate::terrain::CHAOS_SIZE / BUCKET_SIZE) as usize;
 const MAX_BUCKETS_PER_BODY: usize = 16;
 
 #[derive(Clone, Copy)]

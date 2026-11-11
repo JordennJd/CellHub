@@ -9,10 +9,12 @@ mod signals;
 mod interactions;
 mod bonds;
 mod specialized;
+mod chaos;
 mod persistence;
 mod tools;
 mod step;
 mod level;
+mod metabolism;
 #[cfg(test)]
 mod tests;
 
@@ -25,7 +27,7 @@ use environment::Environment;
 use hecs::World;
 use program::{SPEED_TARGET, controlled_value};
 use spatial::SpatialGrid;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
@@ -46,9 +48,11 @@ pub struct Simulation {
     deaths: u32,
     infections: u32,
     frame: Vec<f32>,
+    division_events: Option<VecDeque<[f32; 8]>>,
     // Reused per-tick scratch storage: no heap churn at the population limit.
     entities: Vec<(u32, hecs::Entity)>,
     spatial: SpatialGrid,
+    metabolism: metabolism::MetabolismScratch,
     // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
     bonds: BTreeSet<(u32, u32)>,
     settings: Environment,
@@ -56,6 +60,7 @@ pub struct Simulation {
     level: Option<level::LevelRuntime>,
     /// Per-level population cap from the original substrate (`max_cells`).
     population_limit: usize,
+    chaos: Option<chaos::Chaos>,
 }
 
 #[wasm_bindgen]
@@ -73,17 +78,35 @@ impl Simulation {
             deaths: 0,
             infections: 0,
             frame: Vec::new(),
+            division_events: None,
             entities: Vec::new(),
             spatial: SpatialGrid::new(),
+            metabolism: metabolism::MetabolismScratch::default(),
             bonds: BTreeSet::new(),
             settings: Environment::default(),
             boundary: Boundary::default(),
             level: None,
             population_limit: LIMIT,
+            chaos: None,
         }
     }
 
     pub fn reset(&mut self) {
+        if let Some(chaos) = &self.chaos {
+            let pool = chaos.pool.clone();
+            let initial_pool = chaos.initial_pool.clone();
+            let enabled = chaos.enabled;
+            let rate = chaos.rate;
+            let viable = chaos.viable;
+            self.start_chaos_checked(self.seed, initial_pool);
+            let chaos = self.chaos.as_mut().unwrap();
+            chaos.pool = pool;
+            chaos.enabled = enabled;
+            chaos.rate = rate;
+            chaos.viable = viable;
+            chaos.next_spawn = 1800 / rate;
+            return;
+        }
         if let Some(runtime) = &self.level {
             let level = runtime.level.clone();
             if self.install_level(level).is_ok() {
@@ -92,12 +115,18 @@ impl Simulation {
             self.level = None;
         }
         let boundary = self.boundary;
+        let track_divisions = self.division_events.is_some();
         *self = Self::new(self.seed);
         self.boundary = boundary;
+        self.set_division_event_tracking(track_divisions);
     }
 
     /// Opt in for the local laboratory without changing the native server map.
     pub fn set_circular_dish(&mut self, enabled: bool) {
+        if self.chaos.is_some() {
+            self.boundary = Boundary::Chaos;
+            return;
+        }
         self.boundary = if enabled {
             Boundary::Circle
         } else {
@@ -114,6 +143,9 @@ impl Simulation {
 
     /// Remove living cells while retaining the current substrate, time and settings.
     pub fn sterilize(&mut self) {
+        if let Some(chaos) = &mut self.chaos {
+            chaos.event(self.tick, 5, self.world.len());
+        }
         self.deaths += self.world.len();
         self.world.clear();
         self.entities.clear();
@@ -246,6 +278,22 @@ impl Simulation {
 
     pub fn tick_number(&self) -> u32 {
         self.tick
+    }
+
+    /// Capture visual events for consumers that render local simulation frames.
+    pub fn set_division_event_tracking(&mut self, enabled: bool) {
+        if enabled {
+            self.division_events.get_or_insert_with(VecDeque::new);
+        } else {
+            self.division_events = None;
+        }
+    }
+
+    /// Drain rows of tick, parent ID, daughter IDs and the parent's pose at division.
+    pub fn take_division_events(&mut self) -> Vec<f32> {
+        self.division_events
+            .as_mut()
+            .map_or_else(Vec::new, |events| events.drain(..).flatten().collect())
     }
 
     /// Fingerprint the canonical checkpoint for replay tests and diagnostics.
@@ -403,12 +451,7 @@ impl Simulation {
     }
 
     fn random(&mut self) -> f32 {
-        let mut x = self.rng;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.rng = x;
-        (x as f64 / u32::MAX as f64) as f32
+        draw_random(&mut self.rng)
     }
 
     /// Native-only region export used by the authoritative server.
@@ -520,4 +563,13 @@ pub struct ChunkSnapshot {
     pub cells: Vec<f32>,
     pub links: Vec<u32>,
     pub terrain: Vec<f32>,
+}
+
+fn draw_random(rng: &mut u32) -> f32 {
+    let mut x = *rng;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *rng = x;
+    (x as f64 / u32::MAX as f64) as f32
 }

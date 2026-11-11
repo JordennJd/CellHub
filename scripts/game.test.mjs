@@ -73,6 +73,9 @@ test("world metadata and distinct starting mode survive a round trip", () => {
     slotNames: ["Рост", "Движение"], genomeNames: { "0,2.4,0,0": ["Старая клетка"], "1,3,1,0": ["Новый фагоцит", "Двигатель"] } };
   const saved = storage.saveEntry("plate", "Образец", plate);
   assert.deepEqual(storage.parseEntry(storage.exportEntry(saved)).data, plate);
+  const chaos = storage.saveEntry("plate", "Мир хаоса", { ...plate, mode: "chaos" });
+  assert.equal(storage.parseEntry(storage.exportEntry(chaos)).data.mode, "chaos");
+  assert.throws(() => storage.validateData("plate", { ...plate, mode: "unknown" }));
   for (const environment of [{ ...plate.environment, light: 5.01 }, { ...plate.environment, food: -1 }, { ...plate.environment, viscosity: 0 }, { ...plate.environment, viscosity: 5.1 },
     { ...plate.environment, onlyPointMutations: 1 }, { ...plate.environment, gravity: -0.1 }, { ...plate.environment, gravity: 1.01 },
     { ...plate.environment, density: -3.31 }, { ...plate.environment, density: 3.31 }, { ...plate.environment, nitrogen: -1 }])

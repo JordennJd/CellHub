@@ -10,6 +10,7 @@ pub(crate) const MIN_DIVISION_AGE: f32 = 0.5;
 pub(crate) const INITIAL_NITROGEN: f32 = 1.;
 pub(crate) const NITROGEN_DIVISION: f32 = 0.2;
 pub(crate) const NITROGEN_DEATH: f32 = 0.1;
+pub(crate) const MAX_RECOIL_MOMENTUM: f32 = 1.0e12;
 
 /// Owner class mirrored from the original game. Level conditions count cells
 /// by this value: 0 = substrate cell, 1 = player cell, 3 = infected, 6 = hybrid.
@@ -30,6 +31,8 @@ pub(crate) struct Cell {
     pub(crate) id: u32,
     pub(crate) mode: usize,
     pub(crate) mass: f32,
+    /// Momentum from division, in world units times cell mass per second.
+    pub(crate) recoil: [f32; 2],
     pub(crate) nitrogen: f32,
     pub(crate) age: f32,
     pub(crate) generation: u32,
@@ -50,6 +53,7 @@ impl Default for Cell {
             id: 0,
             mode: 0,
             mass: 1.,
+            recoil: [0.; 2],
             nitrogen: INITIAL_NITROGEN,
             age: 0.,
             generation: 0,

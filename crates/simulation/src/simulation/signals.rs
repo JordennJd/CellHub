@@ -8,7 +8,9 @@ use crate::cell_types::{
 };
 use crate::components::{Cell, Position, SIZE, radius};
 use crate::genome::Genome;
-use crate::terrain::{Tile, tile_index};
+use crate::terrain::Tile;
+#[cfg(test)]
+use crate::terrain::tile_index;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -16,7 +18,7 @@ const SENSE_RANGE: f32 = 96.;
 const SENSE_LIPOCYTES: u8 = 7;
 const SENSE_MOTILE_CELLS: u8 = 8;
 const POINT_BUCKET: f32 = 128.;
-const POINT_GRID: usize = (SIZE / POINT_BUCKET) as usize;
+const POINT_GRID: usize = (crate::terrain::CHAOS_SIZE / POINT_BUCKET) as usize;
 const SECRETION_NITROGEN: f32 = 0.2;
 
 struct Body {
@@ -77,12 +79,15 @@ fn distance_squared(a: Position, b: Position) -> f32 {
 fn wall_distance(p: Position, boundary: Boundary) -> f32 {
     match boundary {
         Boundary::Square => p.x.min(p.y).min(SIZE - p.x).min(SIZE - p.y),
-        Boundary::Circle => SIZE / 2. - libm::hypotf(p.x - SIZE / 2., p.y - SIZE / 2.),
+        Boundary::Circle | Boundary::Chaos => {
+            boundary.size() / 2.
+                - libm::hypotf(p.x - boundary.size() / 2., p.y - boundary.size() / 2.)
+        }
     }
 }
 
 fn field_sample(tiles: &[Tile], p: Position, sensor: u8, boundary: Boundary) -> f32 {
-    let tile = tiles[tile_index(p.x, p.y)];
+    let tile = tiles[crate::terrain::index(p.x, p.y, (boundary.size() / 64.) as usize)];
     match sensor {
         0 => tile.light,
         1 => tile.food,
@@ -127,8 +132,8 @@ fn stimulus(
     ];
     let mut result = if stereo {
         let offset = |sign: f32| Position {
-            x: (body.position.x + side[0] * 32. * sign).clamp(0., SIZE),
-            y: (body.position.y + side[1] * 32. * sign).clamp(0., SIZE),
+            x: (body.position.x + side[0] * 32. * sign).clamp(0., boundary.size()),
+            y: (body.position.y + side[1] * 32. * sign).clamp(0., boundary.size()),
             angle: body.position.angle,
         };
         field_sample(tiles, offset(1.), mode.sensor, boundary)
@@ -310,7 +315,11 @@ impl Simulation {
             updated[i].nitrogen = (updated[i].nitrogen - rate * step * 0.02).max(0.);
             updated[i].mass = (updated[i].mass - rate * step * 0.005).max(0.);
             if mode.secretion == 1 {
-                let tile = &mut self.tiles[tile_index(source.position.x, source.position.y)];
+                let tile = &mut self.tiles[crate::terrain::index(
+                    source.position.x,
+                    source.position.y,
+                    (self.boundary.size() / 64.) as usize,
+                )];
                 let stripped = (rate * step * 0.25)
                     .min(tile.covered_food)
                     .min((tile.capacity - tile.food).max(0.));

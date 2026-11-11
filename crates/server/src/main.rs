@@ -35,6 +35,7 @@ async fn main() {
     let app = Router::new()
         .route("/ws", get(ws::ws_handler))
         .route("/health", get(health))
+        .route("/debug/rooms", get(room_metrics))
         .fallback_service(
             ServeDir::new(&config.static_dir).not_found_service(ServeFile::new(index)),
         )
@@ -57,13 +58,38 @@ async fn main() {
         "CellHub server listening"
     );
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(state))
         .await
         .expect("server failed");
 }
 
 async fn health() -> &'static str {
     "ok"
+}
+
+async fn room_metrics(
+    axum::extract::State(state): axum::extract::State<Arc<AppState>>,
+) -> axum::Json<serde_json::Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let rooms = state.rooms.read().await;
+    let values: Vec<_> = rooms
+        .values()
+        .map(|room| {
+            serde_json::json!({
+                "id": room.id,
+                "players": room.player_count.load(Relaxed),
+                "population": room.population.load(Relaxed),
+                "tick": room.tick.load(Relaxed),
+                "stepUs": room.step_us.load(Relaxed),
+                "streamUs": room.stream_us.load(Relaxed),
+                "tickUs": room.tick_us.load(Relaxed),
+                "overruns": room.overruns.load(Relaxed),
+                "estimatedOutboundBytes": room.bytes.load(Relaxed),
+                "queuedCommands": room.tx.max_capacity() - room.tx.capacity(),
+            })
+        })
+        .collect();
+    axum::Json(serde_json::json!({ "tickBudgetUs": 33333, "rooms": values }))
 }
 
 struct Config {
@@ -79,7 +105,7 @@ impl Config {
             bind: "127.0.0.1:8082".parse().expect("default bind"),
             static_dir: PathBuf::from("dist"),
             max_rooms: 64,
-            max_players: 32,
+            max_players: 40,
         };
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -110,6 +136,21 @@ impl Config {
     }
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(state: Arc<AppState>) {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
     let _ = tokio::signal::ctrl_c().await;
+    for room in state.rooms.read().await.values() {
+        room.stopping
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }

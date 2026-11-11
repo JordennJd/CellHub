@@ -221,6 +221,7 @@ dependencies = [
  "bytemuck",
  "epaint_default_fonts",
  "js-sys",
+ "naga",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

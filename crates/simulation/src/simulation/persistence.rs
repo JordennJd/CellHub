@@ -3,12 +3,13 @@
 use super::Simulation;
 use super::boundary::Boundary;
 use super::environment::Environment;
-use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, Position, SIZE};
+use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, MAX_RECOIL_MOMENTUM, Position};
 use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, normalize_v4_signal};
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
-const VERSION: u32 = 6;
+/// v8 adds the campaign owner class on top of v7 recoil/chaos data.
+const VERSION: u32 = 8;
 
 fn is_main_v4(values: &[f64]) -> bool {
     // The deployed v4 writes the tile count immediately after fluid density.
@@ -75,9 +76,32 @@ impl Simulation {
             s.gravity as f64,
             s.density as f64,
             s.nitrogen as f64,
-            matches!(self.boundary, Boundary::Circle) as u8 as f64,
-            self.tiles.len() as f64,
+            matches!(self.boundary, Boundary::Circle | Boundary::Chaos) as u8 as f64,
         ];
+        values.push(self.chaos.is_some() as u8 as f64);
+        if let Some(c) = &self.chaos {
+            values.extend([
+                1.,
+                c.rng as f64,
+                c.enabled as u8 as f64,
+                c.rate as f64,
+                c.viable as u8 as f64,
+                c.next_spawn as f64,
+                c.spawned as f64,
+                c.organisms as f64,
+            ]);
+            let pool = c.pool.values();
+            values.push(pool.len() as f64);
+            values.extend(pool.into_iter().map(f64::from));
+            let initial = c.initial_pool.values();
+            values.push(initial.len() as f64);
+            values.extend(initial.into_iter().map(f64::from));
+            values.push(c.history.len() as f64);
+            values.extend(c.history.iter().flatten().copied().map(f64::from));
+            values.push(c.events.len() as f64);
+            values.extend(c.events.iter().flatten().map(|&n| n as f64));
+        }
+        values.push(self.tiles.len() as f64);
         for tile in &self.tiles {
             values.extend(
                 [
@@ -147,6 +171,8 @@ impl Simulation {
                 c.anchored as u8 as f64,
                 c.class as f64,
                 genome_id as f64,
+                f64::from(c.recoil[0]),
+                f64::from(c.recoil[1]),
             ]);
         }
         values.push(self.bonds.len() as f64);
@@ -158,13 +184,17 @@ impl Simulation {
 
     pub(super) fn restore_checked(&mut self, values: &[f64]) -> Result<(), String> {
         let level = self.level.take();
+        let population_limit = self.population_limit;
         let mut replacement = Self::decode_state(values)?;
         replacement.level = level;
+        replacement.population_limit = population_limit;
         // Old saves did not encode geometry. Keep their migration path into
         // the current dish. Current saves restore geometry and coordinates as-is.
         if values[0] < 4. || is_main_v4(values) {
-            replacement.set_circular_dish(matches!(self.boundary, Boundary::Circle));
+            replacement
+                .set_circular_dish(matches!(self.boundary, Boundary::Circle | Boundary::Chaos));
         }
+        replacement.set_division_event_tracking(self.division_events.is_some());
         *self = replacement;
         Ok(())
     }
@@ -178,6 +208,11 @@ impl Simulation {
         if !(1..=VERSION).contains(&version) {
             return Err("Неподдерживаемая версия сохранения".into());
         }
+        // The two independently released v6 layouts have disjoint headers:
+        // classic recoil v6 has tile count 2304 at offset 19; chaos v6 has a flag.
+        let chaos_v6 = version == 6 && matches!(values.get(19), Some(&0.) | Some(&1.));
+        let has_chaos_header = version >= 7 || chaos_v6;
+        let has_recoil = version >= 7 || (version == 6 && !chaos_v6);
         let main_v4 = is_main_v4(values);
         let has_resources = version >= 4 && !main_v4;
         let seed = input.integer(u32::MAX)?;
@@ -219,17 +254,90 @@ impl Simulation {
         if has_resources && input.flag()? {
             restored.boundary = Boundary::Circle;
         }
-        if input.integer((GRID * GRID) as u32)? as usize != GRID * GRID {
+        if has_chaos_header && input.flag()? {
+            if !matches!(restored.boundary, Boundary::Circle) {
+                return Err("Некорректная геометрия мира хаоса".into());
+            }
+            if input.integer(1)? != 1 {
+                return Err("Unsupported chaos generator".into());
+            }
+            let rng = input.integer(u32::MAX)?;
+            let enabled = input.flag()?;
+            let rate = input.integer(60)?;
+            let viable = input.flag()?;
+            let next_spawn = input.integer(u32::MAX)?;
+            let spawned = input.integer(u32::MAX)?;
+            let organisms = input.integer(u32::MAX)?;
+            if rng == 0
+                || rate == 0
+                || next_spawn <= restored.tick
+                || next_spawn - restored.tick > 1800
+            {
+                return Err("Invalid chaos scheduler".into());
+            }
+            let pool = read_genome(&mut input, version, false)?;
+            let mut chaos = super::chaos::Chaos::new(seed, pool);
+            chaos.initial_pool = read_genome(&mut input, version, false)?;
+            chaos.rng = rng;
+            chaos.enabled = enabled;
+            chaos.rate = rate;
+            chaos.viable = viable;
+            chaos.next_spawn = next_spawn;
+            chaos.spawned = spawned;
+            chaos.organisms = organisms;
+            let count = input.integer(super::chaos::HISTORY_LIMIT as u32)?;
+            let mut previous = -1.;
+            for _ in 0..count {
+                let mut sample = [0.; 20];
+                sample[0] = input.float(0., restored.tick as f32 / 30.)?;
+                if sample[0] <= previous {
+                    return Err("Invalid chaos history".into());
+                }
+                previous = sample[0];
+                for n in &mut sample[1..] {
+                    *n = input.float(0., LIMIT as f32)?;
+                }
+                if sample[2..].iter().sum::<f32>() != sample[1] {
+                    return Err("Invalid population sample".into());
+                }
+                chaos.history.push(sample);
+            }
+            let count = input.integer(super::chaos::EVENT_LIMIT as u32)?;
+            let mut previous = 0;
+            for _ in 0..count {
+                let tick = input.integer(restored.tick)?;
+                if tick < previous {
+                    return Err("Invalid event order".into());
+                }
+                previous = tick;
+                chaos
+                    .events
+                    .push([tick, input.integer(6)?, input.integer(u32::MAX)?]);
+            }
+            restored.tiles = chaos.baseline.clone();
+            restored.chaos = Some(chaos);
+            restored.boundary = Boundary::Chaos;
+        }
+        let grid = (restored.boundary.size() / 64.) as usize;
+        if input.integer((crate::terrain::CHAOS_GRID * crate::terrain::CHAOS_GRID) as u32)? as usize
+            != grid * grid
+        {
             return Err("Некорректный размер среды".into());
         }
+        // Rich chaos biomes can exceed the classic capacity of 1 before the
+        // global 5x multiplier: food <= 6.5 and nitrates <= 7.5.
+        let resource_max = if restored.chaos.is_some() { 8. } else { 5. };
         for tile in &mut restored.tiles {
             let light = input.float(0., 5.)?;
             let radiation = input.float(0., 5.)?;
-            let food = input.float(0., 5.)?;
-            let capacity = input.float(0., 5.)?;
-            let biome = input.integer(3)? as f32;
+            let food = input.float(0., resource_max)?;
+            let capacity = input.float(0., resource_max)?;
+            let biome = input.integer(if restored.chaos.is_some() { 9 } else { 3 })? as f32;
             let (nitrates, nitrate_capacity) = if has_resources {
-                (input.float(0., 5.)?, input.float(0., 5.)?)
+                (
+                    input.float(0., resource_max)?,
+                    input.float(0., resource_max)?,
+                )
             } else {
                 let capacity = nitrate_capacity(biome);
                 (capacity, capacity)
@@ -270,8 +378,8 @@ impl Simulation {
                 return Err("Некорректный идентификатор клетки".into());
             }
             let position = Position {
-                x: input.float(0., SIZE)?,
-                y: input.float(0., SIZE)?,
+                x: input.float(0., restored.boundary.size())?,
+                y: input.float(0., restored.boundary.size())?,
                 angle: input.float(-f32::MAX, f32::MAX)?,
             };
             let mut cell = Cell {
@@ -309,7 +417,7 @@ impl Simulation {
                 cell.telomeres = telomeres as i32;
                 cell.anchored = input.flag()?;
                 cell.class = crate::components::CLASS_USER;
-                if version >= 6 {
+                if version >= 8 {
                     cell.class = input.integer(255)? as u8;
                     if !matches!(cell.class, 0 | 1 | 3 | 6) {
                         return Err("Некорректный класс клетки в сохранении".into());
@@ -323,6 +431,15 @@ impl Simulation {
             } else {
                 read_genome(&mut input, version, main_v4)?
             };
+            if has_recoil {
+                for component in &mut cell.recoil {
+                    let value = input.number()?;
+                    if value.abs() > f64::from(MAX_RECOIL_MOMENTUM) {
+                        return Err("Импульс клетки вне допустимого диапазона".into());
+                    }
+                    *component = value as f32;
+                }
+            }
             if cell.mode >= genome.len() {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
             }
@@ -377,9 +494,56 @@ fn read_genome(input: &mut Reader<'_>, version: u32, main_v4: bool) -> Result<Ge
 mod tests {
     use super::*;
     use crate::cell_types::{LIPOCYTE, NEUROCYTE};
+    use crate::genome::Mode;
 
     #[test]
-    fn deployed_v4_world_migrates_terrain_cells_bonds_and_signals_to_v5() {
+    fn both_independent_v6_layouts_migrate_without_losing_chaos_or_recoil() {
+        let genes = Genome::from_modes(vec![Mode {
+            can_divide: false,
+            ..Mode::default()
+        }]);
+        let mut classic = Simulation::new(73);
+        let id = classic.spawn(1500., 1500., 0, &genes.values()).unwrap();
+        for (_, cell) in classic.world.query_mut::<&mut Cell>() {
+            if cell.id == id {
+                cell.recoil = [0.25, -0.125];
+            }
+        }
+        let current = classic.encode_state();
+        let mut recoil_v6 = current.clone();
+        // v8 cell records carry the owner class after `anchored`; v6 does not.
+        recoil_v6.remove(recoil_v6.len() - 5);
+        recoil_v6[0] = 6.;
+        recoil_v6.remove(19); // classic v6 has no chaos header
+        let mut restored = Simulation::new(1);
+        restored.restore_checked(&recoil_v6).unwrap();
+        assert_eq!(restored.encode_state(), current);
+        classic.advance(1);
+        restored.advance(1);
+        assert_eq!(restored.encode_state(), classic.encode_state());
+
+        let mut chaos = Simulation::new(74);
+        chaos.start_chaos_checked(74, genes.clone());
+        chaos.sterilize();
+        chaos.spawn(5000., 3000., 0, &genes.values()).unwrap();
+        let current = chaos.encode_state();
+        let mut chaos_v6 = current.clone();
+        // One cell, no bonds: old chaos v6 lacks both the owner class and the
+        // two recoil components.
+        chaos_v6.remove(chaos_v6.len() - 5);
+        chaos_v6[0] = 6.;
+        let end = chaos_v6.len();
+        chaos_v6.drain(end - 3..end - 1);
+        restored.restore_checked(&chaos_v6).unwrap();
+        assert_eq!(restored.encode_state(), current);
+        assert_eq!(restored.world_size(), 6144.);
+        chaos.advance(120);
+        restored.advance(120);
+        assert_eq!(restored.encode_state(), chaos.encode_state());
+    }
+
+    #[test]
+    fn deployed_v4_world_migrates_terrain_cells_bonds_and_signals() {
         let mut checkpoint = vec![
             4.,
             123.,
@@ -469,14 +633,122 @@ mod tests {
             assert_eq!(cell.nitrogen, INITIAL_NITROGEN);
             assert_eq!(cell.signals, [8., -4., 2., -1., 0., 0., 0., 0.]);
             assert_eq!(cell.toxin, 0.5);
+            assert_eq!(cell.recoil, [0.; 2]);
         }
 
-        let v5 = sim.encode_state();
+        let saved = sim.encode_state();
         let mut replacement = Simulation::new(0);
-        replacement.restore_checked(&v5).unwrap();
-        assert_eq!(replacement.encode_state(), v5);
+        replacement.restore_checked(&saved).unwrap();
+        assert_eq!(replacement.encode_state(), saved);
         checkpoint.pop();
         assert!(sim.restore_checked(&checkpoint).is_err());
-        assert_eq!(sim.encode_state(), v5);
+        assert_eq!(sim.encode_state(), saved);
+    }
+
+    #[test]
+    fn deployed_v5_checkpoint_keeps_shared_genomes_and_bonds_with_zero_recoil() {
+        let genes = Genome::from_modes(vec![Mode {
+            kind: NEUROCYTE,
+            ..Mode::default()
+        }])
+        .values();
+        let mut checkpoint = vec![
+            5.,
+            123.,
+            456.,
+            91.,
+            3.,
+            2.,
+            0.,
+            0.,
+            1.,
+            1.,
+            0.,
+            1.,
+            1.,
+            0.,
+            0.,
+            0.,
+            0.,
+            1.,
+            0.,
+            (GRID * GRID) as f64,
+        ];
+        for _ in 0..GRID * GRID {
+            checkpoint.extend([1., 0., 0.25, 1., 0., 0.75, 1., 0.125]);
+        }
+        checkpoint.extend([1., genes.len() as f64]);
+        checkpoint.extend(genes.iter().copied().map(f64::from));
+        checkpoint.push(2.);
+        for (id, x) in [(1., 500.), (2., 522.)] {
+            checkpoint.extend([
+                id, x, 600., 0.125, 0., 1.25, 2.5, 1., 0., 0.25, 1., 0.75, 1., 2., 3., 4., 5., 6.,
+                7., 8., 0.125, 0.25, 9., 1., 0.,
+            ]);
+        }
+        checkpoint.extend([1., 1., 2.]);
+
+        let mut sim = Simulation::new(0);
+        sim.restore_checked(&checkpoint).unwrap();
+        assert_eq!(sim.tick, 91);
+        assert_eq!(sim.tiles[0].covered_food, 0.125);
+        assert_eq!(sim.bonds, BTreeSet::from([(1, 2)]));
+        assert_eq!(sim.entities.len(), 2);
+        for &(_, entity) in &sim.entities {
+            let cell = sim.world.get::<&Cell>(entity).unwrap();
+            assert_eq!(cell.recoil, [0.; 2]);
+            assert_eq!(cell.signals[7], 8.);
+            assert!(cell.anchored);
+            assert_eq!(sim.world.get::<&Genome>(entity).unwrap().values(), genes);
+        }
+        assert_eq!(sim.encode_state()[0], f64::from(VERSION));
+    }
+
+    #[test]
+    fn recoil_round_trips_and_invalid_momentum_does_not_replace_the_world() {
+        let mut sim = Simulation::new(42);
+        let genes = Genome::from_modes(vec![Mode::default()]).values();
+        sim.spawn_checked(500., 600., 0, &genes).unwrap();
+        let without_recoil = sim.checksum();
+        let recoil = [0.41234567_f32, -0.215625_f32];
+        sim.world
+            .get::<&mut Cell>(sim.entities[0].1)
+            .unwrap()
+            .recoil = recoil;
+        let saved = sim.encode_state();
+        let checksum = sim.checksum();
+        assert_ne!(checksum, without_recoil);
+
+        let mut restored = Simulation::new(0);
+        restored.restore_checked(&saved).unwrap();
+        assert_eq!(restored.encode_state(), saved);
+        assert_eq!(restored.checksum(), checksum);
+        let restored_cell = restored.world.get::<&Cell>(restored.entities[0].1).unwrap();
+        assert_eq!(
+            restored_cell.recoil.map(f32::to_bits),
+            recoil.map(f32::to_bits)
+        );
+        drop(restored_cell);
+
+        // With one unbonded cell, the last values are recoil X/Y and bond count.
+        let above_limit = 2. * f64::from(MAX_RECOIL_MOMENTUM);
+        for index in (saved.len() - 3)..(saved.len() - 1) {
+            for invalid in [
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                above_limit,
+                -above_limit,
+            ] {
+                let mut malformed = saved.clone();
+                malformed[index] = invalid;
+                assert!(restored.restore_checked(&malformed).is_err());
+                assert_eq!(restored.checksum(), checksum);
+            }
+        }
+
+        sim.advance(15);
+        restored.advance(15);
+        assert_eq!(restored.checksum(), sim.checksum());
     }
 }

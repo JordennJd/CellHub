@@ -1,11 +1,14 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import init, { WorldRenderer } from "./rust-wasm/cellhub_frontend.js";
 import { bindCanvasControls, fitDishCamera, resizeDishCamera, zoomDishCamera } from "./input/canvas-controls";
 import { WORLD, STRIDE, type Frame } from "./model";
+import { DivisionAnimator, divisionMotionEnabled, playDivisionAnimation } from "./division-animation";
 import type { BackendPreference } from "./backend";
 import type { WorldViewProps } from "./world-view-types";
 export type { BackendPreference } from "./backend";
 let moduleReady: Promise<unknown> | undefined;
+const emptyCells = new Float32Array();
+const emptyLinks = new Uint32Array();
 const layerIndex = (layer: string) =>
   ({ biome: 0, light: 1, radiation: 2, food: 3, covered: 3, nitrates: 4 } as Record<string, number>)[
     layer
@@ -17,12 +20,14 @@ type RustWorldViewProps = WorldViewProps & {
 };
 
 export function RustWorldView(props: RustWorldViewProps) {
+  const worldSize = props.frame?.worldSize ?? WORLD;
   const host = useRef<HTMLDivElement>(null),
     live = useRef(props);
   live.current = props;
   const renderer = useRef<WorldRenderer | null>(null);
   const camera = useRef({ x: WORLD / 2, y: WORLD / 2, zoom: 0.55 });
   const frame = useRef<Frame | null>(null);
+  const [animator] = useState(() => new DivisionAnimator());
   const appliedFrame = useRef<Frame | null>(null);
   const appliedProjectionLayer = useRef("");
   const appliedView = useRef("");
@@ -53,18 +58,23 @@ export function RustWorldView(props: RustWorldViewProps) {
   const applyFrame = (force = false) => {
     const instance = renderer.current,
       next = frame.current;
-    if (!instance || !next) return;
+    if (!instance) return;
     const layer = live.current.layer;
-    const field = layer === "nitrates" ? next.nitrates : layer === "covered" ? next.coveredFood : null;
     if (!force && next === appliedFrame.current && layer === appliedProjectionLayer.current) return;
     try {
+      if (!next) {
+        if (appliedFrame.current) instance.set_geometry(emptyCells, emptyLinks);
+        appliedFrame.current = null;
+        return;
+      }
+      const field = layer === "nitrates" ? next.nitrates : layer === "covered" ? next.coveredFood : null;
       const terrain = field ? next.terrain.slice() : next.terrain;
       if (field) {
         for (let tile = 0; tile < terrain.length / 4; tile++) {
           terrain[tile * 4 + 2] = field[tile] ?? 0;
         }
       }
-      instance.set_frame(next.cells, terrain, next.links);
+      instance.set_frame(animator.sample(performance.now()) ?? next.cells, terrain, next.links);
       appliedFrame.current = next;
       appliedProjectionLayer.current = layer;
     } catch (e) {
@@ -78,11 +88,24 @@ export function RustWorldView(props: RustWorldViewProps) {
     live.current.onView({ ...camera.current });
   };
 
-  // JS only forwards new snapshots and view changes. Rust schedules and paints
-  // its own animation frames; there is no JS render loop anymore.
+  // Rust owns repaint. Between authoritative snapshots, only active division
+  // tweens send draw geometry without reuploading the terrain.
   useEffect(() => {
-    frame.current = props.frame;
+    const next = props.frame;
+    frame.current = next;
+    animator.update(next, performance.now(), renderer.current !== null && divisionMotionEnabled());
     applyFrame();
+    if (!next) return;
+    return playDivisionAnimation(animator, cells => {
+      const instance = renderer.current;
+      if (!instance || frame.current !== next) return;
+      try {
+        instance.set_geometry(cells, next.links);
+      } catch (e) {
+        animator.update(next, performance.now(), false);
+        live.current.onError(`Renderer: ${String(e)}`);
+      }
+    });
   }, [props.frame]);
   useEffect(() => {
     applyView();
@@ -115,7 +138,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     let viewport = measure();
     const reset = () => {
       viewport = measure();
-      Object.assign(camera.current, fitDishCamera(viewport, WORLD));
+      Object.assign(camera.current, fitDishCamera(viewport, worldSize));
       applyView(true);
       reportView(true);
     };
@@ -131,7 +154,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           }
         }
       }
-      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), WORLD));
+      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), worldSize));
       applyView(true);
       reportView(true);
     };
@@ -139,7 +162,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     const resizeObserver = new ResizeObserver(() => {
       const next = measure();
       if (!next.width || !next.height || (next.width === viewport.width && next.height === viewport.height)) return;
-      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, WORLD));
+      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, worldSize));
       viewport = next;
       applyView(true);
       reportView(true);
@@ -150,7 +173,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     const addControls = () => {
       removeControls = bindCanvasControls(canvas, {
         camera: camera.current,
-        worldSize: WORLD,
+        worldSize,
         tool: () => live.current.tool,
         onView: (final) => { applyView(); reportView(final); },
         onPoint: (p, action) => {
@@ -227,6 +250,6 @@ export function RustWorldView(props: RustWorldViewProps) {
         instance.free();
       }
     };
-  }, []);
+  }, [worldSize]);
   return <div className="world" ref={host} />;
 }

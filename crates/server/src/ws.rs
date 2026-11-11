@@ -222,19 +222,25 @@ async fn connection(mut socket: WebSocket, state: Arc<AppState>) {
                     | ClientMessage::Inspect { .. }
                     | ClientMessage::Reset { .. } => {
                         if let Some(slot) = &joined {
-                            if slot
-                                .room
-                                .tx
-                                .send(RoomCommand {
-                                    player: player.id,
-                                    message,
-                                    reply: out_tx.clone(),
-                                })
-                                .is_err()
-                            {
-                                let _ = out_tx.send(RoomEvent::json(&ServerMessage::Error {
-                                    message: "Комната уже остановлена.".to_owned(),
-                                    seq: None,
+                            if let Err(error) = slot.room.tx.try_send(RoomCommand {
+                                player: player.id,
+                                message,
+                                reply: out_tx.clone(),
+                            }) {
+                                let seq = match error.into_inner().message {
+                                    ClientMessage::Spawn { seq, .. }
+                                    | ClientMessage::Edit { seq, .. }
+                                    | ClientMessage::Inspect { seq, .. }
+                                    | ClientMessage::Reset { seq } => seq,
+                                    _ => unreachable!(),
+                                };
+                                let _ = out_tx.send(RoomEvent::json(&ServerMessage::Ack {
+                                    seq,
+                                    cell_id: None,
+                                    error: Some(
+                                        "Комната занята или уже остановлена. Повторите команду."
+                                            .to_owned(),
+                                    ),
                                 }));
                             }
                         } else {
@@ -326,7 +332,7 @@ impl RateLimiter {
 
 async fn send_event(socket: &mut WebSocket, event: RoomEvent) -> Result<(), axum::Error> {
     match event {
-        RoomEvent::Binary(bytes) => socket.send(Message::Binary(bytes.to_vec().into())).await,
+        RoomEvent::Binary(bytes) => socket.send(Message::Binary(bytes)).await,
         RoomEvent::Text(text) => socket.send(Message::Text(text.to_string().into())).await,
     }
 }
