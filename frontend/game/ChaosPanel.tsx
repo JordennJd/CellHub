@@ -47,8 +47,8 @@ export function ChaosPanel({ data, disabled, onConfigure, onNewWorld }: {
             <label className="toggle"><input type="checkbox" checked={!!info[2]} onChange={e => onConfigure(e.target.checked, info[3], !!info[4])}/>Самозарождение</label>
             <label className="range"><span>Появлений в минуту<output>{info[3]}</output></span><Slider label="Появлений в минуту" min={1} max={60} step={1} value={info[3]} onChange={rate => onConfigure(!!info[2], rate, !!info[4])}/></label>
             <label className="toggle"><input type="checkbox" checked={!!info[4]} onChange={e => onConfigure(!!info[2], info[3], e.target.checked)}/>Предпочитать жизнеспособные слоты</label>
-            <p>Новые клетки выбирают из {info[9]} слотов текущего редактора. В жизнеспособном варианте первая клетка выбирает фотоцит или фагоцит, если такой режим есть. Остальные клетки организма выбирают любой слот.</p>
-            <p>По умолчанию первое появление через 6 секунд, затем каждые 6 секунд. Раз в 30 секунд появляется связанный организм из 3–5 клеток вместо одиночной клетки. Отключение останавливает оба вида появления.</p>
+            <p>Одиночные клетки берут геном текущего редактора. Каждый связанный организм с вероятностью 50/50 использует либо редактор, либо случайный «дикий» геном. В жизнеспособном варианте первая клетка выбирает фотоцит или фагоцит, если такой слот есть. Остальные клетки организма выбирают любой слот выбранного генома.</p>
+            <p>По умолчанию первое появление через 6 секунд, затем каждые 6 секунд. Раз в 15 секунд вместо одиночной клетки появляется связанный организм из 4–7 клеток. Отключение останавливает оба вида появления.</p>
             <label>Seed мира<input value={seed} inputMode="numeric" maxLength={10} onChange={e => { setSeed(e.target.value); setSeedError(''); }}/></label>
             {seedError && <p role="alert">{seedError}</p>}
             <div className="button-row"><button onClick={() => {

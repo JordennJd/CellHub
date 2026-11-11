@@ -3,6 +3,13 @@
 .genome-demo .genome-check { margin:0; }
 .genome-demo-examples { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .genome-demo-examples p { flex-basis:100%; }
+.genome-demo-examples h4 { flex-basis:100%; margin:8px 0 0; font-size:13px; }
+.genome-demo-list { flex-basis:100%; display:grid; gap:7px; }
+.genome-demo-organism { display:grid; gap:3px; text-align:left; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--panel-subtle); color:var(--text); font:inherit; cursor:pointer; }
+.genome-demo-organism strong { font-size:13px; }
+.genome-demo-organism span { color:var(--accent); font-size:11px; }
+.genome-demo-organism small { color:var(--muted); font-size:12px; line-height:1.45; }
+.genome-demo-organism:disabled { opacity:.45; cursor:not-allowed; }
 .cell-type-picker { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--panel-subtle); }
 .cell-type-picker>label { padding:14px 14px 0; }
 .cell-type-preview { display:flex; align-items:center; gap:8px; padding:4px 14px; }

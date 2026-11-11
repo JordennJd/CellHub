@@ -15,6 +15,8 @@ pub(super) const EVENT_LIMIT: usize = 80;
 pub(super) struct Chaos {
     pub(super) pool: Genome,
     pub(super) initial_pool: Genome,
+    /// Deterministic procedurally varied organisms, mixed with the editor pool.
+    pub(super) wild: Vec<Genome>,
     pub(super) baseline: Vec<Tile>,
     pub(super) rng: u32,
     pub(super) enabled: bool,
@@ -32,6 +34,7 @@ impl Chaos {
         Self {
             initial_pool: pool.clone(),
             pool,
+            wild: wild_genomes(seed),
             baseline: chaos_map(seed),
             rng: (seed ^ 0xa341316c).max(1),
             enabled: true,
@@ -62,6 +65,187 @@ pub(super) fn daylight(tick: u32) -> f32 {
 #[cfg(test)]
 pub(super) fn clouds(seed: u32, tick: u32) -> [[f32; 6]; 3] {
     clouds_rect(seed, tick, CHAOS_SIZE, CHAOS_SIZE)
+}
+
+const WILD_TEMPLATES: usize = 7;
+const WILD_VARIANTS: usize = 2;
+
+/// Deterministic wild organisms for spontaneous generation. They are rebuilt
+/// from the world seed, so checkpoints do not need to store them separately.
+pub(super) fn wild_genomes(seed: u32) -> Vec<Genome> {
+    (0..WILD_TEMPLATES * WILD_VARIANTS)
+        .map(|index| wild_genome(seed, index))
+        .collect()
+}
+
+fn wild_genome(seed: u32, index: usize) -> Genome {
+    let template = index % WILD_TEMPLATES;
+    let variant = index / WILD_TEMPLATES;
+    let mut rng = seed
+        .wrapping_mul(0x9e37_79b9)
+        .wrapping_add(index as u32 + 1)
+        .max(1);
+    let mut photo = Mode {
+        kind: 0,
+        child_a: 0,
+        child_b: 1,
+        angle: 0.,
+        lifespan: 1000.,
+        bind_children: !matches!(template, 1 | 4 | 5),
+        ..Mode::default()
+    };
+    let mut modes = match template {
+        // A photo cell grows into a mobile chain.
+        0 => {
+            photo.threshold = 1.8;
+            vec![
+                photo,
+                Mode {
+                    kind: 2,
+                    can_divide: false,
+                    speed: 42.,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+            ]
+        }
+        // A glued photo colony.
+        1 => {
+            photo.threshold = 1.6;
+            vec![
+                photo,
+                Mode {
+                    kind: 9,
+                    threshold: 2.,
+                    child_a: 0,
+                    child_b: 1,
+                    max_connections: Some(4),
+                    angle: 0.,
+                    lifespan: 1000.,
+                    bind_children: true,
+                    ..Mode::default()
+                },
+            ]
+        }
+        // Photosynthesis plus digestion and nitrogen exchange.
+        2 => {
+            photo.threshold = 1.9;
+            vec![
+                photo,
+                Mode {
+                    kind: 1,
+                    threshold: 2.4,
+                    child_a: 0,
+                    child_b: 2,
+                    keep_b: true,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+                Mode {
+                    kind: 6,
+                    can_divide: false,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+            ]
+        }
+        // A mobile predator.
+        3 => {
+            photo.kind = 1;
+            photo.threshold = 2.;
+            vec![
+                photo,
+                Mode {
+                    kind: 2,
+                    can_divide: false,
+                    speed: 38.,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+            ]
+        }
+        // A protected glue/keratin colony.
+        4 => {
+            photo.threshold = 1.7;
+            vec![
+                photo,
+                Mode {
+                    kind: 9,
+                    threshold: 2.2,
+                    child_a: 0,
+                    child_b: 2,
+                    keep_b: true,
+                    max_connections: Some(3),
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+                Mode {
+                    kind: 4,
+                    can_divide: false,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+            ]
+        }
+        // A buoyant photo colony; useful when gravity is enabled.
+        5 => {
+            photo.threshold = 1.7;
+            vec![
+                photo,
+                Mode {
+                    kind: 8,
+                    can_divide: false,
+                    density: -2.2,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+            ]
+        }
+        // A predator carrying an infectious virocyte.
+        _ => {
+            photo.kind = 1;
+            photo.threshold = 2.;
+            vec![
+                photo,
+                Mode {
+                    kind: 3,
+                    can_divide: false,
+                    angle: 0.,
+                    lifespan: 1000.,
+                    ..Mode::default()
+                },
+            ]
+        }
+    };
+    for mode in &mut modes {
+        mode.threshold = (mode.threshold + (variant as f32 - 0.5) * 0.35
+            + (random(&mut rng) - 0.5) * 0.5)
+            .clamp(1.2, 4.);
+        if mode.kind == 2 {
+            mode.speed = (mode.speed + (random(&mut rng) - 0.5) * 12.).clamp(22., 55.);
+        }
+        mode.ratio = (mode.ratio + (random(&mut rng) - 0.5) * 0.16).clamp(0.3, 0.7);
+        mode.angle = (mode.angle + (random(&mut rng) - 0.5) * 0.9).clamp(-1.4, 1.4);
+        mode.child_angle_a = (random(&mut rng) - 0.5) * 1.6;
+        mode.child_angle_b = (random(&mut rng) - 0.5) * 1.6;
+        mode.lifespan = (mode.lifespan + (random(&mut rng) - 0.5) * 280.).clamp(360., 1000.);
+        mode.nutrient_priority = (random(&mut rng) * 0.9 + 0.8).clamp(0.8, 1.7);
+        if mode.can_divide {
+            mode.max_connections = mode
+                .max_connections
+                .or(Some(if mode.kind == 9 { 4 } else { 2 }));
+            mode.keep_a = random(&mut rng) < 0.35;
+            mode.keep_b = random(&mut rng) < 0.35;
+        }
+    }
+    Genome::from_modes(modes)
 }
 
 fn clouds_rect(seed: u32, tick: u32, width: f32, height: f32) -> [[f32; 6]; 3] {
@@ -160,7 +344,7 @@ impl Simulation {
             chaos.rate as f64,
             chaos.viable as u8 as f64,
             chaos.next_spawn.saturating_sub(self.tick) as f64 / 30.,
-            (900 - self.tick % 900) as f64 / 30.,
+            (450 - self.tick % 450) as f64 / 30.,
             chaos.spawned as f64,
             chaos.organisms as f64,
             chaos.pool.len() as f64,
@@ -219,8 +403,9 @@ impl Simulation {
                 .expect("validated chaos bounds");
         }
         self.refresh_chaos_fields();
+        let pool = self.chaos.as_ref().unwrap().pool.clone();
         for i in 0..132 {
-            self.chaos_arrival(i % 11 == 0, false);
+            self.chaos_arrival_with(pool.clone(), i % 11 == 0, false);
         }
         let count = self.world.len();
         self.chaos.as_mut().unwrap().event(0, 0, count);
@@ -269,31 +454,61 @@ impl Simulation {
         if due {
             chaos.next_spawn = self.tick + 1800 / chaos.rate;
         }
-        let organism = self.tick % 900 == 0;
+        let organism = self.tick % 450 == 0;
         if chaos.enabled && (due || organism) {
             self.chaos_arrival(organism, true);
         }
     }
 
+    /// Half of the spontaneous organisms use a procedural wild genome; the
+    /// other half copy the current editor pool.
     fn chaos_arrival(&mut self, organism: bool, immigration: bool) {
+        let genome = if organism {
+            self.wild_source()
+                .unwrap_or_else(|| self.chaos.as_ref().unwrap().pool.clone())
+        } else {
+            self.chaos.as_ref().unwrap().pool.clone()
+        };
+        self.chaos_arrival_with(genome, organism, immigration);
+    }
+
+    fn wild_source(&mut self) -> Option<Genome> {
+        let (rng, len) = {
+            let chaos = self.chaos.as_ref()?;
+            (chaos.rng, chaos.wild.len())
+        };
+        if len == 0 {
+            return None;
+        }
+        let mut rng = rng;
+        let roll = random(&mut rng);
+        let index = (random(&mut rng) * len as f32) as usize;
+        self.chaos.as_mut().unwrap().rng = rng;
+        if roll < 0.5 {
+            Some(self.chaos.as_ref().unwrap().wild[index].clone())
+        } else {
+            None
+        }
+    }
+
+    fn chaos_arrival_with(&mut self, genome: Genome, organism: bool, immigration: bool) {
         let chaos = self.chaos.as_mut().unwrap();
         let count = if organism {
-            3 + (random(&mut chaos.rng) * 3.) as usize
+            4 + (random(&mut chaos.rng) * 4.) as usize
         } else {
             1
         };
         if self.world.len() as usize + count > LIMIT {
             return;
         }
-        let pool = chaos.pool.clone();
-        let sources: Vec<_> = (0..pool.len())
-            .filter(|&i| matches!(pool.mode(i).kind, 0 | 1))
+        let sources: Vec<_> = (0..genome.len())
+            .filter(|&i| matches!(genome.mode(i).kind, 0 | 1))
             .collect();
         // Viability constrains the initial slot, never changes the editor genome.
         let first = if chaos.viable && !sources.is_empty() {
             sources[(random(&mut chaos.rng) * sources.len() as f32) as usize]
         } else {
-            (random(&mut chaos.rng) * pool.len() as f32) as usize
+            (random(&mut chaos.rng) * genome.len() as f32) as usize
         };
         let mut center = None;
         for _ in 0..64 {
@@ -326,22 +541,24 @@ impl Simulation {
             return;
         };
         let mut previous = None;
+        let direction = random(&mut chaos.rng) * std::f32::consts::TAU;
         for i in 0..count {
             let mode = if i == 0 {
                 first
             } else {
-                (random(&mut chaos.rng) * pool.len() as f32) as usize
+                (random(&mut chaos.rng) * genome.len() as f32) as usize
             };
             let id = self.next_id;
             self.next_id += 1;
             let mut cell = Cell::new(id, mode);
             cell.mass = if organism { 1.8 } else { 1.4 };
+            let offset = (i as f32 - (count - 1) as f32 / 2.) * 25.;
             let p = Position {
-                x: x + (i as f32 - (count - 1) as f32 / 2.) * 25.,
-                y,
+                x: x + libm::cosf(direction) * offset,
+                y: y + libm::sinf(direction) * offset,
                 angle: random(&mut chaos.rng) * std::f32::consts::TAU,
             };
-            let entity = self.world.spawn((p, cell, pool.clone()));
+            let entity = self.world.spawn((p, cell, genome.clone()));
             self.entities.push((id, entity));
             if let Some(a) = previous {
                 self.bonds.insert((a, id));
@@ -562,21 +779,20 @@ mod tests {
     }
 
     #[test]
-    fn immigration_starts_at_six_seconds_and_thirtieth_second_replaces_single_with_organism() {
+    fn immigration_starts_at_six_seconds_and_fifteenth_second_spawns_organism() {
         let mut sim = world(9);
         advance(&mut sim, 179);
         assert_eq!(sim.chaos.as_ref().unwrap().spawned, 0);
         sim.advance(1);
         assert_eq!(sim.chaos.as_ref().unwrap().spawned, 1);
-        advance(&mut sim, 719);
-        assert_eq!(sim.chaos.as_ref().unwrap().spawned, 4);
-        sim.advance(1);
+        advance(&mut sim, 270);
         let chaos = sim.chaos.as_ref().unwrap();
         assert_eq!(chaos.organisms, 1);
-        assert!((7..=9).contains(&chaos.spawned));
+        assert!((6..=9).contains(&chaos.spawned));
         let event = chaos.events.last().unwrap();
-        assert_eq!(event[0], 900);
+        assert_eq!(event[0], 450);
         assert_eq!(event[1], 4);
+        assert!((4..=7).contains(&event[2]));
         let ids: Vec<_> = sim
             .entities
             .iter()
@@ -594,6 +810,54 @@ mod tests {
     }
 
     #[test]
+    fn spontaneous_organisms_mix_wild_and_editor_genomes() {
+        let mut sim = world(23);
+        let editor = sim.chaos.as_ref().unwrap().pool.values();
+        let wild: Vec<_> = sim
+            .chaos
+            .as_ref()
+            .unwrap()
+            .wild
+            .iter()
+            .map(Genome::values)
+            .collect();
+        assert!(wild.len() >= 7);
+        let (mut editor_seen, mut wild_seen) = (false, false);
+        for _ in 0..40 {
+            sim.sterilize();
+            let before = sim.next_id;
+            sim.chaos_arrival(true, true);
+            let count = sim.next_id - before;
+            assert!((4..=7).contains(&count));
+            let genome = sim.genome(before);
+            if genome == editor {
+                editor_seen = true;
+            } else if wild.contains(&genome) {
+                wild_seen = true;
+            } else {
+                panic!("organism used an unexpected genome");
+            }
+        }
+        assert!(editor_seen && wild_seen);
+    }
+
+    #[test]
+    fn wild_genomes_are_deterministic_valid_and_viable() {
+        let first = wild_genomes(5);
+        let second = wild_genomes(5);
+        assert_eq!(
+            first.iter().map(Genome::values).collect::<Vec<_>>(),
+            second.iter().map(Genome::values).collect::<Vec<_>>()
+        );
+        assert_ne!(first[0].values(), wild_genomes(6)[0].values());
+        for genome in first {
+            assert!((2..=3).contains(&genome.len()));
+            assert_eq!(decode_checked(&genome.values()).unwrap().values(), genome.values());
+            assert!((0..genome.len()).any(|i| matches!(genome.mode(i).kind, 0 | 1)));
+        }
+    }
+
+    #[test]
     fn current_editor_pool_is_used_without_mutating_existing_cells() {
         let mut sim = world(11);
         let id = sim.entities[0].0;
@@ -605,13 +869,13 @@ mod tests {
         }]);
         sim.set_chaos_pool(&replacement.values()).unwrap();
         let before = sim.next_id;
-        sim.chaos_arrival(true, true);
+        sim.chaos_arrival_with(replacement.clone(), true, true);
         assert_eq!(sim.genome(id), existing);
         for id in before..sim.next_id {
             assert_eq!(sim.genome(id), replacement.values());
             assert_eq!(sim.cell_mode(id), 0);
         }
-        assert!((3..=5).contains(&(sim.next_id - before)));
+        assert!((4..=7).contains(&(sim.next_id - before)));
     }
 
     #[test]

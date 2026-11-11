@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import ts from "typescript";
+import { build } from "esbuild";
 import init, { Simulation } from "../frontend/wasm/simulation.js";
 
 const modelSource = await readFile(new URL("../frontend/model.ts", import.meta.url), "utf8");
@@ -9,6 +10,12 @@ const modelJs = ts.transpileModule(modelSource, {compilerOptions: {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
 }}).outputText;
 const model = await import(`data:text/javascript;base64,${Buffer.from(modelJs).toString("base64")}`);
+
+const organismsBundle = await build({
+  entryPoints: [new URL("../frontend/organisms.ts", import.meta.url).pathname],
+  bundle: true, write: false, format: "esm", platform: "node", logLevel: "silent",
+});
+const organisms = await import(`data:text/javascript;base64,${Buffer.from(organismsBundle.outputFiles[0].text).toString("base64")}`);
 
 await init({
   module_or_path: await readFile(
@@ -19,6 +26,46 @@ const genes = () =>
   new Float32Array(
     Array.from({ length: 8 }, () => [0, 2.4, 0, 0, 0.5, 12, 0.8, 240]).flat(),
   );
+
+test("demo organism catalog is ordered, valid and filtered by allowed cell types", () => {
+  const list = organisms.DEMO_ORGANISMS;
+  assert(list.length >= 7);
+  assert.equal(new Set(list.map(o => o.id)).size, list.length);
+  for (let i = 1; i < list.length; i++) assert(list[i - 1].universality >= list[i].universality);
+  for (const organism of list) {
+    const genome = organism.genome();
+    assert(genome.length >= 2, `${organism.id} is not multicellular`);
+    assert(organism.initialMode >= 0 && organism.initialMode < genome.length);
+    assert(genome[organism.initialMode].canDivide, `${organism.id} cannot grow`);
+    for (const [index, mode] of genome.entries()) {
+      assert(mode.name, `${organism.id} slot ${index} has no name`);
+      assert(mode.kind >= 0 && mode.kind < model.TYPES.length);
+      for (const ref of [mode.childA, mode.childB, mode.transitionA, mode.transitionB, mode.offspringMode, mode.compatibleMode])
+        assert(ref >= 0 && ref < genome.length, `${organism.id} slot ${index} has a broken reference`);
+    }
+    assert.deepEqual(model.flatten(model.inflate(model.flatten(genome))), model.flatten(genome));
+  }
+  assert.equal(organisms.demoOrganisms([0]).length, 0);
+  assert(organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "symbiont"));
+  assert(!organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "colony"));
+});
+
+test("every demo organism grows into a linked multicellular structure", () => {
+  for (const organism of organisms.DEMO_ORGANISMS) {
+    const sim = new Simulation(42);
+    try {
+      sim.configure(2, 3, 0, 1, false, false);
+      sim.spawn(1500, 1500, organism.initialMode, model.flatten(organism.genome()));
+      for (let i = 0; i < 18; i++) sim.advance(120);
+      const cells = sim.snapshot(), links = sim.links();
+      assert(cells.length / model.STRIDE >= 2, `${organism.id} did not divide`);
+      assert(links.length / 2 >= 1, `${organism.id} did not form a bond`);
+      assert(cells.length / model.STRIDE < 500, `${organism.id} grew without bounds`);
+    } finally {
+      sim.free();
+    }
+  }
+});
 
 test("rectangular WASM worlds preserve wide coordinates and exact checkpoints", () => {
   const sim = new Simulation(42), restored = new Simulation(1);
@@ -360,11 +407,16 @@ test("chaos WASM uses editor slots, large terrain, timed organisms and exact che
     assert.deepEqual(sim.genome(sim.snapshot()[0]), edited);
     assert.notDeepEqual(oldGenes, edited);
     for (let i = 0; i < 6; i++) sim.advance(120);
-    assert.equal(sim.chaos_info()[8], 1);
+    assert.equal(sim.chaos_info()[8], 2);
     const events = sim.chaos_events();
     assert.deepEqual(Array.from(events.slice(-3, -1)), [900, 4]);
-    assert(events.at(-1) >= 3 && events.at(-1) <= 5);
-    assert.equal(sim.links().length, (events.at(-1) - 1) * 2);
+    assert(events.at(-1) >= 4 && events.at(-1) <= 7);
+    const cells = sim.snapshot(), links = sim.links();
+    const ids = Array.from({ length: cells.length / model.STRIDE }, (_, i) => cells[i * model.STRIDE]);
+    const recent = ids.slice(-events.at(-1));
+    const bonds = new Set(Array.from({ length: links.length / 2 }, (_, i) => `${links[i * 2]}/${links[i * 2 + 1]}`));
+    for (let i = 1; i < recent.length; i++)
+      assert(bonds.has(`${recent[i - 1]}/${recent[i]}`), "organism cells are not bonded in a chain");
     restored.restore_state(sim.export_state());
     assert.deepEqual(restored.export_state(), sim.export_state());
     sim.configure_chaos(false, 10, false);

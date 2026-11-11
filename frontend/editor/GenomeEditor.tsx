@@ -1,8 +1,10 @@
 import { Slider } from "./Slider";
 import { SlotName } from "./SlotName";
 import { CellTypePicker } from "./CellTypePicker";
-import { useId, useState } from "react";
-import { defaultGenome, modeColor, multicellularGenome, newMode, removeMode, MAX_MODES, POPULATION_LIMIT, TYPES, type Mode, type NumericModeKey } from "../model";
+import { useEffect, useId, useState } from "react";
+import { defaultGenome, modeColor, newMode, removeMode, MAX_MODES, POPULATION_LIMIT, TYPES, type Mode, type NumericModeKey } from "../model";
+import { demoOrganisms } from "../organisms";
+import { listEntries } from "../game/storage";
 import { GenomePreview } from "./GenomePreview";
 import { CellSettings, Setting } from "./CellSettings";
 import "./editor.css";
@@ -21,12 +23,29 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
   const demoId = useId();
   const [demoMode, setDemoMode] = useState(false);
   const [editing, setEditing] = useState(0);
-  const [confirm, setConfirm] = useState<"reset" | "example" | "types" | "remove" | null>(null);
+  const [confirm, setConfirm] = useState<"reset" | "types" | "remove" | "choice" | null>(null);
+  const [choice, setChoice] = useState<{ name: string; genome: Mode[]; initialMode: number } | null>(null);
+  const [savedGenomes, setSavedGenomes] = useState<{ name: string; genome: Mode[]; initialMode: number }[]>([]);
+  const [savedError, setSavedError] = useState("");
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (!demoMode) return;
+    try {
+      setSavedGenomes(listEntries("genome").map(entry => {
+        const data = entry.data as { genome: Mode[]; initialMode: number };
+        return { name: entry.name, genome: data.genome, initialMode: data.initialMode };
+      }));
+      setSavedError("");
+    } catch (e) {
+      setSavedGenomes([]);
+      setSavedError(e instanceof Error ? e.message : "Не удалось прочитать библиотеку геномов.");
+    }
+  }, [demoMode]);
   const mode = Math.min(editing, genome.length - 1);
   const m = genome[mode];
   if (!m) return null;
   const allowed = (kind: number) => !allowedKinds || allowedKinds.includes(kind);
+  const catalog = demoOrganisms(allowedKinds);
   function update<K extends keyof Mode>(key: K, value: Mode[K]) {
     onChange(genome.map((item, i) => i === mode ? { ...item, [key]: value } : item));
   }
@@ -51,11 +70,21 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       onInitialModeChange(initialMode > mode ? initialMode - 1 : initialMode === mode ? Math.min(mode, next.length - 1) : initialMode);
       setEditing(Math.min(mode, next.length - 1));
       setMessage("Ссылки на удалённый слот перенаправлены к соседнему.");
+    } else if (confirm === "choice" && choice) {
+      onChange(structuredClone(choice.genome));
+      onInitialModeChange(choice.initialMode);
+      setEditing(0);
+      setMessage(`Загружен организм «${choice.name}».`);
+      setChoice(null);
     } else {
-      onChange(confirm === "example" ? multicellularGenome() : confirm === "types" ? TYPES.flatMap((_, kind) => allowed(kind) ? [kind] : []).map((kind, index) => ({ ...newMode(index), kind })) : defaultGenome().map(g => ({ ...g, kind: allowedKinds?.[0] ?? 0 })));
+      onChange(confirm === "types" ? TYPES.flatMap((_, kind) => allowed(kind) ? [kind] : []).map((kind, index) => ({ ...newMode(index), kind })) : defaultGenome().map(g => ({ ...g, kind: allowedKinds?.[0] ?? 0 })));
       onInitialModeChange(0); setEditing(0); setMessage("");
     }
     setConfirm(null);
+  }
+  function choose(name: string, next: Mode[], nextInitial: number) {
+    setChoice({ name, genome: next, initialMode: nextInitial });
+    setConfirm("choice");
   }
   const setting = (label: string, key: NumericModeKey, min: number, max: number, step: number, help: string, unit = "") =>
     <Setting label={label} value={m[key]} min={min} max={max} step={step} help={help} unit={unit} onChange={v => update(key, v)} />;
@@ -85,8 +114,32 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
     <section className="genome-demo"><label className="genome-check"><input type="checkbox" role="switch" checked={demoMode} aria-controls={demoId} onChange={e => setDemoMode(e.target.checked)}/>Режим демонстрации</label>
       {demoMode && <div id={demoId} className="genome-demo-examples"><p>Пример заменит слоты редактора. Поле и живые клетки сохранятся.</p>
         <button onClick={() => setConfirm("reset")}>Одна клетка</button>
-        {[0, 1, 2].every(allowed) && <button onClick={() => setConfirm("example")}>Многоклеточный организм</button>}
         <button onClick={() => setConfirm("types")}>Все доступные типы</button>
+        {catalog.length > 0 ? <>
+          <h4>Организмы по универсальности</h4>
+          <div className="genome-demo-list">
+            {catalog.map(organism => <button key={organism.id} className="genome-demo-organism" onClick={() => choose(organism.name, organism.genome(), organism.initialMode)}>
+              <strong>{organism.name}</strong>
+              <span>{organism.origin === "substrate" ? "из субстрата" : "ручная сборка"} · универсальность {organism.universality}</span>
+              <small>{organism.description}</small>
+            </button>)}
+          </div>
+        </> : <p>Среди доступных типов клеток нет готовых многоклеточных организмов.</p>}
+        {savedGenomes.length > 0 && <>
+          <h4>Мои сохранённые геномы</h4>
+          <div className="genome-demo-list">
+            {savedGenomes.map((entry, index) => {
+              const compatible = entry.genome.every(item => allowed(item.kind));
+              return <button key={`${entry.name}-${index}`} className="genome-demo-organism" disabled={!compatible}
+                title={compatible ? undefined : "Содержит типы клеток, недоступные в этом испытании."}
+                onClick={() => choose(entry.name, entry.genome, entry.initialMode)}>
+                <strong>{entry.name}</strong>
+                <span>{entry.genome.length} слотов{compatible ? "" : " · недоступен"}</span>
+              </button>;
+            })}
+          </div>
+        </>}
+        {savedError && <p role="alert">{savedError}</p>}
       </div>}
     </section>
     <div className="genome-file-actions"><button onClick={onSave}>Сохранить геном</button><button onClick={onLoad}>Загрузить геном</button></div>
@@ -143,7 +196,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       {setting("Продолжительность жизни", "lifespan", 20, 1000, 10, "После этого возраста клетка погибает, если старение включено в настройках среды.", "с")}
     </section>
     <CellSettings mode={m} genome={genome} onChange={changes => onChange(genome.map((item, index) => index === mode ? { ...item, ...changes } : item))} />
-    {confirm && <div role="alert" className="genome-confirm"><p>{confirm === "remove" ? "Удалить слот? Ссылки потомков будут перенаправлены к соседнему." : "Заменить геном редактора? Несохранённые изменения будут потеряны. Клетки в чашке останутся прежними."}</p><div><button onClick={perform}>{confirm === "remove" ? "Удалить слот" : "Заменить"}</button><button onClick={() => setConfirm(null)}>Отмена</button></div></div>}
+    {confirm && <div role="alert" className="genome-confirm"><p>{confirm === "remove" ? "Удалить слот? Ссылки потомков будут перенаправлены к соседнему." : confirm === "choice" && choice ? `Загрузить организм «${choice.name}»? Несохранённые изменения будут потеряны. Клетки в чашке останутся прежними.` : "Заменить геном редактора? Несохранённые изменения будут потеряны. Клетки в чашке останутся прежними."}</p><div><button onClick={perform}>{confirm === "remove" ? "Удалить слот" : "Заменить"}</button><button onClick={() => { setConfirm(null); setChoice(null); }}>Отмена</button></div></div>}
     {message && <p role="status">{message}</p>}
   </div>;
 }
