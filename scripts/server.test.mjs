@@ -188,9 +188,10 @@ try {
   genome.forEach((value, index) => assert(Math.abs(inspected.genome[index + 2] - value) < 1e-6,
     `shared genome field ${index} survives legacy normalization`));
   assert.deepEqual(inspected.genome.slice(14, 24), [0, 0, 0, 0, -1, -1, -1, -1, 1, 0]);
+  // The previous main used type 6 for Lipocyte and three signal fields.
   const otherGenome = [-4, 1,
-    1, 2.4, 0, 0, 0.5, 0, 0.8, 1000, 0, 0, 0, 0,
-    0, 0, 0, 0, 1, 0, 0, 3, 2, 1,
+    6, 2.4, 0, 0, 0.5, 0, 0.8, 1000, 0, 0, 0, 0,
+    0, 0, 0, 0, 1, 0, 0, 0, 0, 4.5,
   ];
   const secondAck = await second.command(
     { type: "spawn", x: 700, y: 700, mode: 0, genome: otherGenome },
@@ -203,6 +204,7 @@ try {
     15_000,
   );
   const otherRow = cellRow(otherChunk, secondAck.cell_id);
+  assert.equal(otherRow[4], 7, "the previous main Lipocyte ID migrates to the current ID");
   assert.equal(otherRow[12], 0xff0000, "the selected color is serialized separately from speed");
   assert(otherRow[14] > 0 && otherRow[14] <= 1, "the cell reserve is included in the chunk");
 

@@ -1,5 +1,5 @@
 import {
-  PROGRAM_INPUTS, PROGRAM_TARGETS, SECRETIONS, SENSORS, TYPES, newProgram,
+  GAMETE_GROUP_COUNT, PROGRAM_INPUTS, PROGRAM_TARGETS, SECRETIONS, SENSORS, TYPES, newProgram,
   type Mode, type NumericModeKey, type Program,
 } from "../model";
 
@@ -75,8 +75,9 @@ function SensorSettings({ mode, onChange }: Pick<CellSettingsProps, "mode" | "on
     <Channel value={mode.signalChannel} onChange={signalChannel => onChange({ signalChannel })} />
     <Setting label="Коэффициент сенсора" value={mode.sensorGain} min={-16} max={16} step={0.1}
       onChange={sensorGain => onChange({ sensorGain })}
-      help="Преобразует ощущение в выходной сигнал. Отрицательное значение меняет знак сигнала." />
-    {mode.sensor === 3 && <>
+      help={"Преобразует ощущение в выходной сигнал. Отрицательное значение меняет знак сигнала."
+        + ([7, 8].includes(mode.sensor) ? " Параметр «Подвижность» также задаёт дальность поиска." : "")} />
+    {[3, 7, 8].includes(mode.sensor) && <>
       <label className="genome-check"><input type="checkbox" checked={mode.targetRed >= 0}
         onChange={e => e.target.checked ? setTargetColor(targetColor)
           : onChange({ targetRed: -1, targetGreen: -1, targetBlue: -1 })} />Различать клетки по цвету</label>
@@ -198,8 +199,17 @@ export function CellSettings({ mode, genome, onChange }: CellSettingsProps) {
       {setting("Порог перехода B", "transitionThresholdB", -1000, 1000, 0.1, "Переход B выполняется, если готов его сигнал и не выбран переход A. Уравнения могут задавать условия вместо сигнала.")}
     </section>}
     {mode.kind === 16 && <section><h3>Слияние гамет</h3>
-      <ModeReference label="Совместимый режим партнёра" value={mode.compatibleMode} genome={genome}
-        onChange={compatibleMode => onChange({ compatibleMode })} />
+      <label className="genome-cell-type">Совместимость гамет
+        <select value={mode.compatibleMode} onChange={e => onChange({ compatibleMode: Number(e.target.value) })}>
+          <optgroup label="Режим партнёра">
+            {genome.map((partner, index) => <option key={index} value={index}>{partner.name} · {TYPES[partner.kind].name}</option>)}
+          </optgroup>
+          <optgroup label="Группа совместимости">
+            {Array.from({ length: GAMETE_GROUP_COUNT }, (_, group) =>
+              <option key={group} value={-(group + 1)}>Группа {String.fromCharCode(65 + group)}</option>)}
+          </optgroup>
+        </select>
+      </label>
       <ModeReference label="Режим потомка" value={mode.offspringMode} genome={genome}
         onChange={offspringMode => onChange({ offspringMode })} />
       <label className="genome-check"><input type="checkbox" checked={mode.telomeres >= 0}

@@ -1,9 +1,10 @@
 use super::Simulation;
 
+use crate::cell_types::{COUNT as KIND_COUNT, NITROCYTE as NITROCYTE_KIND};
 use crate::components::{
     Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE,
 };
-use crate::genome::{Genome, KIND_COUNT, MODE_STRIDE, NITROCYTE_KIND, decode_checked};
+use crate::genome::{Genome, MODE_STRIDE, Mode, decode_checked};
 use crate::terrain::tile_index;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -39,6 +40,26 @@ fn only_phagocytes_consume_substrate_food() {
             assert_eq!(s.tiles[tile].food, food, "kind={kind}");
             assert!(s.snapshot()[5] < 1., "kind={kind}");
         }
+    }
+}
+
+#[test]
+fn all_eighteen_archetypes_round_trip_and_spawn() {
+    let mut s = quiet_world();
+    for kind in 0..KIND_COUNT {
+        let genome = Genome::from_modes(vec![Mode {
+            kind,
+            ..Mode::default()
+        }]);
+        let genes = genome.values();
+        assert_eq!(decode_checked(&genes).unwrap().values(), genes);
+        s.spawn(100. + f32::from(kind) * 32., 500., 0, &genes)
+            .unwrap();
+    }
+    let rows = s.snapshot();
+    assert_eq!(rows.len(), usize::from(KIND_COUNT) * SNAPSHOT_STRIDE);
+    for (kind, row) in rows.chunks_exact(SNAPSHOT_STRIDE).enumerate() {
+        assert_eq!(row[4], kind as f32);
     }
 }
 

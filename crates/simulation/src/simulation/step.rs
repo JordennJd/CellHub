@@ -2,11 +2,14 @@
 
 use super::Simulation;
 use super::program::{SPEED_TARGET, controlled_value};
-use super::specialized::{BUOYOCYTE, GAMETE, LIPOCYTE, buoyant_drift, corpse_food, differentiate};
+use super::specialized::{buoyant_drift, corpse_food, differentiate};
+use crate::cell_types::{
+    BUOYOCYTE, COUNT, FLAGELLOCYTE, GAMETE, KERATINOCYTE, LIPOCYTE, PHAGOCYTE, PHOTOCYTE,
+};
 use crate::components::{
     Cell, LIMIT, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position, radius,
 };
-use crate::genome::{Genome, KIND_COUNT};
+use crate::genome::Genome;
 use crate::terrain::tile_index;
 use std::collections::{BTreeMap, HashSet};
 
@@ -50,9 +53,9 @@ impl Simulation {
             let programmed_speed = controlled_value(c, &m, SPEED_TARGET, degree).clamp(0., 60.);
             let t = &mut self.tiles[tile_index(p.x, p.y)];
             t.feed_nitrogen(c, m.kind, STEP);
-            let gain = if m.kind == 0 {
+            let gain = if m.kind == PHOTOCYTE {
                 t.light * 0.14 * STEP
-            } else if m.kind == 1 {
+            } else if m.kind == PHAGOCYTE {
                 let eaten = (0.18 * STEP).min(t.food);
                 t.food -= eaten;
                 eaten * 1.6
@@ -61,7 +64,7 @@ impl Simulation {
             };
             let maintenance = match m.kind {
                 LIPOCYTE => 0.004 + programmed_speed * 0.00005,
-                4 => 0.014 + programmed_speed * 0.0003,
+                KERATINOCYTE => 0.014 + programmed_speed * 0.0003,
                 _ => 0.025 + programmed_speed * 0.0003,
             };
             c.mass += gain - STEP * maintenance;
@@ -70,7 +73,7 @@ impl Simulation {
                 let index = ((mutation_gene * modes.len() as f32) as usize).min(modes.len() - 1);
                 let target = &mut modes[index];
                 if !self.settings.only_point_mutations {
-                    target.kind = (target.kind + 1) % KIND_COUNT;
+                    target.kind = (target.kind + 1) % COUNT;
                 }
                 target.threshold = (target.threshold + (noise - 0.5) * 0.8).clamp(1., 8.);
                 c.mutations += 1;
@@ -82,7 +85,7 @@ impl Simulation {
             if !linked {
                 p.angle += (noise - 0.5) * 0.35;
             }
-            let speed = if m.kind == 2 {
+            let speed = if m.kind == FLAGELLOCYTE {
                 programmed_speed
             } else if linked {
                 0.

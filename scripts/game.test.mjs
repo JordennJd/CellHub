@@ -199,7 +199,7 @@ test("every mechanic challenge has a measured legal solution in the real WASM si
       sim.configure(e.light,e.food,e.radiation,e.viscosity,e.aging,e.killAtEdge,e.onlyPointMutations,e.gravity,e.density,e.nitrogen);
       if (challenge.id === "algae") spawn(600,600,challenge.genome);
       if (challenge.id === "feeding") spawn(1792,2112,challenge.genome.map(m=>({...m,kind:1})));
-      if (challenge.id === "colony") spawn(2000,1300,challenge.genome.map(m=>({...m,kind:1})));
+      if (challenge.id === "colony") spawn(600,600,challenge.genome);
       if (challenge.id === "adhesion") spawn(2000,1300,challenge.genome.map(m=>({...m,kind:1,bindChildren:true,keepAdhesionA:true,keepAdhesionB:true})));
       if (challenge.id === "swimmer") spawn(600,600,[
         {...newMode(0),kind:0,threshold:1.2,speed:0,childA:1,childB:2,bindChildren:true,lifespan:1000},

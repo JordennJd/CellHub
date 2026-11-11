@@ -1,14 +1,17 @@
 //! Genome archetypes, validation and ABI encoding.
 
+#[path = "genome/main_v4.rs"]
+mod main_v4;
+
+pub(crate) use crate::cell_types::{COUNT as KIND_COUNT, NITROCYTE as NITROCYTE_KIND};
 use crate::components::LIMIT;
+pub(crate) use main_v4::normalize_signal as normalize_v4_signal;
 use std::sync::Arc;
 
 pub(crate) const MODE_STRIDE: usize = 102;
 const V4_MODE_STRIDE: usize = 22;
 pub(crate) const MAX_MODES: usize = 1000;
 const V3_MODE_STRIDE: usize = 19;
-pub(crate) const NITROCYTE_KIND: u8 = 6;
-pub(crate) const KIND_COUNT: u8 = 18;
 const TYPE_COLORS: [u32; 18] = [
     0xa4db71, 0xf1bf72, 0x71cbd4, 0xc997ed, 0xb3c3d0, 0xf08373, 0x8ed6b3, 0xe4b978, 0x8ebfe8,
     0xccbd78, 0xb8a0e5, 0xa7cbe6, 0xe68fa1, 0xb89ce0, 0xdca18c, 0x9ed8bd, 0xe7c893, 0x88c9c3,
@@ -61,6 +64,7 @@ pub(crate) struct Mode {
     pub(crate) transition_threshold_b: f32,
     pub(crate) offspring_mode: usize,
     pub(crate) compatible_mode: usize,
+    pub(crate) legacy_gamete_group: Option<u8>,
     pub(crate) telomeres: i32,
     pub(crate) cilia_left: f32,
     pub(crate) cilia_right: f32,
@@ -109,6 +113,7 @@ impl Default for Mode {
             transition_threshold_b: 1.,
             offspring_mode: 0,
             compatible_mode: 0,
+            legacy_gamete_group: None,
             telomeres: -1,
             cilia_left: 6.,
             cilia_right: 6.,
@@ -202,7 +207,8 @@ impl Genome {
                 m.transition_threshold_a,
                 m.transition_threshold_b,
                 m.offspring_mode as f32,
-                m.compatible_mode as f32,
+                m.legacy_gamete_group
+                    .map_or(m.compatible_mode as f32, |group| -(f32::from(group) + 1.)),
                 m.telomeres as f32,
                 m.cilia_left,
                 m.cilia_right,
@@ -259,8 +265,40 @@ impl Genome {
     }
 }
 
-#[allow(clippy::approx_constant)] // Genes intentionally use a compact ±3.14 radian clamp.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V4Layout {
+    MainSignals,
+    BranchResources,
+}
+
 pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
+    decode(values, None)
+}
+
+pub(crate) fn decode_v4_checkpoint(values: &[f32], layout: V4Layout) -> Result<Genome, String> {
+    if values.first() != Some(&-4.) {
+        return Err("Missing version 4 genome header".into());
+    }
+    let genome = decode(values, Some(layout))?;
+    let exact = match layout {
+        V4Layout::MainSignals => main_v4::matches_common_fields(&genome, values),
+        V4Layout::BranchResources => genome.values_v4() == values,
+    };
+    if !exact {
+        return Err("Некорректный геном в сохранении".into());
+    }
+    Ok(genome)
+}
+
+fn valid_resource_fields(row: &[f32]) -> bool {
+    row[19].fract() == 0.
+        && (-1. ..=LIMIT as f32).contains(&row[19])
+        && (0.25..=4.).contains(&row[20])
+        && [0., 1.].contains(&row[21])
+}
+
+#[allow(clippy::approx_constant)] // Genes intentionally use a compact ±3.14 radian clamp.
+fn decode(values: &[f32], layout: Option<V4Layout>) -> Result<Genome, String> {
     // v1 used eight modes of eight numbers, v2 raw rows of twelve, v3 adds a header.
     let version5 = values.first() == Some(&-5.);
     let version4 = values.first() == Some(&-4.);
@@ -297,8 +335,23 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
     {
         return Err("Genome must contain finite numbers in a supported format".into());
     }
+    // Both v4 producers used the same header and stride. The shipped main
+    // format wins when every row fits it; a world supplies its known layout.
+    let layout = layout.unwrap_or_else(|| {
+        if version4
+            && values
+                .chunks_exact(V4_MODE_STRIDE)
+                .all(main_v4::valid_signal_fields)
+        {
+            V4Layout::MainSignals
+        } else {
+            V4Layout::BranchResources
+        }
+    });
+    let main_v4 = version4 && layout == V4Layout::MainSignals;
+    let has_resources = version5 || (version4 && layout == V4Layout::BranchResources);
     let mut modes = vec![Mode::default(); count];
-    let max_kind = if version5 {
+    let max_kind = if version5 || main_v4 {
         KIND_COUNT - 1
     } else if version4 {
         NITROCYTE_KIND
@@ -329,31 +382,29 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
         {
             return Err("Invalid daughter angle, mirror flag or color".into());
         }
-        if (version4 || version5)
-            && (v[19].fract() != 0.
-                || !(-1. ..=LIMIT as f32).contains(&v[19])
-                || !(0.25..=4.).contains(&v[20])
-                || ![0., 1.].contains(&v[21]))
-        {
+        if has_resources && !valid_resource_fields(v) {
             return Err("Invalid connection limit or nutrient priority".into());
+        }
+        if main_v4 && !main_v4::valid_signal_fields(v) {
+            return Err("Invalid signal channel, subtype or strength".into());
         }
 
         if version5 {
             let integer = |index: usize, max: usize| {
                 v[index].fract() == 0. && (0. ..=max as f32).contains(&v[index])
             };
+            let legacy_group = v[37].fract() == 0. && (-16. ..=-1.).contains(&v[37]);
             if !(-3.3..=3.3).contains(&v[22])
                 || !integer(23, 7)
-                || !integer(24, 6)
+                || !integer(24, 8)
                 || v[25].abs() > 16.
                 || !(v[26..29].iter().all(|value| *value == -1.)
                     || v[26..29].iter().all(|value| (0. ..=1.).contains(value)))
                 || !(0. ..=1.).contains(&v[29])
                 || !integer(30, 22)
                 || !(0. ..=4.).contains(&v[31])
-                || [32, 33, 36, 37]
-                    .iter()
-                    .any(|&index| !integer(index, count - 1))
+                || [32, 33, 36].iter().any(|&index| !integer(index, count - 1))
+                || !(integer(37, count - 1) || legacy_group)
                 || !(v[44] == -1. || integer(44, count - 1))
                 || v[34..36].iter().any(|value| value.abs() > 1000.)
                 || v[38].fract() != 0.
@@ -406,19 +457,22 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
             } else {
                 [-1.; 3]
             },
-            max_connections: if (version4 || version5) && v[19] >= 0. {
+            max_connections: if has_resources && v[19] >= 0. {
                 Some(v[19] as usize)
             } else {
                 None
             },
-            nutrient_priority: if version4 || version5 { v[20] } else { 1. },
-            prioritize_when_starving: (version4 || version5) && v[21] == 1.,
+            nutrient_priority: if has_resources { v[20] } else { 1. },
+            prioritize_when_starving: has_resources && v[21] == 1.,
             transition_a: index,
             transition_b: index,
             offspring_mode: index,
             compatible_mode: index,
             ..Mode::default()
         };
+        if main_v4 {
+            main_v4::migrate_mode(m, v[19] as u8, v[20] as u8, v[21]);
+        }
         if version5 {
             m.density = v[22];
             m.signal_channel = v[23] as u8;
@@ -433,7 +487,12 @@ pub(crate) fn decode_checked(values: &[f32]) -> Result<Genome, String> {
             m.transition_threshold_a = v[34];
             m.transition_threshold_b = v[35];
             m.offspring_mode = v[36] as usize;
-            m.compatible_mode = v[37] as usize;
+            // Negative values carry v4 compatibility groups in the same ABI slot.
+            if v[37] < 0. {
+                m.legacy_gamete_group = Some((-v[37] - 1.) as u8);
+            } else {
+                m.compatible_mode = v[37] as usize;
+            }
             m.telomeres = v[38] as i32;
             m.cilia_left = v[39];
             m.cilia_right = v[40];

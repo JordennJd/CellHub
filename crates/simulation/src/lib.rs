@@ -1,5 +1,6 @@
 //! CellHub simulation: genome, substrate and the wasm-facing world.
 
+mod cell_types;
 mod components;
 mod genome;
 mod terrain;

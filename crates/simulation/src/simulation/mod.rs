@@ -15,6 +15,7 @@ mod step;
 #[cfg(test)]
 mod tests;
 
+use crate::cell_types::FLAGELLOCYTE;
 use crate::components::{Cell, LIMIT, Position, SNAPSHOT_STRIDE, radius};
 use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, map};
@@ -404,7 +405,7 @@ impl Simulation {
             let programmed_speed = controlled_value(cell, mode, SPEED_TARGET, degree);
             let speed = if cell.anchored {
                 0.
-            } else if mode.kind == 2 {
+            } else if mode.kind == FLAGELLOCYTE {
                 programmed_speed
             } else if is_linked {
                 0.

@@ -6,18 +6,12 @@ use super::program::{
     CILIA_LEFT_TARGET, CILIA_RIGHT_TARGET, DENSITY_TARGET, DIFFERENTIATION_A_TARGET,
     DIFFERENTIATION_B_TARGET, controlled_value,
 };
+use crate::cell_types::{BUOYOCYTE, CILIOCYTE, GAMETE, GLUEOCYTE, LIPOCYTE, STEMOCYTE};
 use crate::components::{Cell, MIN_DIVISION_AGE, Position, SIZE, radius};
 use crate::genome::{Genome, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-
-pub(super) const LIPOCYTE: u8 = 7;
-pub(super) const BUOYOCYTE: u8 = 8;
-const GLUEOCYTE: u8 = 9;
-pub(super) const STEMOCYTE: u8 = 15;
-pub(super) const GAMETE: u8 = 16;
-const CILIOCYTE: u8 = 17;
 
 pub(super) fn corpse_food(tile: &mut Tile, cell: &Cell, kind: u8) {
     let nutrients = cell.mass.max(0.) * 0.09;
@@ -170,6 +164,7 @@ impl Simulation {
             if !matches!(source.mode.kind, GLUEOCYTE | GAMETE | CILIOCYTE) {
                 continue;
             }
+            let glue_limit = source.mode.max_connections.unwrap_or(5).min(5);
             let mut candidates: Vec<_> = self.spatial.candidates(index).collect();
             candidates.sort_unstable();
             for other in candidates {
@@ -186,7 +181,7 @@ impl Simulation {
                 }
                 if source.mode.kind == GLUEOCYTE
                     && !protected.contains(&target.id)
-                    && degrees.get(&source.id).copied().unwrap_or(0) < 5
+                    && degrees.get(&source.id).copied().unwrap_or(0) < glue_limit
                 {
                     let edge = (source.id.min(target.id), source.id.max(target.id));
                     if !self.bonds.contains(&edge) && added_bonds.insert(edge) {
@@ -200,8 +195,17 @@ impl Simulation {
                     && target.cell.age + 0.000001 >= MIN_DIVISION_AGE
                     && source.genome.len() + target.genome.len() <= 1000
                 {
-                    let compatible = source.mode.compatible_mode == target.cell.mode
-                        && target.mode.compatible_mode == source.cell.mode;
+                    let compatible = match (
+                        source.mode.legacy_gamete_group,
+                        target.mode.legacy_gamete_group,
+                    ) {
+                        (None, None) => {
+                            source.mode.compatible_mode == target.cell.mode
+                                && target.mode.compatible_mode == source.cell.mode
+                        }
+                        (Some(a), Some(b)) if a == b => true,
+                        _ => continue,
+                    };
                     let range = contact * if compatible { 1.03 } else { 0.65 };
                     if distance <= range {
                         consumed.insert(index);
@@ -408,6 +412,16 @@ mod tests {
         sim.advance(30);
         assert_eq!(sim.world.get::<&Position>(wall).unwrap().x, original.x);
         assert_eq!(sim.world.get::<&Position>(wall).unwrap().y, original.y);
+
+        let mut limited = mode(GLUEOCYTE);
+        limited.max_connections = Some(2);
+        let glue = spawn(&mut sim, 1500., 500., vec![limited]);
+        let source = sim.world.get::<&Cell>(glue).unwrap().id;
+        for (x, y) in [(1482., 500.), (1518., 500.), (1500., 518.)] {
+            spawn(&mut sim, x, y, vec![mode(0)]);
+        }
+        sim.specialized_contacts(1. / 30.);
+        assert_eq!(sim.bond_degrees()[&source], 2);
     }
 
     #[test]
@@ -462,6 +476,33 @@ mod tests {
         assert_eq!(genome.mode(1).child_b, 3);
         assert!(cell.mass > 3.99);
         assert_eq!(cell.age, 0.);
+    }
+
+    #[test]
+    fn legacy_gametes_require_matching_groups_and_minimum_age() {
+        for (group_a, group_b, age_b, population) in [
+            (Some(4), Some(4), 1., 1),
+            (Some(4), Some(5), 1., 2),
+            (Some(4), None, 1., 2),
+            (None, Some(4), 1., 2),
+            (Some(4), Some(4), 0.4, 2),
+        ] {
+            let mut sim = world();
+            let mut gamete = mode(GAMETE);
+            gamete.offspring_mode = 1;
+            gamete.legacy_gamete_group = group_a;
+            let a = spawn(&mut sim, 500., 500., vec![gamete, mode(0)]);
+            gamete.legacy_gamete_group = group_b;
+            let b = spawn(&mut sim, 512., 500., vec![gamete, mode(1)]);
+            sim.world.get::<&mut Cell>(a).unwrap().age = 1.;
+            sim.world.get::<&mut Cell>(b).unwrap().age = age_b;
+            sim.specialized_contacts(1. / 30.);
+            assert_eq!(
+                sim.world.len(),
+                population,
+                "groups {group_a:?}, {group_b:?}, age {age_b}"
+            );
+        }
     }
 
     #[test]

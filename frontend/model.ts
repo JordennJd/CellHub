@@ -5,6 +5,7 @@ export const STRIDE = 12;
 export const MODE_STRIDE = 102;
 export const CELL_DETAILS_STRIDE = 13;
 export const SIGNAL_COUNT = 8;
+export const GAMETE_GROUP_COUNT = 16;
 export const GENOME_ABI_VERSION = -5;
 export const TYPES = [
   {
@@ -71,7 +72,7 @@ export const PROGRAM_INPUTS = [
   "Константа", ...Array.from({ length: 8 }, (_, i) => "S" + (i + 1)),
   "Масса", "Возраст", "Азот", "Число связей", "Таймер sin(возраст)",
 ];
-export const SENSORS = ["Свет", "Пища", "Покрытая пища", "Клетки", "Стенка", "Скорость", "Нитраты"];
+export const SENSORS = ["Свет", "Пища", "Покрытая пища", "Клетки", "Стенка", "Скорость", "Нитраты", "Липоциты рядом", "Жгутикоциты и цилиоциты рядом"];
 export const SECRETIONS = [
   "HCN", "Липаза", "Протеаза", "Запах пищи", "Запах покрытой пищи", "Стимул света", "Стимул стенки",
   ...Array.from({ length: 8 }, (_, i) => ["+S" + (i + 1), "−S" + (i + 1)]).flat(),
@@ -137,7 +138,7 @@ export type Mode = {
   transitionThresholdA: number;
   transitionThresholdB: number;
   offspringMode: number;
-  compatibleMode: number;
+  compatibleMode: number; // Nonnegative mode index, or -(group + 1).
   telomeres: number;
   ciliaLeft: number;
   ciliaRight: number;
@@ -198,11 +199,68 @@ function float32Decimal(value: number): number {
   return value;
 }
 
+function validMainV4(kind: number, channel: number, subtype: number, signal: number): boolean {
+  return Number.isInteger(kind) && kind >= 0 && kind < TYPES.length
+    && Number.isInteger(channel) && channel >= 0 && channel <= 3
+    && Number.isInteger(subtype) && subtype >= 0 && subtype <= 15
+    && Number.isFinite(signal) && signal >= -60 && signal <= 60;
+}
+
+type MainV4Mode = Pick<Mode, "kind" | "speed" | "childA" | "childB"> & {
+  channel: number;
+  subtype: number;
+  signal: number;
+};
+
+// Preserve the four-channel controls of the old main schema in v5 fields
+// and equations. Round arithmetic as Rust does so inspection and restored
+// genome names use the same bytes as a world migrated by the engine.
+function migrateMainV4(m: MainV4Mode): Partial<Mode> {
+  const divide = (a: number, b: number) => float32Decimal(Math.fround(Math.fround(a) / Math.fround(b)));
+  const rule = (target: number, input: number, scale: number, offset: number, threshold: number, below: number): Program =>
+    ({ target, input, kind: 1, scale, offset, threshold, below });
+  switch (m.kind) {
+    case 2: {
+      const scale = float32Decimal(Math.fround(Math.fround(m.speed) / 4.8));
+      return { programs: [
+        rule(8, 1, scale, m.speed, -3.84, divide(m.speed, 5)),
+        rule(8, 1, -scale, m.speed, 4.8, 0),
+      ] };
+    }
+    case 6: return { kind: 7, nutrientPriority: 4 };
+    case 7: return { kind: 8, density: Math.max(-3.3, Math.min(3.3, -m.signal)) };
+    case 8: return { kind: 9, maxConnections: Math.max(1, Math.min(5, Math.round(m.signal))) };
+    case 9: return { kind: 6 };
+    case 10:
+    case 11:
+      return { signalChannel: m.channel, sensor: [3, 1, 7, 0, 4, 8][m.subtype] ?? 3,
+        sensorGain: m.subtype < 6 ? divide(Math.max(m.signal, 0), 12.5) : 0 };
+    case 12: {
+      const scale = divide(m.speed, 288);
+      return { programs: [
+        rule(10, 1, scale, 0, 0, 0),
+        rule(10, 1, -scale, divide(m.speed, 60), 4.8, 0),
+      ] };
+    }
+    case 13: return { signalChannel: m.channel, sensorGain: divide(m.signal, 12.5) };
+    case 14:
+      return {
+        secretion: [0, 1, 2, 7, 9, 11, 13, 8, 10, 12, 14, 3, 4, 5, 6][m.subtype] ?? 0,
+        secretionRate: m.subtype === 15 ? 0 : divide(Math.max(m.subtype <= 1 ? 1 : 0, m.signal), 15),
+      };
+    case 15:
+      return { transitionA: m.childA, transitionB: m.childB,
+        programs: [rule(16, 1, 0, 1, 0.04, -1), rule(17, 2, 0, 1, 0.04, -1)] };
+    case 16: return { offspringMode: m.childA, compatibleMode: -(m.subtype + 1) };
+    case 17: return { ciliaLeft: divide(m.speed, 2), ciliaRight: divide(m.speed, 2) };
+    default: return {};
+  }
+}
+
 export function inflate(g: Float32Array): Mode[] {
   const current = g[0] === GENOME_ABI_VERSION;
   const version4 = g[0] === -4;
-  const resourceFields = current || version4;
-  const extended = resourceFields || g[0] === -3;
+  const extended = current || version4 || g[0] === -3;
   const legacy = !extended && g.length === 64;
   const stride = current ? MODE_STRIDE : version4 ? 22 : extended ? 19 : legacy ? 8 : 12;
   const offset = extended ? 2 : 0;
@@ -210,9 +268,14 @@ export function inflate(g: Float32Array): Mode[] {
   if (!Number.isInteger(count) || count < 1 || count > MAX_MODES
     || g.length !== offset + count * stride || !g.every(Number.isFinite))
     throw new Error("Неверный размер или данные генома");
+  // Both v4 layouts have the same header and row length. Recognize the old
+  // main layout for the entire genome before interpreting the resource fields.
+  const mainV4 = version4 && Array.from({ length: count }, (_, i) => offset + i * stride)
+    .every(at => validMainV4(g[at], g[at + 19], g[at + 20], g[at + 21]));
+  const resourceFields = current || (version4 && !mainV4);
   const modes = Array.from({ length: count }, (_, i) => {
     const a = Array.from(g.slice(offset + i * stride, offset + (i + 1) * stride), float32Decimal);
-    const maxKind = current ? TYPES.length - 1 : version4 ? 6 : 5;
+    const maxKind = current || mainV4 ? TYPES.length - 1 : version4 ? 6 : 5;
     if (a[0] > maxKind) throw new Error("Тип клетки недоступен в этой версии генома");
     if (current && (!Number.isInteger(a[45]) || a[45] < 0 || a[45] > 8)) throw new Error("Неверное число уравнений");
     if (current) {
@@ -236,6 +299,7 @@ export function inflate(g: Float32Array): Mode[] {
       ...(extended ? { childAngleA: a[12], childAngleB: a[13], mirrorA: a[14] === 1, mirrorB: a[15] === 1,
         red: a[16], green: a[17], blue: a[18] } : {}),
       ...(resourceFields ? { maxConnections: a[19], nutrientPriority: a[20], prioritizeWhenStarving: a[21] === 1 } : {}),
+      ...(mainV4 ? { channel: a[19], subtype: a[20], signal: a[21] } : {}),
       ...(current ? {
         density:a[22],signalChannel:a[23],sensor:a[24],sensorGain:a[25],
         targetRed:a[26],targetGreen:a[27],targetBlue:a[28],senseTolerance:a[29],
@@ -250,7 +314,7 @@ export function inflate(g: Float32Array): Mode[] {
       } : {}),
     };
   });
-  return validateModes(modes, 5);
+  return validateModes(modes, mainV4 ? 4 : 5);
 }
 
 // Removing an archetype redirects references to it to the following archetype
@@ -270,6 +334,16 @@ export function serializeGenome(genome: Mode[]): string {
   return JSON.stringify({ version: 5, modes: validateModes(genome, 5) });
 }
 
+function hasMainV4Fields(modes: unknown): boolean {
+  return Array.isArray(modes) && modes.some(mode =>
+    mode && typeof mode === "object" && ["channel", "subtype", "signal"].some(key => Object.hasOwn(mode, key)));
+}
+
+/** Library entries predate an explicit genome version. Named v4 fields identify the old main schema. */
+export function parseStoredGenome(modes: unknown): Mode[] {
+  return validateModes(modes, hasMainV4Fields(modes) ? 4 : 2);
+}
+
 function validateModes(modes: unknown, version: 1 | 2 | 3 | 4 | 5): Mode[] {
   if (!Array.isArray(modes) || modes.length < 1 || modes.length > MAX_MODES || (version === 1 && modes.length !== 8))
     throw new Error("Неверный формат генома");
@@ -277,6 +351,7 @@ function validateModes(modes: unknown, version: 1 | 2 | 3 | 4 | 5): Mode[] {
   const extension = ["childAngleA", "childAngleB", "mirrorA", "mirrorB", "red", "green", "blue"] as const;
   const advancedKeys = ["density", "signalChannel", "sensor", "sensorGain", "targetRed", "targetGreen", "targetBlue", "senseTolerance", "secretion", "secretionRate", "transitionA", "transitionB", "transitionThresholdA", "transitionThresholdB", "offspringMode", "compatibleMode", "telomeres", "ciliaLeft", "ciliaRight", "contraction", "bending", "lift", "virusCopyFrom", "programs"] as const;
   const resourceFields = ["maxConnections", "nutrientPriority", "prioritizeWhenStarving"] as const;
+  const mainV4 = version === 4 && hasMainV4Fields(modes);
   return modes.map((source, i) => {
     if (!source || typeof source !== "object" || Array.isArray(source)) throw new Error("Некорректные настройки режима");
     const m = { ...source };
@@ -285,8 +360,12 @@ function validateModes(modes: unknown, version: 1 | 2 | 3 | 4 | 5): Mode[] {
       const defaults = newMode(i);
       for (const key of advancedKeys) if (m[key] === undefined) m[key] = defaults[key];
     }
-    if (version < 4) for (const key of resourceFields) if (m[key] === undefined) m[key] = newMode(i)[key];
+    if (version < 4 || mainV4) for (const key of resourceFields) if (m[key] === undefined) m[key] = newMode(i)[key];
     if (version === 1) Object.assign(m, { canDivide: true, bindChildren: false, keepAdhesionA: false, keepAdhesionB: false });
+    if (mainV4) {
+      if (!validMainV4(m.kind, m.channel, m.subtype, m.signal)) throw new Error("Некорректные сигнальные параметры генома");
+      Object.assign(m, migrateMainV4(m));
+    }
     if ((m.name !== undefined && (typeof m.name !== "string" || !m.name.trim()))
       || numeric.some(key => typeof m[key] !== "number" || !Number.isFinite(m[key]))
       || ["childAngleA", "childAngleB", "red", "green", "blue"].some(key => typeof m[key] !== "number" || !Number.isFinite(m[key]))
@@ -301,11 +380,12 @@ function validateModes(modes: unknown, version: 1 | 2 | 3 | 4 | 5): Mode[] {
       || ["canDivide", "bindChildren", "keepAdhesionA", "keepAdhesionB", "mirrorA", "mirrorB"].some(key => typeof m[key] !== "boolean")
       || advancedKeys.filter(key => key !== "programs").some(key => typeof m[key] !== "number" || !Number.isFinite(m[key]))
       || !Number.isInteger(m.signalChannel) || m.signalChannel < 0 || m.signalChannel > 7
-      || !Number.isInteger(m.sensor) || m.sensor < 0 || m.sensor > 6 || Math.abs(m.sensorGain) > 16
+      || !Number.isInteger(m.sensor) || m.sensor < 0 || m.sensor >= SENSORS.length || Math.abs(m.sensorGain) > 16
       || Math.abs(m.density) > 3.3 || m.senseTolerance < 0 || m.senseTolerance > 1
       || !([m.targetRed,m.targetGreen,m.targetBlue].every(v => v === -1) || [m.targetRed,m.targetGreen,m.targetBlue].every(v => v >= 0 && v <= 1))
       || !Number.isInteger(m.secretion) || m.secretion < 0 || m.secretion > 22 || m.secretionRate < 0 || m.secretionRate > 4
-      || [m.transitionA,m.transitionB,m.offspringMode,m.compatibleMode].some(v => !Number.isInteger(v) || v < 0 || v >= modes.length)
+      || [m.transitionA,m.transitionB,m.offspringMode].some(v => !Number.isInteger(v) || v < 0 || v >= modes.length)
+      || !Number.isInteger(m.compatibleMode) || m.compatibleMode < -GAMETE_GROUP_COUNT || m.compatibleMode >= modes.length
       || !Number.isInteger(m.virusCopyFrom) || m.virusCopyFrom < -1 || m.virusCopyFrom >= modes.length
       || [m.transitionThresholdA,m.transitionThresholdB].some(v => Math.abs(v)>1000)
       || !Number.isInteger(m.telomeres) || m.telomeres < -1 || m.telomeres > 1000

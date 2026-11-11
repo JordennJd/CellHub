@@ -3,6 +3,9 @@
 use super::Simulation;
 use super::boundary::Boundary;
 use super::program::{SECRETION_RATE_TARGET, SIGNAL_CHANNELS, SPEED_TARGET, controlled_value};
+use crate::cell_types::{
+    LIPOCYTE, NEUROCYTE, SECROCYTE, SENSEOCYTE, STEREOCYTE, blocks_signals, is_motile,
+};
 use crate::components::{Cell, Position, SIZE, radius};
 use crate::genome::Genome;
 use crate::terrain::{Tile, tile_index};
@@ -10,6 +13,8 @@ use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 const SENSE_RANGE: f32 = 96.;
+const SENSE_LIPOCYTES: u8 = 7;
+const SENSE_MOTILE_CELLS: u8 = 8;
 const POINT_BUCKET: f32 = 128.;
 const POINT_GRID: usize = (SIZE / POINT_BUCKET) as usize;
 const SECRETION_NITROGEN: f32 = 0.2;
@@ -110,7 +115,11 @@ fn stimulus(
 ) -> f32 {
     let body = &bodies[index];
     let mode = body.genome.mode(body.cell.mode);
-    let stereo = mode.kind == 10;
+    let stereo = mode.kind == STEREOCYTE;
+    let range = match mode.sensor {
+        SENSE_LIPOCYTES | SENSE_MOTILE_CELLS => (20. + mode.speed * 2.).clamp(20., 180.),
+        _ => SENSE_RANGE,
+    };
     let hand = if body.cell.mirrored { -1. } else { 1. };
     let side = [
         -libm::sinf(body.position.angle) * hand,
@@ -136,17 +145,22 @@ fn stimulus(
         ) / 60.;
         result = if stereo { 0. } else { speed };
     }
-    for other in grid.nearby(body.position, SENSE_RANGE) {
+    for other in grid.nearby(body.position, range) {
         if other == index {
             continue;
         }
         let target = &bodies[other];
         let d2 = distance_squared(body.position, target.position);
-        if d2 > SENSE_RANGE * SENSE_RANGE {
+        if d2 > range * range {
             continue;
         }
         let target_mode = target.genome.mode(target.cell.mode);
-        let cells = mode.sensor == 3 && color_matches(body, target);
+        let cells = match mode.sensor {
+            3 => true,
+            SENSE_LIPOCYTES => target_mode.kind == LIPOCYTE,
+            SENSE_MOTILE_CELLS => is_motile(target_mode.kind),
+            _ => false,
+        } && color_matches(body, target);
         let mimic_sensor = match target_mode.secretion {
             3 => 1,
             4 => 2,
@@ -154,14 +168,14 @@ fn stimulus(
             6 => 4,
             _ => u8::MAX,
         };
-        let mimic = target_mode.kind == 14
+        let mimic = target_mode.kind == SECROCYTE
             && target.cell.nitrogen >= SECRETION_NITROGEN
             && mimic_sensor == mode.sensor;
         if !(cells || mimic) {
             continue;
         }
         let distance = libm::sqrtf(d2);
-        let mut contribution = (1. - distance / SENSE_RANGE).max(0.);
+        let mut contribution = (1. - distance / range).max(0.);
         if mimic {
             contribution *= controlled_value(
                 &target.cell,
@@ -187,8 +201,10 @@ impl Simulation {
             .query::<(&Cell, &Genome)>()
             .iter()
             .any(|(_, (cell, genome))| {
-                matches!(genome.mode(cell.mode).kind, 10 | 11 | 13 | 14)
-                    || cell.signals.iter().any(|value| *value != 0.)
+                matches!(
+                    genome.mode(cell.mode).kind,
+                    STEREOCYTE | SENSEOCYTE | NEUROCYTE | SECROCYTE
+                ) || cell.signals.iter().any(|value| *value != 0.)
                     || cell.toxin != 0.
                     || cell.injury != 0.
             });
@@ -235,7 +251,7 @@ impl Simulation {
             neighbors.entry(a).or_default().push(b);
             neighbors.entry(b).or_default().push(a);
             let share = f64::from((step * 1.5).min(0.5)) / degree[&a].max(degree[&b]) as f64;
-            if bodies[ai].kind() != 7 && bodies[bi].kind() != 7 {
+            if !blocks_signals(bodies[ai].kind()) && !blocks_signals(bodies[bi].kind()) {
                 for channel in 0..SIGNAL_CHANNELS {
                     let flow = f64::from(
                         bodies[ai].cell.signals[channel] - bodies[bi].cell.signals[channel],
@@ -261,10 +277,10 @@ impl Simulation {
             .fold(0., f32::max);
         for (i, body) in bodies.iter().enumerate() {
             let mode = body.genome.mode(body.cell.mode);
-            if matches!(mode.kind, 10 | 11) {
+            if matches!(mode.kind, STEREOCYTE | SENSEOCYTE) {
                 updated[i].signals[usize::from(mode.signal_channel)] =
                     stimulus(i, &bodies, &self.tiles, &grid, self.boundary, &degree).clamp(-8., 8.);
-            } else if mode.kind == 13 {
+            } else if mode.kind == NEUROCYTE {
                 for channel in 0..SIGNAL_CHANNELS {
                     updated[i].signals[channel] = controlled_value(
                         &body.cell,
@@ -279,7 +295,7 @@ impl Simulation {
         let mut broken = BTreeSet::new();
         for (i, source) in bodies.iter().enumerate() {
             let mode = source.genome.mode(source.cell.mode);
-            if mode.kind != 14 || source.cell.nitrogen < SECRETION_NITROGEN {
+            if mode.kind != SECROCYTE || source.cell.nitrogen < SECRETION_NITROGEN {
                 continue;
             }
             let rate = controlled_value(
@@ -354,6 +370,7 @@ impl Simulation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell_types::{CILIOCYTE, FLAGELLOCYTE, PHOTOCYTE};
     use crate::genome::Mode;
 
     fn spawn(sim: &mut Simulation, kind: u8, x: f32, y: f32, set: impl FnOnce(&mut Mode)) -> u32 {
@@ -436,6 +453,38 @@ mod tests {
         sim.world.get::<&mut Genome>(entity).unwrap().modes_mut()[0].color = [0., 0., 1.];
         sim.update_signals_and_secretions(1. / 30.);
         assert_eq!(state(&sim, sensor).signals[0], 0.);
+    }
+
+    #[test]
+    fn cell_type_stimuli_keep_their_filter_range_and_selected_channel() {
+        for (sensor, target_kind) in [
+            (SENSE_LIPOCYTES, LIPOCYTE),
+            (SENSE_MOTILE_CELLS, FLAGELLOCYTE),
+            (SENSE_MOTILE_CELLS, CILIOCYTE),
+        ] {
+            for kind in [SENSEOCYTE, STEREOCYTE] {
+                let mut sim = Simulation::new(13);
+                let id = spawn(&mut sim, kind, 500., 500., |mode| {
+                    mode.signal_channel = 7;
+                    mode.sensor = sensor;
+                    mode.speed = 10.; // Sensing range is 40 world units.
+                });
+                sim.world
+                    .get::<&mut Position>(sim.entities[0].1)
+                    .unwrap()
+                    .angle = 0.;
+                spawn(&mut sim, PHOTOCYTE, 500., 485., |_| {});
+                spawn(&mut sim, target_kind, 500., 550., |_| {});
+                sim.update_signals_and_secretions(1. / 30.);
+                assert_eq!(state(&sim, id).signals, [0.; SIGNAL_CHANNELS]);
+
+                spawn(&mut sim, target_kind, 500., 520., |_| {});
+                sim.update_signals_and_secretions(1. / 30.);
+                let signals = state(&sim, id).signals;
+                assert_eq!(signals[..7], [0.; 7]);
+                assert_eq!(signals[7], 0.5);
+            }
+        }
     }
 
     #[test]

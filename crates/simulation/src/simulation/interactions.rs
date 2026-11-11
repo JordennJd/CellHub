@@ -2,6 +2,7 @@
 
 use super::Simulation;
 use super::spatial::SpatialGrid;
+use crate::cell_types::{DEVOROCYTE, VIROCYTE};
 use crate::components::{Cell, Position, radius};
 use crate::genome::Genome;
 use hecs::Entity;
@@ -230,11 +231,11 @@ fn solve_contacts(
                 (&mut right[0], &mut left[slot.index])
             };
             body.overlap(target);
-            let infects = body.kind == 3
+            let infects = body.kind == VIROCYTE
                 && body.cooldown <= 0.
-                && target.kind != 3
+                && target.kind != VIROCYTE
                 && target.infected_by.is_none();
-            let eats = body.kind == 5 && target.kind != 5;
+            let eats = body.kind == DEVOROCYTE && target.kind != DEVOROCYTE;
             if target.protected || !(infects || eats) {
                 continue;
             }

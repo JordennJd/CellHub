@@ -1,4 +1,4 @@
-import { parseGenome, type Mode, type Environment } from "../model";
+import { parseGenome, parseStoredGenome, type Mode, type Environment } from "../model";
 export type LibraryKind = "genome" | "plate";
 export type GenomeData = {
     genome: Mode[];
@@ -32,7 +32,7 @@ export function validName(name: string): string {
 export function validateData(kind: LibraryKind, data: unknown): GenomeData | PlateData {
     if (!record(data) || !Array.isArray(data.genome) || data.genome.length > 1000)
         throw new Error("В сохранении нет корректного генома.");
-    const genome = parseGenome(JSON.stringify({ version: 2, modes: data.genome }));
+    const genome = parseStoredGenome(data.genome);
     if (typeof data.initialMode !== "number" || !Number.isInteger(data.initialMode) || data.initialMode < 0 || data.initialMode >= genome.length)
         throw new Error("Начальный режим сохранения недоступен.");
     const base = { genome, initialMode: data.initialMode };

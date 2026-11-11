@@ -1,8 +1,9 @@
 //! Resource uptake, exchange and protection in multicellular organisms.
 
 use super::Simulation;
+use crate::cell_types::{NITROCYTE, protects_neighbours};
 use crate::components::Cell;
-use crate::genome::{Genome, Mode, NITROCYTE_KIND};
+use crate::genome::{Genome, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
 use std::collections::{BTreeMap, HashSet};
@@ -32,7 +33,7 @@ impl Tile {
     }
 
     pub(super) fn feed_nitrogen(&mut self, cell: &mut Cell, kind: u8, step: f32) {
-        let fixation = if kind == NITROCYTE_KIND {
+        let fixation = if kind == NITROCYTE {
             NITROGEN_FIXATION
         } else {
             0.
@@ -110,7 +111,7 @@ impl Simulation {
             .query::<(&Cell, &Genome)>()
             .iter()
             .filter(|(entity, (cell, genome))| {
-                !removed.contains(entity) && genome.mode(cell.mode).kind == 4
+                !removed.contains(entity) && protects_neighbours(genome.mode(cell.mode).kind)
             })
             .map(|(_, (cell, _))| cell.id)
             .collect();

@@ -4,11 +4,17 @@ use super::Simulation;
 use super::boundary::Boundary;
 use super::environment::Environment;
 use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, Position, SIZE};
-use crate::genome::{Genome, decode_checked};
+use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, normalize_v4_signal};
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
 const VERSION: u32 = 5;
+
+fn is_main_v4(values: &[f64]) -> bool {
+    // The deployed v4 writes the tile count immediately after fluid density.
+    // The resource v4 writes the nitrogen setting (0..5) in that same slot.
+    values.first() == Some(&4.) && values.get(17) == Some(&((GRID * GRID) as f64))
+}
 
 struct Reader<'a> {
     values: &'a [f64],
@@ -153,7 +159,7 @@ impl Simulation {
         let mut replacement = Self::decode_state(values)?;
         // Old saves did not encode geometry. Keep their migration path into
         // the current dish. Current saves restore geometry and coordinates as-is.
-        if values[0] < 4. {
+        if values[0] < 4. || is_main_v4(values) {
             replacement.set_circular_dish(matches!(self.boundary, Boundary::Circle));
         }
         *self = replacement;
@@ -169,6 +175,8 @@ impl Simulation {
         if !(1..=VERSION).contains(&version) {
             return Err("Неподдерживаемая версия сохранения".into());
         }
+        let main_v4 = is_main_v4(values);
+        let has_resources = version >= 4 && !main_v4;
         let seed = input.integer(u32::MAX)?;
         let mut restored = Self::new(seed);
         restored.rng = input.integer(u32::MAX)?;
@@ -198,14 +206,14 @@ impl Simulation {
             } else {
                 0.
             },
-            nitrogen: if version >= 4 {
+            nitrogen: if has_resources {
                 input.float(0., 5.)?
             } else {
                 1.
             },
         };
         restored.settings.validate()?;
-        if version >= 4 && input.flag()? {
+        if has_resources && input.flag()? {
             restored.boundary = Boundary::Circle;
         }
         if input.integer((GRID * GRID) as u32)? as usize != GRID * GRID {
@@ -217,7 +225,7 @@ impl Simulation {
             let food = input.float(0., 5.)?;
             let capacity = input.float(0., 5.)?;
             let biome = input.integer(3)? as f32;
-            let (nitrates, nitrate_capacity) = if version >= 4 {
+            let (nitrates, nitrate_capacity) = if has_resources {
                 (input.float(0., 5.)?, input.float(0., 5.)?)
             } else {
                 let capacity = nitrate_capacity(biome);
@@ -248,7 +256,7 @@ impl Simulation {
         if version >= 5 {
             let count = input.integer(LIMIT as u32)?;
             for _ in 0..count {
-                genomes.push(read_genome(&mut input, version)?);
+                genomes.push(read_genome(&mut input, version, false)?);
             }
         }
         let count = input.integer(LIMIT as u32)?;
@@ -272,13 +280,19 @@ impl Simulation {
                 mutations: input.integer(u32::MAX)?,
                 cooldown: input.float(0., f32::MAX)?,
                 mirrored: if version >= 2 { input.flag()? } else { false },
-                nitrogen: if version >= 4 {
+                nitrogen: if has_resources {
                     input.float(0., INITIAL_NITROGEN)?
                 } else {
                     INITIAL_NITROGEN
                 },
                 ..Cell::default()
             };
+            if main_v4 {
+                for signal in &mut cell.signals[..4] {
+                    *signal = normalize_v4_signal(input.float(-100., 100.)?);
+                }
+                cell.toxin = input.float(0., 100.)? / 50.;
+            }
             let genome = if version >= 5 {
                 for signal in &mut cell.signals {
                     *signal = input.float(-1000., 1000.)?;
@@ -297,7 +311,7 @@ impl Simulation {
                     .cloned()
                     .ok_or("Некорректная ссылка на геном")?
             } else {
-                read_genome(&mut input, version)?
+                read_genome(&mut input, version, main_v4)?
             };
             if cell.mode >= genome.len() {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
@@ -321,7 +335,7 @@ impl Simulation {
     }
 }
 
-fn read_genome(input: &mut Reader<'_>, version: u32) -> Result<Genome, String> {
+fn read_genome(input: &mut Reader<'_>, version: u32, main_v4: bool) -> Result<Genome, String> {
     let length = input.integer(1_200_000)? as usize;
     if input.values.len().saturating_sub(input.offset) < length {
         return Err("Геном в сохранении обрезан".into());
@@ -329,15 +343,130 @@ fn read_genome(input: &mut Reader<'_>, version: u32) -> Result<Genome, String> {
     let genes = (0..length)
         .map(|_| input.float(-f32::MAX, f32::MAX))
         .collect::<Result<Vec<_>, _>>()?;
+    if version == 4 {
+        let layout = if main_v4 {
+            V4Layout::MainSignals
+        } else {
+            V4Layout::BranchResources
+        };
+        return decode_v4_checkpoint(&genes, layout);
+    }
     let genome = decode_checked(&genes)?;
     let canonical = match version {
         1 => genome.legacy_values(),
         2 | 3 => genome.values_v3(),
-        4 => genome.values_v4(),
         _ => genome.values(),
     };
     if canonical != genes {
         return Err("Некорректный геном в сохранении".into());
     }
     Ok(genome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cell_types::{LIPOCYTE, NEUROCYTE};
+
+    #[test]
+    fn deployed_v4_world_migrates_terrain_cells_bonds_and_signals_to_v5() {
+        let mut checkpoint = vec![
+            4.,
+            123.,
+            456.,
+            91.,
+            4.,
+            3.,
+            1.,
+            0.,
+            1.,
+            1.,
+            1.,
+            1.,
+            0.,
+            0.,
+            1.,
+            0.4,
+            -0.1,
+            (GRID * GRID) as f64,
+        ];
+        for i in 0..GRID * GRID {
+            checkpoint.extend([0.8, 0.2, if i == 0 { 0.4 } else { 0.5 }, 0.5, 2.]);
+        }
+        checkpoint.push(2.);
+        for (id, x, kind, signal_gain) in [(1., 500., 6., 8.), (3., 520., 13., -25.)] {
+            checkpoint.extend([
+                id,
+                x,
+                600.,
+                0.3,
+                0.,
+                1.2,
+                2.5,
+                1.,
+                2.,
+                0.1,
+                1.,
+                100.,
+                -50.,
+                25.,
+                -12.5,
+                25.,
+                24.,
+                -4.,
+                1.,
+                kind,
+                2.4,
+                0.,
+                0.,
+                0.5,
+                12.,
+                0.8,
+                240.,
+                1.,
+                0.,
+                0.,
+                0.,
+                0.,
+                0.,
+                0.,
+                0.,
+                -1.,
+                -1.,
+                -1.,
+                2.,
+                0.,
+                signal_gain,
+            ]);
+        }
+        checkpoint.extend([1., 1., 3.]);
+
+        let mut sim = Simulation::new(5);
+        sim.set_circular_dish(true);
+        sim.restore_checked(&checkpoint).unwrap();
+        assert!(matches!(sim.boundary, Boundary::Circle));
+        assert_eq!(sim.rng, 456);
+        assert_eq!(sim.tick, 91);
+        assert_eq!(sim.settings.nitrogen, 1.);
+        assert_eq!(sim.tiles[0].food, 0.4);
+        assert_eq!(sim.tiles[0].nitrates, nitrate_capacity(2.));
+        assert!(sim.bonds.contains(&(1, 3)));
+        for ((_, entity), kind) in sim.entities.iter().zip([LIPOCYTE, NEUROCYTE]) {
+            let cell = sim.world.get::<&Cell>(*entity).unwrap();
+            let genome = sim.world.get::<&Genome>(*entity).unwrap();
+            assert_eq!(genome.mode(cell.mode).kind, kind);
+            assert!(cell.mirrored);
+            assert_eq!(cell.nitrogen, INITIAL_NITROGEN);
+            assert_eq!(cell.signals, [8., -4., 2., -1., 0., 0., 0., 0.]);
+            assert_eq!(cell.toxin, 0.5);
+        }
+
+        let v5 = sim.encode_state();
+        let mut replacement = Simulation::new(0);
+        replacement.restore_checked(&v5).unwrap();
+        assert_eq!(replacement.encode_state(), v5);
+        checkpoint.pop();
+        assert!(sim.restore_checked(&checkpoint).is_err());
+        assert_eq!(sim.encode_state(), v5);
+    }
 }

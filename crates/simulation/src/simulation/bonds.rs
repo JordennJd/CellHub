@@ -4,6 +4,7 @@ use super::Simulation;
 use super::boundary::Boundary;
 use super::interactions::{Components, for_each_island};
 use super::program::{BENDING_TARGET, CONTRACTION_TARGET, LIFT_TARGET, controlled_value};
+use crate::cell_types::MYOCYTE;
 use crate::components::{Cell, Position, radius};
 use crate::genome::Genome;
 use hecs::Entity;
@@ -64,7 +65,7 @@ impl Simulation {
                     .unwrap();
                 let mode = genome.mode(cell.mode);
                 let connections = degrees[id];
-                let muscle = if mode.kind == 12 {
+                let muscle = if mode.kind == MYOCYTE {
                     [
                         controlled_value(cell, mode, CONTRACTION_TARGET, connections),
                         controlled_value(cell, mode, BENDING_TARGET, connections)

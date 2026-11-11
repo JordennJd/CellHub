@@ -68,6 +68,20 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
     const channels = color === null ? [-1, -1, -1] : [(color >> 16) & 255, (color >> 8) & 255, color & 255].map(v => Math.round(v / 255 * 1e6) / 1e6);
     onChange(genome.map((item, i) => i === mode ? { ...item, red: channels[0], green: channels[1], blue: channels[2] } : item));
   }
+  const connectionLimit = <>
+    <label className="genome-check"><input type="checkbox" checked={m.maxConnections >= 0}
+      onChange={e => update("maxConnections", e.target.checked ? 4 : -1)} />
+      {m.kind === 9 ? "Задать порог для приклеивания и деления" : "Ограничивать деление по числу связей"}</label>
+    {m.maxConnections >= 0 && <label className="genome-cell-type">Порог постоянных связей
+      <input type="number" min={0} max={POPULATION_LIMIT} step={1} value={m.maxConnections}
+        onChange={e => {
+          const value = e.currentTarget.valueAsNumber;
+          if (Number.isInteger(value)) update("maxConnections", Math.min(POPULATION_LIMIT, Math.max(0, value)));
+        }} />
+    </label>}
+    {m.kind === 9 && <p>Глюоцит приклеивает соседей, пока у него меньше пяти связей. Заданный порог может уменьшить этот предел.</p>}
+    {m.maxConnections >= 0 && <p>При достижении порога клетка перестаёт делиться. Существующие связи сохраняются.</p>}
+  </>;
 
   return <div className="genome-editor">
     <div className="genome-file-actions"><button onClick={onSave}>Сохранить геном</button><button onClick={onLoad}>Загрузить геном</button></div>
@@ -99,16 +113,11 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       <label className="genome-check"><input type="checkbox" checked={m.canDivide && m.kind !== 16} disabled={m.kind === 16} onChange={e => update("canDivide", e.target.checked)} />Разрешить деление</label>
       {m.kind === 16 ? <p>Гамета создаёт потомка при слиянии с другой гаметой. Настройки слияния находятся ниже.</p>
         : !m.canDivide && <p>Клетка продолжает питаться, двигаться и стареть, но не создаёт потомков.</p>}
+      {m.kind === 9 && connectionLimit}
       <fieldset disabled={!m.canDivide || m.kind === 16}>
         <legend className="sr-only">Параметры деления</legend>
         {setting("Масса для деления", "threshold", 1, 8, 0.1, "Деление возможно при достижении этой массы и возраста 0,5 с. Рост зависит от типа клетки, доступной пищи и света.", "нг")}
-        <label className="genome-check"><input type="checkbox" checked={m.maxConnections >= 0}
-          onChange={e => update("maxConnections", e.target.checked ? 4 : -1)} />Ограничивать деление по числу связей</label>
-        {m.maxConnections >= 0 && <label className="genome-cell-type">Порог постоянных связей
-          <input type="number" min={0} max={POPULATION_LIMIT} step={1} value={m.maxConnections}
-            onChange={e => { const n = e.currentTarget.valueAsNumber; if (Number.isInteger(n)) update("maxConnections", Math.min(POPULATION_LIMIT, Math.max(0, n))); }} />
-        </label>}
-        {m.maxConnections >= 0 && <p>При достижении порога клетка перестаёт делиться. Существующие связи сохраняются.</p>}
+        {m.kind !== 9 && connectionLimit}
         <div className="genome-children">{(["childA", "childB"] as const).map((key, index) => <section key={key}>
           <label>Дочерняя клетка {index === 0 ? "A" : "B"}<select value={m[key]} onChange={e => update(key, Number(e.target.value))}>{genome.map((g, i) => <option key={i} value={i}>{g.name} · {TYPES[g.kind].name}</option>)}</select></label>
           <label className="genome-check"><input type="checkbox" checked={index === 0 ? m.keepAdhesionA : m.keepAdhesionB} onChange={e => update(index === 0 ? "keepAdhesionA" : "keepAdhesionB", e.target.checked)} />Наследует связи родителя</label>
@@ -120,7 +129,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
         {setting("Доля массы дочери A", "ratio", 0.2, 0.8, 0.01, "Дочь A получает указанную долю массы, дочь B — оставшуюся. Например, 0,5 означает равное распределение.")}
         {orientation("Угол деления","angle","Поворачивает ось, вдоль которой располагаются дочерние клетки, относительно направления родителя. Зеркально отражённая клетка поворачивает её в обратную сторону.")}
       </fieldset>
-      <p className="genome-lineage">{m.name} → {m.kind === 16 ? "слияние гамет" : m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}</p>
+      <p className="genome-lineage">{m.name} → {m.kind === 16 ? `слияние → ${genome[m.offspringMode].name}` : m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}</p>
     </section>
     <section><h3>Питание</h3>
       {setting("Приоритет питания", "nutrientPriority", 0.25, 4, 0.05, "Повышает долю питания, которую получает клетка при обмене по постоянным связям.", "×")}
