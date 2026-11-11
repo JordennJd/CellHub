@@ -346,7 +346,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let rows = s.snapshot();
     assert_eq!(rows.len(), 24);
     let split_axis = (noise - 0.5) * 0.35 + 0.2;
-    assert!((rows[9] - (split_axis - 0.3)).abs() < 0.00001);
+    assert!((rows[9] - (split_axis + 0.3)).abs() < 0.00001);
     assert!((rows[21] - (split_axis + std::f32::consts::PI - 0.4)).abs() < 0.00001);
     assert_eq!(rows[11], 1.);
     assert_eq!(rows[23], 0.);
@@ -370,7 +370,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     let mirrored_axis = (noise - 0.5) * 0.35 - 0.2;
     assert_eq!(rows[11], 0.);
     assert_eq!(rows[23], 1.);
-    assert!((rows[9] - (mirrored_axis + 0.3)).abs() < 0.00001);
+    assert!((rows[9] - (mirrored_axis - 0.3)).abs() < 0.00001);
     assert!((rows[21] - (mirrored_axis + std::f32::consts::PI + 0.4)).abs() < 0.00001);
 }
 
@@ -1087,8 +1087,7 @@ fn both_daughters_can_inherit_without_creating_diagonal_bonds() {
     }
 }
 
-#[test]
-fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
+fn growing_path(angle: f32, mirror: bool) -> Simulation {
     let mut s = Simulation::new(73421);
     s.set_circular_dish(true);
     s.configure_environment(super::environment::Environment {
@@ -1101,7 +1100,11 @@ fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
     let modes = (0..=4)
         .map(|mode| Mode {
             threshold: 1.,
-            angle: 0.,
+            angle,
+            child_angle_a: -angle,
+            child_angle_b: -angle,
+            mirror_a: mirror,
+            mirror_b: mirror,
             speed: 0.,
             lifespan: 1000.,
             child_a: (mode + 1).min(4),
@@ -1115,55 +1118,67 @@ fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
         .collect();
     s.spawn(600., 600., 0, &Genome::from_modes(modes).values())
         .unwrap();
+    s
+}
 
-    let advance_to = |sim: &mut Simulation, tick| {
-        while sim.tick < tick {
-            sim.advance((tick - sim.tick).min(120));
-        }
-    };
-    let assert_straight_path = |sim: &Simulation, count| {
-        assert_eq!(sim.world.len() as usize, count, "tick {}", sim.tick);
-        assert_eq!(sim.bonds.len(), count - 1, "tick {}", sim.tick);
-        let mut neighbors = BTreeMap::<u32, Vec<u32>>::new();
-        for &(a, b) in &sim.bonds {
-            neighbors.entry(a).or_default().push(b);
-            neighbors.entry(b).or_default().push(a);
-        }
-        assert_eq!(neighbors.len(), count);
-        assert!(neighbors.values().all(|ends| ends.len() <= 2));
-        let (&first, _) = neighbors.iter().find(|(_, ends)| ends.len() == 1).unwrap();
-        let mut order = vec![first];
-        let (mut previous, mut current) = (None, first);
-        while let Some(&next) = neighbors[&current].iter().find(|&&id| Some(id) != previous) {
-            assert!(!order.contains(&next), "a path cannot revisit a cell");
-            order.push(next);
-            previous = Some(current);
-            current = next;
-        }
-        assert_eq!(order.len(), count, "one path must reach all cells");
+fn advance_to(sim: &mut Simulation, tick: u32) {
+    while sim.tick < tick {
+        sim.advance((tick - sim.tick).min(120));
+    }
+}
 
-        let position = |id| *sim.world.get::<&Position>(entity(sim, id)).unwrap();
-        let origin = position(first);
-        let end = position(current);
-        let (dx, dy) = (f64::from(end.x - origin.x), f64::from(end.y - origin.y));
-        let length = libm::hypot(dx, dy);
-        assert!(length > 0.);
-        let (ux, uy) = (dx / length, dy / length);
-        let mut previous_projection = f64::NEG_INFINITY;
-        for id in order {
-            let p = position(id);
-            let (x, y) = (f64::from(p.x - origin.x), f64::from(p.y - origin.y));
-            let projection = x * ux + y * uy;
-            let deviation = y * ux - x * uy;
-            assert!(
-                projection > previous_projection && deviation.abs() < 0.05,
-                "tick {}, cell {id}: along {previous_projection:.4}→{projection:.4}, across {deviation:.4}",
-                sim.tick
-            );
-            previous_projection = projection;
-        }
-    };
+fn path_positions(sim: &Simulation, count: usize) -> Vec<Position> {
+    assert_eq!(sim.world.len() as usize, count, "tick {}", sim.tick);
+    assert_eq!(sim.bonds.len(), count - 1, "tick {}", sim.tick);
+    let mut neighbors = BTreeMap::<u32, Vec<u32>>::new();
+    for &(a, b) in &sim.bonds {
+        neighbors.entry(a).or_default().push(b);
+        neighbors.entry(b).or_default().push(a);
+    }
+    assert_eq!(neighbors.len(), count);
+    assert!(neighbors.values().all(|ends| ends.len() <= 2));
+    let (&first, _) = neighbors.iter().find(|(_, ends)| ends.len() == 1).unwrap();
+    let mut order = vec![first];
+    let (mut previous, mut current) = (None, first);
+    while let Some(&next) = neighbors[&current].iter().find(|&&id| Some(id) != previous) {
+        assert!(!order.contains(&next), "a path cannot revisit a cell");
+        order.push(next);
+        previous = Some(current);
+        current = next;
+    }
+    assert_eq!(order.len(), count, "one path must reach all cells");
+    order
+        .into_iter()
+        .map(|id| *sim.world.get::<&Position>(entity(sim, id)).unwrap())
+        .collect()
+}
 
+fn path_bearings(sim: &Simulation, count: usize) -> Vec<f32> {
+    let positions = path_positions(sim, count);
+    let (first, last) = (positions[0], positions[count - 1]);
+    let (dx, dy) = (last.x - first.x, last.y - first.y);
+    positions
+        .windows(2)
+        .map(|pair| {
+            let (x, y) = (pair[1].x - pair[0].x, pair[1].y - pair[0].y);
+            let along = x * dx + y * dy;
+            assert!(along > 0., "path backtracks at tick {}", sim.tick);
+            libm::atan2f(y * dx - x * dy, along)
+        })
+        .collect()
+}
+
+fn assert_straight_path(sim: &Simulation, count: usize) {
+    let bearings = path_bearings(sim, count);
+    assert!(
+        bearings.iter().all(|bearing| bearing.abs() < 0.001),
+        "bent path: {bearings:?}"
+    );
+}
+
+#[test]
+fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
+    let mut s = growing_path(0., false);
     advance_to(&mut s, 150);
     assert_straight_path(&s, 4);
     advance_to(&mut s, 300);
@@ -1175,6 +1190,35 @@ fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
     advance_to(&mut restored, 450);
     assert_straight_path(&s, 16);
     assert_eq!(s.export_state(), restored.export_state());
+}
+
+#[test]
+fn mirrored_daughters_turn_a_tilted_straight_path_into_a_wave() {
+    let angle = 10_f32.to_radians();
+    let mut straight = growing_path(angle, false);
+    let mut mirrored = growing_path(angle, true);
+    for (tick, count) in [(150, 4), (300, 8), (450, 16)] {
+        advance_to(&mut straight, tick);
+        assert_straight_path(&straight, count);
+        advance_to(&mut mirrored, tick);
+        let bearings = path_bearings(&mirrored, count);
+        let low = bearings.iter().copied().fold(f32::INFINITY, f32::min);
+        let high = bearings.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            (high - low - 2. * angle).abs() < 0.001,
+            "tick {tick}: {bearings:?}"
+        );
+        assert!(
+            bearings
+                .iter()
+                .all(|b| (b - low).abs() < 0.001 || (b - high).abs() < 0.001)
+        );
+        let changes = bearings
+            .windows(2)
+            .filter(|pair| (pair[1] - pair[0]).abs() > angle)
+            .count();
+        assert!(changes >= count / 2, "tick {tick}: {bearings:?}");
+    }
 }
 
 fn right_angle_growth() -> Simulation {

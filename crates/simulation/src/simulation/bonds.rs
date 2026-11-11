@@ -300,13 +300,21 @@ impl Simulation {
             transfer.retain(transfer.previous.map(|id| divided.get(&id)), &mut bonds);
         }
         self.bonds = bonds;
-        self.solve_bonds();
+        self.solve_bonds(divisions);
     }
 
-    fn solve_bonds(&mut self) {
+    fn solve_bonds(&mut self, divisions: &BTreeMap<u32, BondDivision>) {
         if self.bonds.is_empty() {
             return;
         }
+        let parents: BTreeMap<_, _> = divisions
+            .iter()
+            .flat_map(|(&id, division)| {
+                division
+                    .daughters
+                    .map(|daughter| (daughter, (id, division.parent)))
+            })
+            .collect();
         let mut bonded_ids: Vec<_> = self.bonds.iter().flat_map(|&(a, b)| [a, b]).collect();
         bonded_ids.sort_unstable();
         bonded_ids.dedup();
@@ -344,6 +352,7 @@ impl Simulation {
                 BondBody {
                     entity,
                     position: p,
+                    parent: parents.get(id).copied(),
                     mass: cell.mass,
                     anchored: cell.anchored,
                     muscle,
@@ -392,15 +401,34 @@ struct BondIsland {
 struct BondBody {
     entity: Entity,
     position: Position,
+    parent: Option<(u32, Position)>,
     mass: f32,
     anchored: bool,
     muscle: [f32; 3],
     driven: bool,
 }
 
+impl BondBody {
+    fn joint_direction(&self, other: &Self) -> (f64, f64) {
+        // Sisters start on their new division axis. Inherited joints keep
+        // their pre-division direction even when newborns initially overlap.
+        let (from, to) = match (self.parent, other.parent) {
+            (Some((a, _)), Some((b, _))) if a == b => (self.position, other.position),
+            (a, b) => (
+                a.map_or(self.position, |(_, p)| p),
+                b.map_or(other.position, |(_, p)| p),
+            ),
+        };
+        (
+            f64::from(to.x) - f64::from(from.x),
+            f64::from(to.y) - f64::from(from.y),
+        )
+    }
+}
+
 impl BondIsland {
     fn solve(&mut self, boundary: Boundary) {
-        if self.solve_straight_path(boundary) {
+        if self.solve_passive_path(boundary) {
             return;
         }
         // Retain Gauss-Seidel order within an island. Disjoint islands can run
@@ -453,38 +481,23 @@ impl BondIsland {
         }
     }
 
-    /// Solve a passive, already straight path along its division axis. A
-    /// distance-only solver can buckle under the compression of a new split:
-    /// its tiny lateral error becomes the direction of the next correction.
-    fn solve_straight_path(&mut self, boundary: Boundary) -> bool {
-        const POSITION_TOLERANCE: f64 = 0.03;
-        const ANGLE_TOLERANCE: f64 = 0.001;
+    /// Every joint in an open path can reach its rest length along its own
+    /// direction. Translate the result to preserve the center of mass.
+    fn solve_passive_path(&mut self, boundary: Boundary) -> bool {
         let count = self.bodies.len();
         if count < 3 || self.edges.len() + 1 != count {
             return false;
         }
-        let origin = self.bodies[0].position;
-        let angle = f64::from(origin.angle);
-        let (sin, cos) = libm::sincos(angle);
         let mut total_mass = 0.;
         let mut center = [0.; 2];
         for body in &self.bodies {
             if body.anchored || body.driven || body.muscle != [0.; 3] {
                 return false;
             }
-            let p = body.position;
-            let dx = f64::from(p.x) - f64::from(origin.x);
-            let dy = f64::from(p.y) - f64::from(origin.y);
-            let turn = f64::from(p.angle) - angle;
-            let pi = std::f64::consts::PI;
-            let tilt = turn - (turn / pi).round() * pi;
-            if (dy * cos - dx * sin).abs() > POSITION_TOLERANCE || tilt.abs() > ANGLE_TOLERANCE {
-                return false;
-            }
             let mass = f64::from(body.mass);
             total_mass += mass;
-            center[0] += f64::from(p.x) * mass;
-            center[1] += f64::from(p.y) * mass;
+            center[0] += f64::from(body.position.x) * mass;
+            center[1] += f64::from(body.position.y) * mass;
         }
 
         let mut neighbors = vec![[count; 2]; count];
@@ -497,8 +510,8 @@ impl BondIsland {
             }
         }
         let first = neighbors.iter().position(|ends| ends[1] == count).unwrap();
-        let mut offsets = vec![0.; count];
-        let mut weighted_offset = 0.;
+        let mut offsets = vec![[0.; 2]; count];
+        let mut weighted_offset = [0.; 2];
         let (mut previous, mut current) = (count, first);
         loop {
             let next = neighbors[current]
@@ -508,30 +521,29 @@ impl BondIsland {
             let Some(next) = next.filter(|&id| id != count) else {
                 break;
             };
-            let current_radius = radius(self.bodies[current].mass);
-            let next_radius = radius(self.bodies[next].mass);
-            offsets[next] =
-                offsets[current] + f64::from(current_radius + next_radius + ADHESION_GAP);
-            weighted_offset += offsets[next] * f64::from(self.bodies[next].mass);
+            let from = &self.bodies[current];
+            let to = &self.bodies[next];
+            let (dx, dy) = from.joint_direction(to);
+            let span = libm::hypot(dx, dy);
+            if span == 0. {
+                return false;
+            }
+            let scale = f64::from(radius(from.mass) + radius(to.mass) + ADHESION_GAP) / span;
+            offsets[next] = [
+                offsets[current][0] + dx * scale,
+                offsets[current][1] + dy * scale,
+            ];
+            let mass = f64::from(to.mass);
+            weighted_offset[0] += offsets[next][0] * mass;
+            weighted_offset[1] += offsets[next][1] * mass;
             previous = current;
             current = next;
         }
 
-        let start = self.bodies[first].position;
-        let finish = self.bodies[current].position;
-        let span = (f64::from(finish.x) - f64::from(start.x)) * cos
-            + (f64::from(finish.y) - f64::from(start.y)) * sin;
-        if span.abs() < POSITION_TOLERANCE {
-            return false;
-        }
-        let (ux, uy) = (cos * span.signum(), sin * span.signum());
-        let center_offset = weighted_offset / total_mass;
-        let (cx, cy) = (center[0] / total_mass, center[1] / total_mass);
-        let place = |offset: f64| {
-            let distance = offset - center_offset;
-            ((cx + ux * distance) as f32, (cy + uy * distance) as f32)
-        };
-        // Fall back to the flexible solver when the whole line cannot fit.
+        let cx = (center[0] - weighted_offset[0]) / total_mass;
+        let cy = (center[1] - weighted_offset[1]) / total_mass;
+        let place = |[x, y]: [f64; 2]| ((cx + x) as f32, (cy + y) as f32);
+        // Let the general constraints resolve contacts with the dish rim.
         for (body, &offset) in self.bodies.iter().zip(&offsets) {
             let (x, y) = place(offset);
             if boundary.constrain(x, y, body.mass, 12.).2 {
@@ -634,7 +646,7 @@ mod tests {
         let anchor = anchored.entities[0].1;
         anchored.world.get::<&mut Cell>(anchor).unwrap().anchored = true;
         let before = *anchored.world.get::<&Position>(anchor).unwrap();
-        anchored.solve_bonds();
+        anchored.solve_bonds(&BTreeMap::new());
         let after = *anchored.world.get::<&Position>(anchor).unwrap();
         assert_eq!([before.x, before.y], [after.x, after.y]);
     }

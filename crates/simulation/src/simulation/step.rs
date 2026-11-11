@@ -187,7 +187,10 @@ impl Simulation {
                 b.mirrored = c.mirrored ^ m.mirror_b;
                 a.generation += 1;
                 b.generation += 1;
-                let angle = p.angle + m.angle * if c.mirrored { -1. } else { 1. };
+                // Both newborn directions are set in the parent's frame.
+                // A daughter's own mirror flag applies to her next division.
+                let handedness = if c.mirrored { -1. } else { 1. };
+                let angle = p.angle + m.angle * handedness;
                 let distance = (radius(a.mass) + radius(b.mass) + ADHESION_GAP) / 2.;
                 let (sin, cos) = libm::sincosf(angle);
                 let (ax, ay, _) = self.boundary.constrain(
@@ -205,14 +208,12 @@ impl Simulation {
                 let pa = Position {
                     x: ax,
                     y: ay,
-                    angle: angle + m.child_angle_a * if a.mirrored { -1. } else { 1. },
+                    angle: angle + m.child_angle_a * handedness,
                 };
                 let pb = Position {
                     x: bx,
                     y: by,
-                    angle: angle
-                        + std::f32::consts::PI
-                        + m.child_angle_b * if b.mirrored { -1. } else { 1. },
+                    angle: angle + std::f32::consts::PI + m.child_angle_b * handedness,
                 };
                 children.push((pa, a, g.clone()));
                 children.push((pb, b, g.clone()));
