@@ -154,11 +154,13 @@ impl Simulation {
             }
             paths.push(item.motion);
         }
-        let removed: HashSet<_> = dead.iter().copied().collect();
-        self.deaths += (dead.len() - divisions.len()) as u32;
-        entities.retain(|(_, entity)| !removed.contains(entity));
-        for e in dead {
-            self.world.despawn(e).unwrap();
+        if !dead.is_empty() {
+            let removed: HashSet<_> = dead.iter().copied().collect();
+            self.deaths += (dead.len() - divisions.len()) as u32;
+            entities.retain(|(_, entity)| !removed.contains(entity));
+            for e in dead {
+                self.world.despawn(e).unwrap();
+            }
         }
         for (p, c, g) in children {
             let id = c.id;

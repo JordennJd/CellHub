@@ -16,6 +16,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const ATTACK_RANGE: f32 = 24.;
+const PAIR_CACHE_PER_BODY: usize = 64;
+const LARGE_CONTACT_POPULATION: usize = 4096;
+const DENSE_PAIRS_PER_BODY: usize = 8;
+const DENSE_PAIR_VISITS: usize = 250_000;
+const CROWD_CONTACT_PASSES: usize = 2;
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 static THREAD_POOL_READY: AtomicBool = AtomicBool::new(false);
@@ -25,6 +30,21 @@ pub(super) fn enable_parallel() {
     THREAD_POOL_READY.store(true, Ordering::Relaxed);
 }
 
+fn parallel_enabled() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        rayon::current_num_threads() > 1
+    }
+    #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
+    {
+        THREAD_POOL_READY.load(Ordering::Relaxed) && rayon::current_num_threads() > 1
+    }
+    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
+    {
+        false
+    }
+}
+
 /// Both execution modes run identical jobs. Only their scheduling differs.
 pub(super) fn for_each_island<T: Send>(
     islands: &mut [T],
@@ -32,16 +52,9 @@ pub(super) fn for_each_island<T: Send>(
     solve: impl Fn(&mut T) + Send + Sync,
 ) {
     #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
-    {
-        #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
-        let ready = THREAD_POOL_READY.load(Ordering::Relaxed);
-        #[cfg(not(target_arch = "wasm32"))]
-        let ready = true;
-
-        if ready && active_bodies >= 128 && islands.len() > 1 && rayon::current_num_threads() > 1 {
-            islands.par_iter_mut().for_each(solve);
-            return;
-        }
+    if active_bodies >= 128 && islands.len() > 1 && parallel_enabled() {
+        islands.par_iter_mut().for_each(solve);
+        return;
     }
     #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     let _ = active_bodies;
@@ -135,6 +148,58 @@ struct ContactBody {
 struct ContactIsland {
     bodies: Vec<ContactBody>,
     tension: Vec<(usize, usize, f32)>,
+    pairs: Option<Vec<ContactPair>>,
+    crowded: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ContactPair {
+    a: u32,
+    b: u32,
+    gametes: Option<(f32, bool)>,
+}
+
+impl ContactPair {
+    fn new(bodies: &[ContactBody], a: usize, b: usize) -> Self {
+        let gametes = bodies[a].gamete.zip(bodies[b].gamete).and_then(|(a, b)| {
+            a.fusion_scale(b)
+                .map(|scale| (scale, a.mature() && b.mature()))
+        });
+        Self {
+            a: a as u32,
+            b: b as u32,
+            gametes,
+        }
+    }
+
+    fn solve(
+        self,
+        bodies: &mut [ContactBody],
+        step: f32,
+        first_pass: bool,
+        boundary: Boundary,
+    ) -> bool {
+        let (left, right) = bodies.split_at_mut(self.b as usize);
+        let (body, target) = (&mut left[self.a as usize], &mut right[0]);
+        // The fusion pass consumes eligible contacts. Other gametes that
+        // can fuse settle at their contact range while maturing.
+        if self.gametes.is_some_and(|(scale, mature)| {
+            mature
+                && body
+                    .collision
+                    .within_contact_range(&target.collision, scale)
+        }) {
+            return false;
+        }
+        body.collision.solve(
+            &mut target.collision,
+            (body.id, target.id),
+            step,
+            first_pass,
+            self.gametes.map(|(scale, _)| scale),
+            boundary,
+        )
+    }
 }
 
 pub(super) struct ContactMotion {
@@ -195,6 +260,45 @@ fn segment_distance_squared(a: &[Position; 3], b: &[Position; 3], start: usize) 
     x * x + y * y
 }
 
+/// Pair discovery is read-only and can use multiple threads even when the
+/// contact graph has one huge island. Merge in source order for exact replay.
+fn stage_contact_pairs(
+    bodies: &[ContactBody],
+    spatial: &SpatialGrid,
+    bonds: &BTreeSet<(u32, u32)>,
+    tick: u32,
+) -> Option<Vec<[u32; 2]>> {
+    const BLOCK: usize = 512;
+    if bodies.len() < LARGE_CONTACT_POPULATION || !parallel_enabled() {
+        return None;
+    }
+    let mut blocks: Vec<_> = bodies.chunks(BLOCK).map(|block| (block, None)).collect();
+    for_each_island(&mut blocks, bodies.len(), |(block, result)| {
+        let limit = block.len() * PAIR_CACHE_PER_BODY;
+        let mut pairs = Vec::with_capacity(block.len() * 16);
+        for body in *block {
+            for other in spatial.collision_candidates(body.index, tick) {
+                if bonds.contains(&(body.id, bodies[other].id)) {
+                    continue;
+                }
+                if pairs.len() == limit {
+                    return;
+                }
+                pairs.push([body.index as u32, other as u32]);
+            }
+        }
+        *result = Some(pairs);
+    });
+    let count = blocks.iter().try_fold(0, |count, (_, block)| {
+        block.as_ref().map(|pairs| count + pairs.len())
+    })?;
+    let mut pairs = Vec::with_capacity(count);
+    for (_, block) in blocks {
+        pairs.extend(block.unwrap());
+    }
+    Some(pairs)
+}
+
 fn solve_collisions(
     island: &mut ContactIsland,
     slots: &[Option<Slot>],
@@ -202,9 +306,16 @@ fn solve_collisions(
     bonds: &BTreeSet<(u32, u32)>,
     boundary: Boundary,
     step: f32,
+    (tick, active): (u32, usize),
 ) {
     let bodies = &mut island.bodies;
     let island_index = slots[bodies[0].index].unwrap().island;
+    let mut pair_count = island.pairs.as_ref().map_or(0, Vec::len);
+    let mut pass_limit = if active >= LARGE_CONTACT_POPULATION && island.crowded {
+        CROWD_CONTACT_PASSES
+    } else {
+        CONTACT_PASSES
+    };
     for pass in 0..CONTACT_PASSES {
         let mut changed = false;
         // Restore joints stretched by the previous pass, then give membrane
@@ -217,45 +328,39 @@ fn solve_collisions(
                     .relax_tension(&mut right[0].collision, rest, boundary);
             }
         }
-        for index in 0..bodies.len() {
-            let source = bodies[index].index;
-            for other in spatial.candidates(source).filter(|&other| other > source) {
-                let Some(slot) = slots[other].filter(|slot| slot.island == island_index) else {
-                    continue;
-                };
-                let (left, right) = bodies.split_at_mut(slot.index);
-                let (body, target) = (&mut left[index], &mut right[0]);
-                let pair = (body.id, target.id);
-                // A direct joint controls the membrane gap, including active
-                // myocyte compression. Other members can collide normally.
-                if bonds.contains(&pair) {
-                    continue;
+        if let Some(cached) = &island.pairs {
+            for &pair in cached {
+                changed |= pair.solve(bodies, step, pass == 0, boundary);
+            }
+        } else {
+            for index in 0..bodies.len() {
+                let source = bodies[index].index;
+                for other in spatial.collision_candidates(source, tick) {
+                    let Some(slot) = slots[other].filter(|slot| slot.island == island_index) else {
+                        continue;
+                    };
+                    // A direct joint controls the membrane gap, including
+                    // active myocyte compression.
+                    if bonds.contains(&(bodies[index].id, bodies[slot.index].id)) {
+                        continue;
+                    }
+                    pair_count += usize::from(pass == 0);
+                    let pair = ContactPair::new(bodies, index, slot.index);
+                    changed |= pair.solve(bodies, step, pass == 0, boundary);
                 }
-                let gametes = body.gamete.zip(target.gamete).and_then(|(a, b)| {
-                    a.fusion_scale(b)
-                        .map(|scale| (scale, a.mature() && b.mature()))
-                });
-                // The fusion pass consumes eligible contacts. Other gametes
-                // that can fuse settle at their contact range while maturing.
-                if gametes.is_some_and(|(scale, mature)| {
-                    mature
-                        && body
-                            .collision
-                            .within_contact_range(&target.collision, scale)
-                }) {
-                    continue;
-                }
-                changed |= body.collision.solve(
-                    &mut target.collision,
-                    pair,
-                    step,
-                    pass == 0,
-                    gametes.map(|(scale, _)| scale),
-                    boundary,
-                );
             }
         }
-        if !changed {
+        if pass == 0
+            && bodies.len() >= LARGE_CONTACT_POPULATION
+            && pair_count >= bodies.len() * DENSE_PAIRS_PER_BODY
+        {
+            // Oversized contact islands cannot be split across threads. Always
+            // leave a tensile pass for bonds, and recover extra sweeps as the
+            // cells disperse and the number of candidate pairs falls.
+            let minimum = if island.tension.is_empty() { 1 } else { 2 };
+            pass_limit = pass_limit.min((DENSE_PAIR_VISITS / pair_count).max(minimum));
+        }
+        if !changed || pass + 1 == pass_limit {
             break;
         }
     }
@@ -370,24 +475,59 @@ impl Simulation {
         for &(a, b) in &edges {
             graph.join(a, b);
         }
-        for body in &bodies {
-            for other in self
-                .spatial
-                .candidates(body.index)
-                .filter(|&other| other > body.index)
-            {
-                graph.join(body.index, other);
+        let crowds = self.spatial.connect_crowds(|a, b| graph.join(a, b));
+        let tick = self.tick;
+        let mut pair_indices = stage_contact_pairs(&bodies, &self.spatial, &self.bonds, tick);
+        if let Some(staged) = &pair_indices {
+            for &[a, b] in staged {
+                graph.join(a as usize, b as usize);
+            }
+        } else {
+            pair_indices = Some(Vec::with_capacity(bodies.len() * 4));
+            let cache_limit = bodies.len() * PAIR_CACHE_PER_BODY;
+            for body in &bodies {
+                for other in self.spatial.collision_candidates(body.index, tick) {
+                    graph.join(body.index, other);
+                    if let Some(pairs) = &mut pair_indices
+                        && !self.bonds.contains(&(body.id, bodies[other].id))
+                    {
+                        if pairs.len() < cache_limit {
+                            pairs.push([body.index as u32, other as u32]);
+                        } else {
+                            // Fall back to ordered iteration if a cache exceeds its budget.
+                            pair_indices = None;
+                        }
+                    }
+                }
             }
         }
         let (islands, slots) = graph.islands(bodies);
         let active = islands.iter().map(Vec::len).sum();
+        let has_pair_cache = pair_indices.is_some();
         let mut islands: Vec<_> = islands
             .into_iter()
             .map(|bodies| ContactIsland {
                 bodies,
                 tension: Vec::new(),
+                pairs: has_pair_cache.then(Vec::new),
+                crowded: false,
             })
             .collect();
+        if let Some(indices) = pair_indices {
+            if let [island] = islands.as_mut_slice() {
+                island.pairs.as_mut().unwrap().reserve_exact(indices.len());
+            }
+            for [a, b] in indices {
+                let a = slots[a as usize].unwrap();
+                let b = slots[b as usize].unwrap();
+                let island = &mut islands[a.island];
+                let pair = ContactPair::new(&island.bodies, a.index, b.index);
+                island.pairs.as_mut().unwrap().push(pair);
+            }
+        }
+        for representative in crowds {
+            islands[slots[representative].unwrap().island].crowded = true;
+        }
         for (a, b) in edges {
             let a = slots[a].unwrap();
             let b = slots[b].unwrap();
@@ -403,7 +543,15 @@ impl Simulation {
         let bonds = &self.bonds;
         let boundary = self.boundary;
         for_each_island(&mut islands, active, |island| {
-            solve_collisions(island, &slots, spatial, bonds, boundary, step);
+            solve_collisions(
+                island,
+                &slots,
+                spatial,
+                bonds,
+                boundary,
+                step,
+                (tick, active),
+            );
             solve_biology(&mut island.bodies, &slots, spatial, 0.08 * step);
         });
 
@@ -504,6 +652,33 @@ mod tests {
 
         assert_eq!(s.infections, 1);
         assert_eq!(s.genome(bystander), s.genome(virus));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn staged_contact_pairs_preserve_crowded_replay_order() {
+        let mut initial = Simulation::new(73421);
+        for group in 0..32 {
+            let x = 320. + (group % 8) as f32 * 256.;
+            let y = 320. + (group / 8) as f32 * 256.;
+            for _ in 0..128 {
+                initial.spawn_checked(x, y, 0, &genes(0)).unwrap();
+            }
+        }
+        let checkpoint = initial.encode_state();
+        let run = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut simulation = Simulation::new(0);
+                    simulation.restore_checked(&checkpoint).unwrap();
+                    simulation.advance(3);
+                    simulation.encode_state()
+                })
+        };
+        assert_eq!(run(1), run(4));
     }
 
     #[test]

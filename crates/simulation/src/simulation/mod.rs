@@ -462,20 +462,38 @@ impl Simulation {
     /// the chunk of its lower ID, so a client can replace chunk-local links
     /// without duplicates.
     pub fn chunk_snapshot(&self, chunk_x: u32, chunk_y: u32, chunk_size: f32) -> ChunkSnapshot {
-        let mut cells = Vec::new();
         let mut links = Vec::new();
         let mut terrain = Vec::new();
-        let mut cell_chunks = HashMap::new();
-        let degrees = self.bond_degrees();
-        for (_, (position, cell, genome)) in
-            self.world.query::<(&Position, &Cell, &Genome)>().iter()
-        {
-            let cx = (position.x / chunk_size) as u32;
-            let cy = (position.y / chunk_size) as u32;
-            cell_chunks.insert(cell.id, (cx, cy));
-            if cx != chunk_x || cy != chunk_y {
-                continue;
+        let mut query = self.world.query::<(&Position, &Cell, &Genome)>();
+        let visible: Vec<_> = query
+            .iter()
+            .map(|(_, row)| row)
+            .filter(|(position, _, _)| {
+                (position.x / chunk_size) as u32 == chunk_x
+                    && (position.y / chunk_size) as u32 == chunk_y
+            })
+            .collect();
+        let mut degrees = HashMap::new();
+        if !self.bonds.is_empty() && !visible.is_empty() {
+            degrees.extend(visible.iter().map(|(_, cell, _)| (cell.id, 0)));
+            for &(a, b) in &self.bonds {
+                if let Some(degree) = degrees.get_mut(&a) {
+                    *degree += 1;
+                    if self
+                        .entities
+                        .binary_search_by_key(&b, |&(id, _)| id)
+                        .is_ok()
+                    {
+                        links.extend([a, b]);
+                    }
+                }
+                if let Some(degree) = degrees.get_mut(&b) {
+                    *degree += 1;
+                }
             }
+        }
+        let mut cells = Vec::with_capacity(visible.len() * 28);
+        for (position, cell, genome) in visible {
             let mode = genome.mode(cell.mode);
             let degree = degrees.get(&cell.id).copied().unwrap_or(0);
             let is_linked = degree != 0;
@@ -519,13 +537,6 @@ impl Simulation {
                 cell.mode as f32,
                 cell.anchored as u8 as f32,
             ]);
-        }
-        for &(a, b) in &self.bonds {
-            if let (Some(&(ax, ay)), Some(_)) = (cell_chunks.get(&a), cell_chunks.get(&b))
-                && (ax, ay) == (chunk_x, chunk_y)
-            {
-                links.extend([a, b]);
-            }
         }
         let tiles_per_chunk = (chunk_size / 64.) as usize;
         let start_x = chunk_x as usize * tiles_per_chunk;

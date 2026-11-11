@@ -2107,5 +2107,6 @@ fn chunk_snapshot_exports_cells_links_and_terrain() {
     let second = s.chunk_snapshot(1, 0, 512.);
     assert_eq!(second.cells.len(), 28);
     assert_eq!(second.cells[0], b as f32);
+    assert_eq!(second.cells[11], 1.);
     assert!(second.links.is_empty());
 }

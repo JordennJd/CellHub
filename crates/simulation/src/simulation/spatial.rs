@@ -5,6 +5,10 @@ use crate::components::Position;
 const BUCKET_SIZE: f32 = 32.;
 const GRID_SIZE: usize = (crate::terrain::CHAOS_SIZE / BUCKET_SIZE) as usize;
 const MAX_BUCKETS_PER_BODY: usize = 16;
+const CROWDED_BUCKET: usize = 96;
+const CROWD_SAMPLE: usize = 24;
+const PACKED_BUCKET: usize = 512;
+const PACKED_SAMPLE: usize = 12;
 
 #[derive(Clone, Copy)]
 struct Bounds {
@@ -94,17 +98,60 @@ impl SpatialGrid {
     }
 
     pub(super) fn candidates(&self, index: usize) -> impl Iterator<Item = usize> + '_ {
+        self.query(index, None)
+    }
+
+    pub(super) fn collision_candidates(
+        &self,
+        index: usize,
+        tick: u32,
+    ) -> impl Iterator<Item = usize> + '_ {
+        self.query(index, Some(tick))
+    }
+
+    /// Overloaded buckets may omit physical pairs. Joining all their occupants
+    /// still keeps every potential contact in the same island, including biology.
+    pub(super) fn connect_crowds(&self, mut join: impl FnMut(usize, usize)) -> Vec<usize> {
+        if self.large.len() > CROWDED_BUCKET {
+            for index in 1..self.bounds.len() {
+                join(0, index);
+            }
+            return vec![0];
+        }
+        let mut representatives = Vec::new();
+        for &key in &self.occupied {
+            let bodies = &self.buckets[key];
+            if bodies.len() > CROWDED_BUCKET {
+                representatives.push(bodies[0]);
+                for &other in &bodies[1..] {
+                    join(bodies[0], other);
+                }
+            }
+        }
+        representatives
+    }
+
+    fn query(&self, index: usize, tick: Option<u32>) -> impl Iterator<Item = usize> + '_ {
         let bounds = self.bounds[index];
-        let (rows, direct) = if bounds.is_large() {
-            (0..0, 0..self.bounds.len())
+        let is_large = bounds.is_large();
+        let (rows, direct_end) = if is_large {
+            (0..0, self.bounds.len())
         } else {
-            (bounds.first_y..bounds.last_y + 1, 0..self.large.len())
+            (bounds.first_y..bounds.last_y + 1, self.large.len())
         };
+        let direct_start = match tick {
+            None => 0,
+            Some(_) if is_large => index + 1,
+            Some(_) => self.large.partition_point(|&other| other <= index),
+        };
+        let direct_sample = sample_for(tick, self.large.len());
         let buckets = rows.flat_map(move |y| {
             (bounds.first_x..=bounds.last_x).flat_map(move |x| {
-                self.buckets[y * GRID_SIZE + x]
-                    .iter()
-                    .copied()
+                let bucket = &self.buckets[y * GRID_SIZE + x];
+                let start = tick.map_or(0, |_| bucket.partition_point(|&other| other <= index));
+                let sample = sample_for(tick, bucket.len());
+                rotating_window(start, bucket.len(), sample)
+                    .map(move |slot| bucket[slot])
                     .filter(move |&other| {
                         let other_bounds = self.bounds[other];
                         // Visiting only the first shared bucket avoids materializing pairs
@@ -115,7 +162,79 @@ impl SpatialGrid {
             })
         });
         buckets
-            .chain(direct.map(move |i| if bounds.is_large() { i } else { self.large[i] }))
+            .chain(
+                rotating_window(direct_start, direct_end, direct_sample)
+                    .map(move |i| if is_large { i } else { self.large[i] }),
+            )
             .filter(move |&other| other != index && bounds.overlaps(self.bounds[other]))
+    }
+}
+
+fn sample_for(tick: Option<u32>, occupants: usize) -> Option<(u32, usize)> {
+    tick.filter(|_| occupants > CROWDED_BUCKET).map(|tick| {
+        let count = if occupants > PACKED_BUCKET {
+            PACKED_SAMPLE
+        } else {
+            CROWD_SAMPLE
+        };
+        (tick, count)
+    })
+}
+
+fn rotating_window(
+    start: usize,
+    end: usize,
+    sample: Option<(u32, usize)>,
+) -> impl Iterator<Item = usize> {
+    let available = end - start;
+    let (count, offset) = match sample {
+        Some((tick, count)) if available > count => (
+            count,
+            ((u64::from(tick) * count as u64) % available as u64) as usize,
+        ),
+        _ => (available, 0),
+    };
+    (0..count).map(move |i| {
+        let slot = start + offset + i;
+        if slot < end { slot } else { slot - available }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crowded_collision_samples_rotate_without_losing_biological_candidates() {
+        let mut grid = SpatialGrid::new();
+        let position = Position {
+            x: 500.,
+            y: 500.,
+            angle: 0.,
+        };
+        let count = CROWDED_BUCKET + 12;
+        for _ in 0..count {
+            grid.insert(&[position; 3], 18.);
+        }
+
+        assert_eq!(
+            grid.candidates(0).collect::<Vec<_>>(),
+            (1..count).collect::<Vec<_>>()
+        );
+        let first = grid.collision_candidates(0, 0).collect::<Vec<_>>();
+        let second = grid.collision_candidates(0, 1).collect::<Vec<_>>();
+        assert_eq!(first, (1..=CROWD_SAMPLE).collect::<Vec<_>>());
+        assert_eq!(
+            second,
+            (CROWD_SAMPLE + 1..=2 * CROWD_SAMPLE).collect::<Vec<_>>()
+        );
+
+        let mut connected = vec![false; count];
+        let crowds = grid.connect_crowds(|a, b| {
+            assert_eq!(a, 0);
+            connected[b] = true;
+        });
+        assert!(!crowds.is_empty());
+        assert!(connected[1..].iter().all(|&value| value));
     }
 }

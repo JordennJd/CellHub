@@ -88,8 +88,14 @@ struct Body {
     position: Position,
     cell: Cell,
     genome: Genome,
-    mode: Mode,
+    radius: f32,
     gamete: Option<GameteContact>,
+}
+
+impl Body {
+    fn mode(&self) -> &Mode {
+        self.genome.mode(self.cell.mode)
+    }
 }
 
 fn hybrid(a: &Body, b: &Body) -> Genome {
@@ -113,19 +119,19 @@ fn hybrid(a: &Body, b: &Body) -> Genome {
     }
     // Both inherited developmental programs are reachable from the founding
     // mode, while their internal references retain their original meaning.
-    modes[a.mode.offspring_mode].child_b = offset + b.mode.offspring_mode;
+    modes[a.mode().offspring_mode].child_b = offset + b.mode().offspring_mode;
     Genome::from_modes(modes)
 }
 
 impl Simulation {
     pub(super) fn specialized_contacts(&mut self, step: f32) {
-        let active = self.entities.iter().any(|&(_, entity)| {
-            let (cell, genome) = self
-                .world
-                .query_one_mut::<(&Cell, &Genome)>(entity)
-                .unwrap();
-            matches!(genome.mode(cell.mode).kind, GLUEOCYTE | GAMETE | CILIOCYTE)
-        });
+        let active = self
+            .world
+            .query::<(&Cell, &Genome)>()
+            .iter()
+            .any(|(_, (cell, genome))| {
+                matches!(genome.mode(cell.mode).kind, GLUEOCYTE | GAMETE | CILIOCYTE)
+            });
         if !active {
             return;
         }
@@ -137,69 +143,79 @@ impl Simulation {
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(entity)
                     .unwrap();
-                let mode = *genome.mode(cell.mode);
                 Body {
                     id,
                     entity,
                     position: *position,
                     cell: cell.clone(),
                     genome: genome.clone(),
-                    mode,
-                    gamete: GameteContact::new(cell, &mode, genome.len()),
+                    radius: radius(cell.mass),
+                    gamete: GameteContact::new(cell, genome.mode(cell.mode), genome.len()),
                 }
             })
             .collect();
-        let protected = self.keratin_protection(&HashSet::new());
+        let mut protected = None;
         let mut degrees = self.bond_degrees();
         self.spatial.clear();
         for body in &bodies {
-            self.spatial
-                .insert(&[body.position; 3], radius(body.cell.mass) + 2.);
+            self.spatial.insert(&[body.position; 3], body.radius + 2.);
         }
         let mut added_bonds = BTreeSet::new();
         let mut anchors = Vec::new();
         let mut consumed = BTreeSet::new();
         let mut fusions = Vec::new();
         let mut motion = BTreeMap::<u32, [f32; 3]>::new();
+        let mut candidates = Vec::new();
         for (index, source) in bodies.iter().enumerate() {
             if consumed.contains(&index) {
                 continue;
             }
-            if source.mode.kind == GLUEOCYTE
-                && on_wall(self.boundary, source.position, source.cell.mass)
-            {
+            let mode = source.mode();
+            if mode.kind == GLUEOCYTE && on_wall(self.boundary, source.position, source.cell.mass) {
                 anchors.push(source.entity);
             }
-            if !matches!(source.mode.kind, GLUEOCYTE | GAMETE | CILIOCYTE) {
+            if !matches!(mode.kind, GLUEOCYTE | GAMETE | CILIOCYTE)
+                || source.gamete.is_some_and(|contact| !contact.mature())
+            {
                 continue;
             }
-            let glue_limit = source.mode.max_connections.unwrap_or(5).min(5);
-            let mut candidates: Vec<_> = self.spatial.candidates(index).collect();
+            let glue_limit = mode.max_connections.unwrap_or(5).min(5);
+            let degree = degrees.get(&source.id).copied().unwrap_or(0);
+            if mode.kind == GLUEOCYTE && degree >= glue_limit {
+                continue;
+            }
+            candidates.clear();
+            candidates.extend(self.spatial.candidates(index));
             candidates.sort_unstable();
-            for other in candidates {
-                if consumed.contains(&other) || consumed.contains(&index) {
+            let mut cilia = None;
+            for &other in &candidates {
+                if consumed.contains(&other) {
                     continue;
                 }
                 let target = &bodies[other];
                 let dx = target.position.x - source.position.x;
                 let dy = target.position.y - source.position.y;
                 let distance = libm::hypotf(dx, dy);
-                let contact = radius(source.cell.mass) + radius(target.cell.mass);
+                let contact = source.radius + target.radius;
                 if distance > contact + 2. {
                     continue;
                 }
-                if source.mode.kind == GLUEOCYTE
-                    && !protected.contains(&target.id)
-                    && degrees.get(&source.id).copied().unwrap_or(0) < glue_limit
+                if mode.kind == GLUEOCYTE
+                    && !protected
+                        .get_or_insert_with(|| self.keratin_protection(&HashSet::new()))
+                        .contains(&target.id)
                 {
                     let edge = (source.id.min(target.id), source.id.max(target.id));
                     if !self.bonds.contains(&edge) && added_bonds.insert(edge) {
-                        *degrees.entry(source.id).or_default() += 1;
                         *degrees.entry(target.id).or_default() += 1;
+                        let source_degree = degrees.entry(source.id).or_default();
+                        *source_degree += 1;
+                        if *source_degree >= glue_limit {
+                            break;
+                        }
                     }
                 }
                 if let (Some(a), Some(b)) = (source.gamete, target.gamete)
-                    && a.mature()
                     && b.mature()
                     && let Some(scale) = a.fusion_scale(b)
                     && distance <= contact * scale
@@ -207,19 +223,18 @@ impl Simulation {
                     consumed.insert(index);
                     consumed.insert(other);
                     fusions.push((index, other));
-                    continue;
+                    break;
                 }
-                if source.mode.kind == CILIOCYTE {
-                    let degree = degrees.get(&source.id).copied().unwrap_or(0);
-                    let (sin, cos) = libm::sincosf(source.position.angle);
+                if mode.kind == CILIOCYTE {
+                    let (sin, cos, left, right) = *cilia.get_or_insert_with(|| {
+                        let (sin, cos) = libm::sincosf(source.position.angle);
+                        let left = controlled_value(&source.cell, mode, CILIA_LEFT_TARGET, degree);
+                        let right =
+                            controlled_value(&source.cell, mode, CILIA_RIGHT_TARGET, degree);
+                        (sin, cos, left, right)
+                    });
                     let side = (-dx * sin + dy * cos) * if source.cell.mirrored { -1. } else { 1. };
-                    let target_key = if side >= 0. {
-                        CILIA_LEFT_TARGET
-                    } else {
-                        CILIA_RIGHT_TARGET
-                    };
-                    let speed = controlled_value(&source.cell, &source.mode, target_key, degree)
-                        .clamp(-60., 60.);
+                    let speed = if side >= 0. { left } else { right };
                     let amount = speed * step * 0.12 / self.settings.viscosity;
                     let shift = motion.entry(target.id).or_default();
                     shift[0] -= cos * amount;
@@ -245,7 +260,7 @@ impl Simulation {
             let id = self.next_id;
             self.next_id += 1;
             let genome = hybrid(a, b);
-            let mut cell = Cell::new(id, a.mode.offspring_mode);
+            let mut cell = Cell::new(id, a.mode().offspring_mode);
             cell.class = crate::components::CLASS_HYBRID;
             cell.mass = (a.cell.mass + b.cell.mass).min(1_000_000.);
             cell.recoil = std::array::from_fn(|axis| {
@@ -253,7 +268,7 @@ impl Simulation {
                     .clamp(-MAX_RECOIL_MOMENTUM, MAX_RECOIL_MOMENTUM)
             });
             cell.nitrogen = (a.cell.nitrogen + b.cell.nitrogen).min(1.);
-            cell.telomeres = a.mode.telomeres;
+            cell.telomeres = a.mode().telomeres;
             cell.toxin = (a.cell.toxin + b.cell.toxin) * 0.5;
             cell.injury = (a.cell.injury + b.cell.injury) * 0.5;
             cell.signals = std::array::from_fn(|channel| {

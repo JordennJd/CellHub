@@ -79,15 +79,23 @@ struct CellOut {
     // id,x,y,radius, kind,mass,age,generation, mutations,angle,RGB,mirrored.
     var o:CellOut;
     let radius=a.w;
-    let extent=max(radius*2.+2./camera.zoom,radius+9./camera.zoom);
+    let kind=u32(b.x);
+    let selected=a.x==camera.selected;
+    // Bounds of the rotated silhouettes in cell_shapes.wgsl. Reserve the
+    // selection ring's pixel margin only for the selected cell.
+    let shape_radii=array<f32,18>(1.,1.,2.05,1.23,1.,1.29,1.44,1.,1.,1.15,1.45,1.28,1.,1.,1.,1.,1.,1.28);
+    var shape_radius=radius*shape_radii[min(kind,17u)];
+    if c.x>0. {shape_radius=max(shape_radius,radius*0.78+2.);}
+    let normal_extent=shape_radius+2./camera.zoom;
+    let extent=select(normal_extent,max(normal_extent,radius+9./camera.zoom),selected);
     o.local=corner(v)*extent;
     o.world=a.yz+o.local;
     o.pos=project(o.world);
     o.radius=radius;
-    o.kind=u32(b.x);
+    o.kind=kind;
     o.angle=c.y;
     o.mutations=c.x;
-    o.selected=u32(a.x==camera.selected);
+    o.selected=u32(selected);
     o.custom_color=c.z;
     o.material_phase = fract(vec2f(0.38197, 0.61803) * f32(u32(abs(a.x)) % 251u));
     o.handedness = select(1., -1., c.w > 0.);

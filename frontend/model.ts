@@ -497,6 +497,8 @@ export type Frame = {
   cells: Float32Array;
   links: Uint32Array;
   terrain: Float32Array;
+  /** Increments when shared terrain, nitrates or covered food are updated in place. */
+  terrainRevision?: number;
   stats: Float32Array;
   nitrogen?: Float32Array;
   nitrates?: Float32Array;

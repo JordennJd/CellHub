@@ -7,7 +7,7 @@ use crate::cell_types::{
     LIPOCYTE, NEUROCYTE, SECROCYTE, SENSEOCYTE, STEREOCYTE, blocks_signals, is_motile,
 };
 use crate::components::{Cell, Position, SIZE, radius};
-use crate::genome::Genome;
+use crate::genome::{Genome, Mode};
 use crate::terrain::Tile;
 #[cfg(test)]
 use crate::terrain::tile_index;
@@ -98,38 +98,60 @@ fn field_sample(tiles: &[Tile], p: Position, sensor: u8, boundary: Boundary) -> 
     }
 }
 
-fn color_matches(source: &Body, target: &Body) -> bool {
-    let mode = source.genome.mode(source.cell.mode);
-    if mode.target_color[0] < 0. {
+fn color_matches(source: &Mode, target: &Mode) -> bool {
+    if source.target_color[0] < 0. {
         return true;
     }
-    let color = target.genome.mode(target.cell.mode).resolved_color();
-    color
+    target
+        .resolved_color()
         .iter()
-        .zip(mode.target_color)
-        .all(|(a, b)| (a - b).abs() <= mode.sense_tolerance)
+        .zip(source.target_color)
+        .all(|(a, b)| (a - b).abs() <= source.sense_tolerance)
+}
+
+fn mimic_sensor(secretion: u8) -> Option<u8> {
+    match secretion {
+        3 => Some(1),
+        4 => Some(2),
+        5 => Some(0),
+        6 => Some(4),
+        _ => None,
+    }
 }
 
 fn stimulus(
     index: usize,
     bodies: &[Body],
     tiles: &[Tile],
-    grid: &PointGrid,
+    grid: Option<&PointGrid>,
     boundary: Boundary,
     degree: &BTreeMap<u32, usize>,
 ) -> f32 {
     let body = &bodies[index];
     let mode = body.genome.mode(body.cell.mode);
     let stereo = mode.kind == STEREOCYTE;
-    let range = match mode.sensor {
-        SENSE_LIPOCYTES | SENSE_MOTILE_CELLS => (20. + mode.speed * 2.).clamp(20., 180.),
-        _ => SENSE_RANGE,
+    if mode.sensor == 5 {
+        let speed = if stereo {
+            0.
+        } else {
+            controlled_value(
+                &body.cell,
+                mode,
+                SPEED_TARGET,
+                degree.get(&body.cell.id).copied().unwrap_or(0),
+            ) / 60.
+        };
+        return speed * mode.sensor_gain;
+    }
+    let side = if stereo {
+        let hand = if body.cell.mirrored { -1. } else { 1. };
+        [
+            -libm::sinf(body.position.angle) * hand,
+            libm::cosf(body.position.angle) * hand,
+        ]
+    } else {
+        [0.; 2]
     };
-    let hand = if body.cell.mirrored { -1. } else { 1. };
-    let side = [
-        -libm::sinf(body.position.angle) * hand,
-        libm::cosf(body.position.angle) * hand,
-    ];
     let mut result = if stereo {
         let offset = |sign: f32| Position {
             x: (body.position.x + side[0] * 32. * sign).clamp(0., boundary.size()),
@@ -141,15 +163,13 @@ fn stimulus(
     } else {
         field_sample(tiles, body.position, mode.sensor, boundary)
     };
-    if mode.sensor == 5 {
-        let speed = controlled_value(
-            &body.cell,
-            mode,
-            SPEED_TARGET,
-            degree.get(&body.cell.id).copied().unwrap_or(0),
-        ) / 60.;
-        result = if stereo { 0. } else { speed };
-    }
+    let Some(grid) = grid else {
+        return result * mode.sensor_gain;
+    };
+    let range = match mode.sensor {
+        SENSE_LIPOCYTES | SENSE_MOTILE_CELLS => (20. + mode.speed * 2.).clamp(20., 180.),
+        _ => SENSE_RANGE,
+    };
     for other in grid.nearby(body.position, range) {
         if other == index {
             continue;
@@ -165,17 +185,10 @@ fn stimulus(
             SENSE_LIPOCYTES => target_mode.kind == LIPOCYTE,
             SENSE_MOTILE_CELLS => is_motile(target_mode.kind),
             _ => false,
-        } && color_matches(body, target);
-        let mimic_sensor = match target_mode.secretion {
-            3 => 1,
-            4 => 2,
-            5 => 0,
-            6 => 4,
-            _ => u8::MAX,
-        };
+        } && color_matches(mode, target_mode);
         let mimic = target_mode.kind == SECROCYTE
             && target.cell.nitrogen >= SECRETION_NITROGEN
-            && mimic_sensor == mode.sensor;
+            && mimic_sensor(target_mode.secretion) == Some(mode.sensor);
         if !(cells || mimic) {
             continue;
         }
@@ -216,6 +229,8 @@ impl Simulation {
         if !active {
             return;
         }
+        let mut mimic_sensors = [false; 7];
+        let mut has_protease = false;
         let bodies: Vec<_> = self
             .entities
             .iter()
@@ -224,6 +239,13 @@ impl Simulation {
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(entity)
                     .unwrap();
+                let mode = g.mode(c.mode);
+                if mode.kind == SECROCYTE && c.nitrogen >= SECRETION_NITROGEN {
+                    if let Some(sensor) = mimic_sensor(mode.secretion) {
+                        mimic_sensors[usize::from(sensor)] = true;
+                    }
+                    has_protease |= mode.secretion == 2;
+                }
                 Body {
                     entity,
                     position: *p,
@@ -253,8 +275,10 @@ impl Simulation {
         for &(a, b) in &self.bonds {
             let ai = index(a);
             let bi = index(b);
-            neighbors.entry(a).or_default().push(b);
-            neighbors.entry(b).or_default().push(a);
+            if has_protease {
+                neighbors.entry(a).or_default().push(b);
+                neighbors.entry(b).or_default().push(a);
+            }
             let share = f64::from((step * 1.5).min(0.5)) / degree[&a].max(degree[&b]) as f64;
             if !blocks_signals(bodies[ai].kind()) && !blocks_signals(bodies[bi].kind()) {
                 for channel in 0..SIGNAL_CHANNELS {
@@ -275,16 +299,18 @@ impl Simulation {
             }
             state.toxin = (f64::from(state.toxin) + delta[SIGNAL_CHANNELS]).max(0.) as f32;
         }
-        let grid = PointGrid::new(&bodies);
-        let largest_radius = bodies
-            .iter()
-            .map(|body| radius(body.cell.mass))
-            .fold(0., f32::max);
+        let mut grid = None;
         for (i, body) in bodies.iter().enumerate() {
             let mode = body.genome.mode(body.cell.mode);
             if matches!(mode.kind, STEREOCYTE | SENSEOCYTE) {
+                let senses_neighbors =
+                    matches!(mode.sensor, 3 | SENSE_LIPOCYTES | SENSE_MOTILE_CELLS)
+                        || mimic_sensors.get(usize::from(mode.sensor)) == Some(&true);
+                let nearby =
+                    senses_neighbors.then(|| &*grid.get_or_insert_with(|| PointGrid::new(&bodies)));
                 updated[i].signals[usize::from(mode.signal_channel)] =
-                    stimulus(i, &bodies, &self.tiles, &grid, self.boundary, &degree).clamp(-8., 8.);
+                    stimulus(i, &bodies, &self.tiles, nearby, self.boundary, &degree)
+                        .clamp(-8., 8.);
             } else if mode.kind == NEUROCYTE {
                 for channel in 0..SIGNAL_CHANNELS {
                     updated[i].signals[channel] = controlled_value(
@@ -296,7 +322,8 @@ impl Simulation {
                 }
             }
         }
-        let protected = self.keratin_protection(&HashSet::new());
+        let mut protected = None;
+        let mut radii = None;
         let mut broken = BTreeSet::new();
         for (i, source) in bodies.iter().enumerate() {
             let mode = source.genome.mode(source.cell.mode);
@@ -314,6 +341,9 @@ impl Simulation {
             }
             updated[i].nitrogen = (updated[i].nitrogen - rate * step * 0.02).max(0.);
             updated[i].mass = (updated[i].mass - rate * step * 0.005).max(0.);
+            if mimic_sensor(mode.secretion).is_some() {
+                continue;
+            }
             if mode.secretion == 1 {
                 let tile = &mut self.tiles[crate::terrain::index(
                     source.position.x,
@@ -327,19 +357,28 @@ impl Simulation {
                 tile.food += stripped;
             }
             let mut contact_ids = BTreeSet::new();
+            let grid = grid.get_or_insert_with(|| PointGrid::new(&bodies));
+            let (radii, largest_radius) = radii.get_or_insert_with(|| {
+                let radii: Vec<_> = bodies.iter().map(|body| radius(body.cell.mass)).collect();
+                let largest = radii.iter().copied().fold(0., f32::max);
+                (radii, largest)
+            });
             // Normal cells fit into neighboring buckets. Very large cells use
             // the full map range so radius-based contacts cannot be skipped.
-            let range = (radius(source.cell.mass) + largest_radius + 2.).max(SENSE_RANGE);
+            let range = (radii[i] + *largest_radius + 2.).max(SENSE_RANGE);
             for j in grid.nearby(source.position, range) {
                 if i == j {
                     continue;
                 }
                 let target = &bodies[j];
-                let reach = radius(source.cell.mass) + radius(target.cell.mass) + 2.;
+                let reach = radii[i] + radii[j] + 2.;
                 if distance_squared(source.position, target.position) > reach * reach {
                     continue;
                 }
-                let shielded = protected.contains(&target.cell.id);
+                let shielded = mode.secretion <= 2
+                    && protected
+                        .get_or_insert_with(|| self.keratin_protection(&HashSet::new()))
+                        .contains(&target.cell.id);
                 match mode.secretion {
                     0 if !shielded => updated[j].toxin += rate * step * 0.28,
                     1 if !shielded => updated[j].injury += rate * step * 0.14,

@@ -68,13 +68,21 @@ export function RustWorldView(props: RustWorldViewProps) {
         return;
       }
       const field = layer === "nitrates" ? next.nitrates : layer === "covered" ? next.coveredFood : null;
-      const terrain = field ? next.terrain.slice() : next.terrain;
-      if (field) {
-        for (let tile = 0; tile < terrain.length / 4; tile++) {
-          terrain[tile * 4 + 2] = field[tile] ?? 0;
+      const previous = appliedFrame.current;
+      const previousField = layer === "nitrates" ? previous?.nitrates : layer === "covered" ? previous?.coveredFood : null;
+      const cells = animator.sample(performance.now()) ?? next.cells;
+      if (!force && layer === appliedProjectionLayer.current && next.terrain === previous?.terrain
+          && next.terrainRevision === previous.terrainRevision && field === previousField) {
+        instance.set_geometry(cells, next.links);
+      } else {
+        const terrain = field ? next.terrain.slice() : next.terrain;
+        if (field) {
+          for (let tile = 0; tile < terrain.length / 4; tile++) {
+            terrain[tile * 4 + 2] = field[tile] ?? 0;
+          }
         }
+        instance.set_frame(cells, terrain, next.links);
       }
-      instance.set_frame(animator.sample(performance.now()) ?? next.cells, terrain, next.links);
       appliedFrame.current = next;
       appliedProjectionLayer.current = layer;
     } catch (e) {
