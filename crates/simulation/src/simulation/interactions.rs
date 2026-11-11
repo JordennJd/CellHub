@@ -226,23 +226,32 @@ fn viral_fragment(genome: &Genome, root: usize) -> Genome {
         frontier = next;
     }
     let reference = |index| seen.get(&index).copied().unwrap_or(0);
-    let modes = indices
-        .into_iter()
-        .map(|index| {
-            let mut mode = *genome.mode(index);
-            mode.child_a = reference(mode.child_a);
-            mode.child_b = reference(mode.child_b);
-            mode.transition_a = reference(mode.transition_a);
-            mode.transition_b = reference(mode.transition_b);
-            mode.offspring_mode = reference(mode.offspring_mode);
-            mode.compatible_mode = reference(mode.compatible_mode);
-            if mode.virus_copy_from != usize::MAX {
-                mode.virus_copy_from = reference(mode.virus_copy_from);
-            }
-            mode
-        })
-        .collect();
-    Genome::from_modes(modes)
+    let copy_fragment = |source: &Genome| {
+        let modes = indices
+            .iter()
+            .map(|&index| {
+                let mut mode = *source.mode(index);
+                mode.child_a = reference(mode.child_a);
+                mode.child_b = reference(mode.child_b);
+                mode.transition_a = reference(mode.transition_a);
+                mode.transition_b = reference(mode.transition_b);
+                mode.offspring_mode = reference(mode.offspring_mode);
+                mode.compatible_mode = reference(mode.compatible_mode);
+                if mode.virus_copy_from != usize::MAX {
+                    mode.virus_copy_from = reference(mode.virus_copy_from);
+                }
+                mode
+            })
+            .collect();
+        Genome::from_modes(modes)
+    };
+    let expressed = copy_fragment(genome);
+    if let Some(inherited) = genome.inherited_genome() {
+        // Keep the donor's transferred slots identical in both genomes.
+        expressed.with_inherited(copy_fragment(&inherited))
+    } else {
+        expressed
+    }
 }
 
 fn segment_distance_squared(a: &[Position; 3], b: &[Position; 3], start: usize) -> f32 {
@@ -617,7 +626,8 @@ mod tests {
         modes[3].child_b = 6;
         modes[4].child_a = 6;
         modes[4].child_b = 7;
-        let copied = viral_fragment(&Genome::from_modes(modes), 2);
+        let donor = Genome::from_modes(modes.clone());
+        let copied = viral_fragment(&donor, 2);
         assert_eq!(copied.len(), 6);
         assert_eq!(copied.mode(0).kind, 2);
         assert_eq!(copied.mode(0).child_a, 1);
@@ -633,6 +643,15 @@ mod tests {
                     && mode.child_b < copied.len()
                     && mode.transition_a < copied.len())
         );
+
+        modes[2].kind = 7;
+        modes[2].child_a = 7;
+        let donor = donor.with_inherited(Genome::from_modes(modes));
+        let infected = viral_fragment(&donor, 2);
+        assert_eq!(infected.values(), copied.values());
+        let offspring = infected.offspring();
+        assert_eq!(offspring.mode(0).kind, 7);
+        assert_eq!(offspring.mode(0).child_a, 5);
     }
 
     #[test]

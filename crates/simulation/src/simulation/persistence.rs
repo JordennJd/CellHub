@@ -8,8 +8,8 @@ use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, norm
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// v9 combines rectangular dimensions with the v8 campaign owner class.
-const VERSION: u32 = 9;
+/// v10 also stores pending heritable genomes for mutated cells.
+const VERSION: u32 = 10;
 
 fn is_main_v4(values: &[f64]) -> bool {
     // The deployed v4 writes the tile count immediately after fluid density.
@@ -131,24 +131,32 @@ impl Simulation {
         cells.sort_by_key(|(_, c, _)| c.id);
         let mut genome_ids = BTreeMap::new();
         let mut genomes = Vec::new();
-        let mut references = Vec::with_capacity(cells.len());
-        for (_, _, genome) in &cells {
+        let mut intern = |genome: &Genome| {
             let genes = genome.values();
             let key = genes.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
             let next_id = genomes.len();
-            let id = *genome_ids.entry(key).or_insert_with(|| {
+            *genome_ids.entry(key).or_insert_with(|| {
                 genomes.push(genes);
                 next_id
-            });
-            references.push(id);
-        }
+            })
+        };
+        let references: Vec<_> = cells
+            .iter()
+            .map(|(_, _, genome)| {
+                let id = intern(genome);
+                let inherited = genome
+                    .inherited_genome()
+                    .map_or(0, |genome| intern(&genome) + 1);
+                (id, inherited)
+            })
+            .collect();
         values.push(genomes.len() as f64);
         for genes in genomes {
             values.push(genes.len() as f64);
             values.extend(genes.into_iter().map(f64::from));
         }
         values.push(cells.len() as f64);
-        for ((p, c, _), genome_id) in cells.into_iter().zip(references) {
+        for ((p, c, _), (genome_id, inherited)) in cells.into_iter().zip(references) {
             values.extend([
                 c.id as f64,
                 p.x as f64,
@@ -178,6 +186,7 @@ impl Simulation {
                 genome_id as f64,
                 f64::from(c.recoil[0]),
                 f64::from(c.recoil[1]),
+                inherited as f64,
             ]);
         }
         values.push(self.bonds.len() as f64);
@@ -188,11 +197,9 @@ impl Simulation {
     }
 
     pub(super) fn restore_checked(&mut self, values: &[f64]) -> Result<(), String> {
-        let level = self.level.take();
-        let population_limit = self.population_limit;
         let mut replacement = Self::decode_state(values)?;
-        replacement.level = level;
-        replacement.population_limit = population_limit;
+        replacement.level = self.level.take();
+        replacement.population_limit = self.population_limit;
         // Old saves did not encode geometry. Keep their migration path into
         // the current dish. Current saves restore geometry and coordinates as-is.
         if values[0] < 4. || is_main_v4(values) {
@@ -411,9 +418,10 @@ impl Simulation {
                 return Err("Запас нитратов превышает ёмкость среды".into());
             }
         }
+        let genome_limit = if version >= 10 { 2 * LIMIT } else { LIMIT } as u32;
         let mut genomes = Vec::new();
         if version >= 5 {
-            let count = input.integer(LIMIT as u32)?;
+            let count = input.integer(genome_limit)?;
             for _ in 0..count {
                 genomes.push(read_genome(&mut input, version, false)?);
             }
@@ -452,7 +460,7 @@ impl Simulation {
                 }
                 cell.toxin = input.float(0., 100.)? / 50.;
             }
-            let genome = if version >= 5 {
+            let mut genome = if version >= 5 {
                 for signal in &mut cell.signals {
                     *signal = input.float(-1000., 1000.)?;
                 }
@@ -471,7 +479,7 @@ impl Simulation {
                         return Err("Некорректный класс клетки в сохранении".into());
                     }
                 }
-                let id = input.integer(LIMIT as u32)? as usize;
+                let id = input.integer(genome_limit)? as usize;
                 genomes
                     .get(id)
                     .cloned()
@@ -486,6 +494,19 @@ impl Simulation {
                         return Err("Импульс клетки вне допустимого диапазона".into());
                     }
                     *component = value as f32;
+                }
+            }
+            if version >= 10 {
+                let reference = input.integer(genome_limit)?;
+                if let Some(index) = reference.checked_sub(1) {
+                    let inherited = genomes
+                        .get(index as usize)
+                        .cloned()
+                        .ok_or("Некорректная ссылка на наследуемый геном")?;
+                    if inherited.len() != genome.len() {
+                        return Err("Число режимов наследуемого генома не совпадает".into());
+                    }
+                    genome = genome.with_inherited(inherited);
                 }
             }
             if cell.mode >= genome.len() {
@@ -559,6 +580,7 @@ mod tests {
         }
         let current = classic.encode_state();
         let mut recoil_v6 = current.clone();
+        recoil_v6.remove(recoil_v6.len() - 2); // v6 has no inherited genome reference
         // v8 cell records carry the owner class after `anchored`; v6 does not.
         recoil_v6.remove(recoil_v6.len() - 5);
         recoil_v6[0] = 6.;
@@ -576,6 +598,7 @@ mod tests {
         chaos.spawn(5000., 3000., 0, &genes.values()).unwrap();
         let current = chaos.encode_state();
         let mut chaos_v6 = current.clone();
+        chaos_v6.remove(chaos_v6.len() - 2);
         // One cell, no bonds: old chaos v6 lacks both the owner class and the
         // two recoil components.
         chaos_v6.remove(chaos_v6.len() - 5);
@@ -759,6 +782,27 @@ mod tests {
     }
 
     #[test]
+    fn v9_rectangular_checkpoint_preserves_the_recorded_cell_genome() {
+        let mut sim = Simulation::new(42);
+        sim.set_rectangular_dish(6144., 3072.).unwrap();
+        let genes = Genome::from_modes(vec![Mode {
+            kind: NEUROCYTE,
+            ..Mode::default()
+        }])
+        .values();
+        sim.spawn_checked(6000., 600., 0, &genes).unwrap();
+        let current = sim.encode_state();
+        let mut rectangular_v9 = current.clone();
+        rectangular_v9[0] = 9.;
+        rectangular_v9.remove(rectangular_v9.len() - 2);
+
+        let mut restored = Simulation::new(0);
+        restored.restore_checked(&rectangular_v9).unwrap();
+        assert_eq!(restored.encode_state(), current);
+        assert_eq!(restored.world_width(), 6144.);
+    }
+
+    #[test]
     fn recoil_round_trips_and_invalid_momentum_does_not_replace_the_world() {
         let mut sim = Simulation::new(42);
         let genes = Genome::from_modes(vec![Mode::default()]).values();
@@ -784,9 +828,9 @@ mod tests {
         );
         drop(restored_cell);
 
-        // With one unbonded cell, the last values are recoil X/Y and bond count.
+        // The record ends with recoil X/Y, inherited genome reference, then bond count.
         let above_limit = 2. * f64::from(MAX_RECOIL_MOMENTUM);
-        for index in (saved.len() - 3)..(saved.len() - 1) {
+        for index in (saved.len() - 4)..(saved.len() - 2) {
             for invalid in [
                 f64::NAN,
                 f64::INFINITY,

@@ -303,10 +303,11 @@ impl Simulation {
             .map_err(|error| JsError::new(&error))
     }
 
+    /// Export the genome this cell will pass to its offspring.
     pub fn genome(&self, id: u32) -> Vec<f32> {
         for (_, (c, g)) in self.world.query::<(&Cell, &Genome)>().iter() {
             if c.id == id {
-                return g.values();
+                return g.offspring().values();
             }
         }
         Vec::new()

@@ -1002,21 +1002,78 @@ fn point_only_mutation_changes_values_without_changing_cell_types() {
             .world
             .query::<&crate::genome::Genome>()
             .iter()
-            .all(|(_, g)| g.mode(0).kind == 4)
+            .all(|(_, g)| g.mode(0).kind == 4 && g.offspring().mode(0).kind == 4)
     );
     assert!(
         point
             .world
             .query::<&crate::genome::Genome>()
             .iter()
-            .any(|(_, g)| g.mode(0).threshold != 4.)
+            .any(|(_, g)| g.mode(0).threshold == 4. && g.offspring().mode(0).threshold != 4.)
     );
     assert!(
         full.world
             .query::<&crate::genome::Genome>()
             .iter()
-            .any(|(_, g)| g.mode(0).kind != 4)
+            .any(|(_, g)| g.mode(0).kind == 4 && g.offspring().mode(0).kind != 4)
     );
+}
+
+#[test]
+fn radiation_mutation_is_expressed_at_birth_and_survives_a_checkpoint() {
+    use crate::cell_types::{PHAGOCYTE, PHOTOCYTE};
+    use crate::genome::{Genome, Mode};
+
+    let mut sim = quiet_world();
+    let genes = Genome::from_modes(vec![Mode {
+        threshold: 8.,
+        speed: 0.,
+        ..Mode::default()
+    }]);
+    let id = sim.spawn_checked(300., 300., 0, &genes.values()).unwrap();
+    for tile in &mut sim.tiles {
+        tile.radiation = 5.;
+    }
+    for _ in 0..1200 {
+        sim.advance(1);
+        if sim.snapshot()[8] > 0. {
+            break;
+        }
+    }
+    let parent = sim.snapshot();
+    assert_eq!(parent.len(), 12);
+    assert_eq!(parent[0], id as f32);
+    assert_eq!(parent[4], f32::from(PHOTOCYTE));
+    assert_eq!(parent[8], 1.);
+    assert_eq!(
+        sim.chunk_snapshot(0, 0, 512.).cells[4],
+        f32::from(PHOTOCYTE)
+    );
+    assert_eq!(sim.genome(id)[2], f32::from(PHAGOCYTE));
+
+    let state = sim.encode_state();
+    let mut restored = quiet_world();
+    restored.restore_checked(&state).unwrap();
+    assert_eq!(restored.encode_state(), state);
+    assert_eq!(restored.snapshot(), parent);
+    for world in [&mut sim, &mut restored] {
+        for tile in &mut world.tiles {
+            tile.radiation = 0.;
+        }
+        let mut parent = world.world.get::<&mut Cell>(entity(world, id)).unwrap();
+        parent.mass = 10.;
+        parent.nitrogen = 1.;
+        parent.age = MIN_DIVISION_AGE;
+        drop(parent);
+        world.advance(1);
+        let cells = world.snapshot();
+        assert_eq!(cells.len(), 24);
+        for daughter in cells.chunks_exact(12) {
+            assert_eq!(daughter[4], f32::from(PHAGOCYTE));
+            assert_eq!(daughter[7], 1.);
+        }
+    }
+    assert_eq!(restored.encode_state(), sim.encode_state());
 }
 
 #[test]

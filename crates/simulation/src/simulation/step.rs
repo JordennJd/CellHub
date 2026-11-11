@@ -47,8 +47,10 @@ impl Simulation {
             {
                 let (p, c, g) = self
                     .world
-                    .query_one_mut::<(&mut Position, &mut Cell, &mut Genome)>(e)
+                    .query_one_mut::<(&Position, &Cell, &Genome)>(e)
                     .unwrap();
+                let offspring = g.offspring();
+                let inherited_mode = offspring.mode(c.mode);
                 // parent is replaced by two daughters
                 let total = c.mass;
                 let mut a = c.clone();
@@ -90,8 +92,8 @@ impl Simulation {
                 b.nitrogen = a.nitrogen;
                 a.class = c.class;
                 b.class = c.class;
-                a.mode = m.child_a;
-                b.mode = m.child_b;
+                a.mode = inherited_mode.child_a;
+                b.mode = inherited_mode.child_b;
                 a.age = 0.;
                 b.age = 0.;
                 a.anchored = false;
@@ -147,8 +149,8 @@ impl Simulation {
                     y: by,
                     angle: angle + std::f32::consts::PI + m.child_angle_b * handedness,
                 };
-                children.push((pa, a, g.clone()));
-                children.push((pb, b, g.clone()));
+                children.push((pa, a, offspring.clone()));
+                children.push((pb, b, offspring));
                 dead.push(e);
                 continue;
             }

@@ -142,33 +142,66 @@ impl Mode {
 }
 
 #[derive(Clone)]
-pub(crate) struct Genome(Arc<Vec<Mode>>);
+pub(crate) struct Genome {
+    expressed: Arc<Vec<Mode>>,
+    inherited: Option<Arc<Vec<Mode>>>,
+}
 
 impl Genome {
     pub(crate) fn from_modes(modes: Vec<Mode>) -> Self {
-        Self(Arc::new(modes))
+        Self {
+            expressed: Arc::new(modes),
+            inherited: None,
+        }
     }
 
     pub(crate) fn cloned_modes(&self) -> Vec<Mode> {
-        self.0.as_ref().clone()
+        self.expressed.as_ref().clone()
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.0.len()
+        self.expressed.len()
     }
 
     pub(crate) fn mode(&self, index: usize) -> &Mode {
-        &self.0[index]
+        &self.expressed[index]
     }
 
+    #[cfg(test)]
     pub(crate) fn modes_mut(&mut self) -> &mut [Mode] {
-        Arc::make_mut(&mut self.0).as_mut_slice()
+        Arc::make_mut(&mut self.expressed).as_mut_slice()
     }
 
-    /// Encode the genome back into the flat float ABI.
+    /// Radiation changes a copy of the genome that the cell passes to offspring.
+    pub(crate) fn inherited_modes_mut(&mut self) -> &mut [Mode] {
+        Arc::make_mut(
+            self.inherited
+                .get_or_insert_with(|| Arc::clone(&self.expressed)),
+        )
+        .as_mut_slice()
+    }
+
+    pub(crate) fn inherited_genome(&self) -> Option<Self> {
+        self.inherited.as_ref().map(|modes| Self {
+            expressed: Arc::clone(modes),
+            inherited: None,
+        })
+    }
+
+    pub(crate) fn with_inherited(mut self, genome: Self) -> Self {
+        debug_assert_eq!(self.len(), genome.len());
+        self.inherited = Some(genome.expressed);
+        self
+    }
+
+    pub(crate) fn offspring(&self) -> Self {
+        self.inherited_genome().unwrap_or_else(|| self.clone())
+    }
+
+    /// Encode the expressed genome into the flat float ABI.
     pub(crate) fn values(&self) -> Vec<f32> {
         let mut output = vec![-5., self.len() as f32];
-        for m in self.0.iter() {
+        for m in self.expressed.iter() {
             output.extend([
                 m.kind as f32,
                 m.threshold,

@@ -119,7 +119,7 @@ impl Simulation {
                 };
                 c.mass += gain - STEP * maintenance;
                 if mutation_roll < t.radiation * STEP * 0.035 {
-                    let modes = g.modes_mut();
+                    let modes = g.inherited_modes_mut();
                     let index =
                         ((mutation_gene * modes.len() as f32) as usize).min(modes.len() - 1);
                     let modes_count = modes.len();

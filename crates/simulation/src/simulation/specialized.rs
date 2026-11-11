@@ -89,9 +89,9 @@ impl Body {
 }
 
 fn hybrid(a: &Body, b: &Body) -> Genome {
-    let mut modes = a.genome.cloned_modes();
+    let mut modes = a.genome.offspring().cloned_modes();
     let offset = modes.len();
-    for mut mode in b.genome.cloned_modes() {
+    for mut mode in b.genome.offspring().cloned_modes() {
         mode.child_a += offset;
         mode.child_b += offset;
         mode.transition_a += offset;
@@ -457,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn gametes_fuse_both_genomes_and_do_not_divide() {
+    fn gametes_fuse_both_inherited_genomes_and_do_not_divide() {
         let mut sim = world();
         let mut gamete = mode(GAMETE);
         gamete.can_divide = true;
@@ -466,6 +466,13 @@ mod tests {
         gamete.telomeres = 3;
         let a = spawn(&mut sim, 500., 500., vec![gamete, mode(0)]);
         let b = spawn(&mut sim, 519., 500., vec![gamete, mode(1)]);
+        for (entity, offspring_kind) in [(a, 2), (b, 4)] {
+            let mut genome = sim.world.get::<&mut Genome>(entity).unwrap();
+            *genome = genome
+                .clone()
+                .with_inherited(Genome::from_modes(vec![mode(0), mode(offspring_kind)]));
+            assert_eq!(genome.mode(0).kind, GAMETE);
+        }
         for entity in [a, b] {
             let mut cell = sim.world.get::<&mut Cell>(entity).unwrap();
             cell.mass = 2.;
@@ -478,8 +485,9 @@ mod tests {
         assert_eq!(cell.mode, 1);
         assert_eq!(cell.telomeres, 3);
         assert_eq!(genome.len(), 4);
-        assert_eq!(genome.mode(1).kind, 0);
-        assert_eq!(genome.mode(3).kind, 1);
+        assert_eq!(genome.mode(1).kind, 2);
+        assert_eq!(genome.mode(3).kind, 4);
+        assert!(genome.inherited_genome().is_none());
         assert_eq!(genome.mode(1).child_b, 3);
         assert!(cell.mass > 3.99);
         assert_eq!(cell.age, 0.);
