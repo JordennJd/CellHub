@@ -37,7 +37,7 @@ pub(super) struct RendererState {
     link_count: u32,
     atlas: wgpu::Texture,
     material: wgpu::Texture,
-    view: [f32; 12],
+    view: [f32; 16],
     dirty: bool,
     destroyed: bool,
     gpu_error: Arc<Mutex<Option<String>>>,
@@ -131,7 +131,7 @@ impl RendererState {
         canvas.set_height(ph);
         surface.configure(&device, &config);
         let view = [
-            width, height, 1536., 1536., 1., 0., -1., 3072., 3072., 3072., 48., 48.,
+            width, height, 1536., 1536., 1., 0., -1., 3072., 3072., 3072., 48., 48., 0., 0., 0., 0.,
         ];
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera"),
@@ -416,6 +416,7 @@ impl RendererState {
         links: &[u32],
         width: f32,
         height: f32,
+        circular: bool,
     ) -> Result<(), JsValue> {
         let columns = (width / 64.) as u32;
         let rows = (height / 64.) as u32;
@@ -435,6 +436,7 @@ impl RendererState {
         self.set_geometry(cells, links)?;
         self.view[7] = height;
         self.view[8..12].copy_from_slice(&[width, height, columns as f32, rows as f32]);
+        self.view[12] = if circular { 1. } else { 0. };
         self.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.terrain,

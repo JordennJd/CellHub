@@ -1,4 +1,4 @@
-struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32, padding: f32, extent: vec4f }
+struct Camera { size: vec2f, center: vec2f, zoom: f32, layer: f32, selected: f32, padding: f32, extent: vec4f, flags: vec4f }
 @group(0) @binding(0) var<uniform> camera: Camera;
 @group(0) @binding(1) var terrain: texture_2d<f32>;
 @group(0) @binding(2) var atlas: texture_2d<f32>;
@@ -19,7 +19,11 @@ fn relative_luminance(color:vec3f)->f32 {
 // Premultiplied alpha compositing, matching the separate original shapes.
 fn over(base:vec4f,color:vec3f,a:f32)->vec4f {return vec4f(color*a,a)+base*(1.-a);}
 fn coverage(distance:f32)->f32 {let aa=max(fwidth(distance),0.001);return 1.-smoothstep(-aa*0.5,aa*0.5,distance);}
-fn dish_distance(world:vec2f)->f32 {let q=abs(world-camera.extent.xy*0.5)-camera.extent.xy*0.5;return length(max(q,vec2f(0.)))+min(max(q.x,q.y),0.);}
+fn dish_distance(world:vec2f)->f32 {
+    let center=camera.extent.xy*0.5;
+    if camera.flags.x>0.5 {return length(world-center)-max(camera.extent.x,camera.extent.y)*0.5;}
+    let q=abs(world-center)-center;return length(max(q,vec2f(0.)))+min(max(q.x,q.y),0.);
+}
 fn grain(uv: vec2f) -> f32 {
     return textureSample(material, material_sampler, uv).r - 0.5;
 }

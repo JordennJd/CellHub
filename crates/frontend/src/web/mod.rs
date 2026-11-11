@@ -143,6 +143,7 @@ impl WorldRenderer {
         links: &[u32],
         width: Option<f32>,
         height: Option<f32>,
+        circular: Option<bool>,
     ) -> Result<(), JsValue> {
         let side = ((terrain.len() / 4) as f32).sqrt() * 64.;
         self.state.borrow_mut().set_frame(
@@ -151,6 +152,7 @@ impl WorldRenderer {
             links,
             width.unwrap_or(side),
             height.unwrap_or(side),
+            circular.unwrap_or(false),
         )?;
         self.signal.request();
         Ok(())

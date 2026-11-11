@@ -28,7 +28,7 @@ function frame() {
   const info = sim.chaos_info(), history = sim.chaos_history(), events = sim.chaos_events();
   ctx.postMessage({
     type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, level, divisions,
-    worldSize: sim.world_size(), worldWidth: sim.world_width(), chaos: info.length ? { info, history, events } : undefined,
+    worldSize: sim.world_size(), worldWidth: sim.world_width(), circular: sim.circular_dish(), chaos: info.length ? { info, history, events } : undefined,
     ...(previewRequestId === undefined ? {} : { previewRequestId }),
   }, [
     info.buffer, history.buffer, events.buffer,

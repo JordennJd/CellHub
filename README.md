@@ -101,5 +101,3 @@ npm run preview     # production-версия после npm run build
 - `frontend/game/`: стартовый экран, лаборатория, связь с симуляцией, условия испытаний, среда, настройки и библиотеки.
 - `frontend/editor/GenomeEditor.tsx` и `GenomePreview.tsx`: редактор режимов и изолированный предпросмотр развития.
 - `docs/architecture.md`: ABI, порядок систем, сетевое расширение и ограничения.
-
-Исходная C++/Emscripten-заготовка (`CMakeLists.txt`, `src/main.cpp`, `web/shell.html`, `scripts/build.sh`) сохранена как legacy и не участвует в новом запуске.

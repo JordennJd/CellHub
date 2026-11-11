@@ -143,6 +143,10 @@ impl Simulation {
     pub fn world_width(&self) -> f32 {
         self.boundary.width()
     }
+    /// Whether the dish is drawn and simulated as a circle.
+    pub fn circular_dish(&self) -> bool {
+        matches!(self.boundary, Boundary::Circle)
+    }
 
     /// Header followed by three clouds (x,y,r,intensity,vx,vy).
     pub fn chaos_info(&self) -> Vec<f64> {

@@ -76,6 +76,7 @@ export function RustWorldView(props: RustWorldViewProps) {
         !force && previous && layer === appliedProjectionLayer.current &&
         next.terrain === previous.terrain && next.terrainRevision === previous.terrainRevision &&
         next.worldWidth === previous.worldWidth && next.worldSize === previous.worldSize &&
+        next.circular === previous.circular &&
         field === previousField
       ) {
         instance.set_geometry(cells, next.links);
@@ -86,7 +87,7 @@ export function RustWorldView(props: RustWorldViewProps) {
             terrain[tile * 4 + 2] = field[tile] ?? 0;
           }
         }
-        instance.set_frame(cells, terrain, next.links, worldWidth, worldSize);
+        instance.set_frame(cells, terrain, next.links, worldWidth, worldSize, next.circular ?? false);
       }
       appliedFrame.current = next;
       appliedProjectionLayer.current = layer;

@@ -511,5 +511,7 @@ export type Frame = {
   previewRequestId?: number;
   worldSize?: number;
   worldWidth?: number;
+  /** The dish is drawn as a circle rather than a square/rectangle. */
+  circular?: boolean;
   chaos?: { info: Float64Array; history: Float32Array; events: Uint32Array };
 };
