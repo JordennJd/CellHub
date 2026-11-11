@@ -1,9 +1,9 @@
 //! Resource uptake, exchange and protection in multicellular organisms.
 
 use super::Simulation;
-use crate::cell_types::{NITROCYTE, protects_neighbours};
-use crate::components::Cell;
-use crate::genome::{Genome, Mode};
+use crate::cell_types::{GAMETE, NITROCYTE, protects_neighbours};
+use crate::components::{Cell, MIN_DIVISION_AGE};
+use crate::genome::{Genome, MAX_MODES, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
 use std::collections::{BTreeMap, HashSet};
@@ -16,6 +16,49 @@ const NITROGEN_UPTAKE: f32 = 0.35;
 // The environment stores a concentration, in units per tile. Cell stores are
 // normalized separately: one full reserve consumes this much concentration.
 const NITRATE_PER_RESERVE: f32 = 0.01;
+
+/// Gamete metadata shared by physical contacts and the subsequent fusion pass.
+#[derive(Clone, Copy)]
+pub(super) struct GameteContact {
+    mode: usize,
+    compatible_mode: usize,
+    legacy_group: Option<u8>,
+    genome_len: usize,
+    mature: bool,
+}
+
+impl GameteContact {
+    pub(super) fn new(cell: &Cell, mode: &Mode, genome_len: usize) -> Option<Self> {
+        (mode.kind == GAMETE).then_some(Self {
+            mode: cell.mode,
+            compatible_mode: mode.compatible_mode,
+            legacy_group: mode.legacy_gamete_group,
+            genome_len,
+            mature: cell.age + 0.000001 >= MIN_DIVISION_AGE,
+        })
+    }
+
+    /// Fusion reach as a fraction of the sum of radii. Age is checked
+    /// separately so potential partners can stay in contact while maturing.
+    pub(super) fn fusion_scale(self, other: Self) -> Option<f32> {
+        if self.genome_len.checked_add(other.genome_len)? > MAX_MODES {
+            return None;
+        }
+        match (self.legacy_group, other.legacy_group) {
+            (None, None) => {
+                let compatible =
+                    self.compatible_mode == other.mode && other.compatible_mode == self.mode;
+                Some(if compatible { 1.03 } else { 0.65 })
+            }
+            (Some(a), Some(b)) if a == b => Some(1.03),
+            _ => None,
+        }
+    }
+
+    pub(super) fn mature(self) -> bool {
+        self.mature
+    }
+}
 
 fn effective_priority(mode: &Mode, mass: f32) -> f64 {
     let base = f64::from(mode.nutrient_priority);

@@ -1,6 +1,9 @@
 //! Deterministic scheduling and contact resolution on disjoint interaction islands.
 
 use super::Simulation;
+use super::biology::GameteContact;
+use super::boundary::Boundary;
+use super::collisions::{CONTACT_PASSES, CONTACT_TRAVEL, CollisionBody};
 use super::spatial::SpatialGrid;
 use crate::cell_types::{DEVOROCYTE, VIROCYTE};
 use crate::components::{Cell, Position, radius};
@@ -8,12 +11,11 @@ use crate::genome::Genome;
 use hecs::Entity;
 #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const ATTACK_RANGE: f32 = 24.;
-const SEPARATION: f32 = 0.3;
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 static THREAD_POOL_READY: AtomicBool = AtomicBool::new(false);
@@ -117,18 +119,22 @@ impl Components {
 
 struct ContactBody {
     entity: Entity,
+    id: u32,
     index: usize,
     kind: u8,
     mass: f32,
     initial_mass: f32,
-    radius: f32,
     cooldown: f32,
     protected: bool,
-    anchored: bool,
     infected_by: Option<Entity>,
     path: [Position; 3],
-    correction: [f32; 2],
-    overlaps: u32,
+    collision: CollisionBody,
+    gamete: Option<GameteContact>,
+}
+
+pub(super) struct ContactMotion {
+    pub(super) path: [Position; 2],
+    pub(super) drive: [f32; 2],
 }
 
 fn viral_fragment(genome: &Genome, root: usize) -> Genome {
@@ -184,34 +190,62 @@ fn segment_distance_squared(a: &[Position; 3], b: &[Position; 3], start: usize) 
     x * x + y * y
 }
 
-impl ContactBody {
-    fn overlap(&mut self, other: &Self) {
-        if self.anchored {
-            return;
+fn solve_collisions(
+    bodies: &mut [ContactBody],
+    slots: &[Option<Slot>],
+    spatial: &SpatialGrid,
+    bonds: &BTreeSet<(u32, u32)>,
+    boundary: Boundary,
+    step: f32,
+) {
+    let island = slots[bodies[0].index].unwrap().island;
+    for pass in 0..CONTACT_PASSES {
+        let mut changed = false;
+        for index in 0..bodies.len() {
+            let source = bodies[index].index;
+            for other in spatial.candidates(source).filter(|&other| other > source) {
+                let Some(slot) = slots[other].filter(|slot| slot.island == island) else {
+                    continue;
+                };
+                let (left, right) = bodies.split_at_mut(slot.index);
+                let (body, target) = (&mut left[index], &mut right[0]);
+                let pair = (body.id, target.id);
+                // A direct joint controls the membrane gap, including active
+                // myocyte compression. Other members can collide normally.
+                if bonds.contains(&pair) {
+                    continue;
+                }
+                let gametes = body.gamete.zip(target.gamete).and_then(|(a, b)| {
+                    a.fusion_scale(b)
+                        .map(|scale| (scale, a.mature() && b.mature()))
+                });
+                // The fusion pass consumes eligible contacts. Other gametes
+                // that can fuse settle at their contact range while maturing.
+                if gametes.is_some_and(|(scale, mature)| {
+                    mature
+                        && body
+                            .collision
+                            .within_contact_range(&target.collision, scale)
+                }) {
+                    continue;
+                }
+                changed |= body.collision.solve(
+                    &mut target.collision,
+                    pair,
+                    step,
+                    pass == 0,
+                    gametes.map(|(scale, _)| scale),
+                    boundary,
+                );
+            }
         }
-        let dx = self.path[2].x - other.path[2].x;
-        let dy = self.path[2].y - other.path[2].y;
-        let distance_squared = dx * dx + dy * dy;
-        let separation = self.radius + other.radius;
-        if distance_squared >= separation * separation {
-            return;
+        if !changed {
+            break;
         }
-        let distance = libm::sqrtf(distance_squared);
-        let (nx, ny) = if distance > 0.0001 {
-            (dx / distance, dy / distance)
-        } else if self.index < other.index {
-            (-1., 0.)
-        } else {
-            (1., 0.)
-        };
-        let push = (separation - distance).min(SEPARATION);
-        self.correction[0] += nx * push;
-        self.correction[1] += ny * push;
-        self.overlaps += 1;
     }
 }
 
-fn solve_contacts(
+fn solve_biology(
     bodies: &mut [ContactBody],
     slots: &[Option<Slot>],
     spatial: &SpatialGrid,
@@ -219,6 +253,9 @@ fn solve_contacts(
 ) {
     let island = slots[bodies[0].index].unwrap().island;
     for index in 0..bodies.len() {
+        if !matches!(bodies[index].kind, VIROCYTE | DEVOROCYTE) {
+            continue;
+        }
         for other in spatial.candidates(bodies[index].index) {
             let Some(slot) = slots[other].filter(|slot| slot.island == island) else {
                 continue;
@@ -230,7 +267,6 @@ fn solve_contacts(
                 let (left, right) = bodies.split_at_mut(index);
                 (&mut right[0], &mut left[slot.index])
             };
-            body.overlap(target);
             let infects = body.kind == VIROCYTE
                 && body.cooldown <= 0.
                 && target.kind != VIROCYTE
@@ -256,7 +292,7 @@ fn solve_contacts(
 }
 
 impl Simulation {
-    pub(super) fn resolve_contacts(&mut self, paths: Vec<[Position; 2]>, step: f32) {
+    pub(super) fn resolve_contacts(&mut self, paths: Vec<ContactMotion>, step: f32) {
         if paths.len() < 2 {
             return;
         }
@@ -267,28 +303,39 @@ impl Simulation {
             .iter()
             .zip(paths)
             .enumerate()
-            .map(|(index, (&(id, entity), [start, driven]))| {
+            .map(|(index, (&(id, entity), motion))| {
                 let (position, cell, genome) = self
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(entity)
                     .unwrap();
+                let [start, driven] = motion.path;
                 let path = [start, driven, *position];
-                let radius = radius(cell.mass);
-                self.spatial.insert(&path, radius.max(ATTACK_RANGE / 2.));
+                let mode = genome.mode(cell.mode);
+                // Solver corrections stay inside these padded swept bounds,
+                // so independent jobs cannot move into another island.
+                self.spatial.insert(
+                    &path,
+                    radius(cell.mass).max(ATTACK_RANGE / 2.) + CONTACT_TRAVEL,
+                );
                 ContactBody {
                     entity,
+                    id,
                     index,
-                    kind: genome.mode(cell.mode).kind,
+                    kind: mode.kind,
                     mass: cell.mass,
                     initial_mass: cell.mass,
-                    radius,
                     cooldown: cell.cooldown,
                     protected: protected.contains(&id),
-                    anchored: cell.anchored,
                     infected_by: None,
                     path,
-                    correction: [0.; 2],
-                    overlaps: 0,
+                    collision: CollisionBody::new(
+                        path,
+                        motion.drive,
+                        cell.recoil,
+                        cell.mass,
+                        cell.anchored,
+                    ),
+                    gamete: GameteContact::new(cell, mode, genome.len()),
                 }
             })
             .collect();
@@ -314,12 +361,14 @@ impl Simulation {
         let (mut islands, slots) = graph.islands(bodies);
         let active = islands.iter().map(Vec::len).sum();
         let spatial = &self.spatial;
+        let bonds = &self.bonds;
+        let boundary = self.boundary;
         for_each_island(&mut islands, active, |bodies| {
-            solve_contacts(bodies, &slots, spatial, 0.08 * step);
+            solve_collisions(bodies, &slots, spatial, bonds, boundary, step);
+            solve_biology(bodies, &slots, spatial, 0.08 * step);
         });
 
         // No job mutates ECS storage. Commit in stable island and cell order.
-        let boundary = self.boundary;
         for body in islands.into_iter().flatten() {
             let infection = body.infected_by.map(|donor| {
                 let (source, genome) = self.world.query_one_mut::<(&Cell, &Genome)>(donor).unwrap();
@@ -336,14 +385,11 @@ impl Simulation {
                 .unwrap();
             cell.mass = body.mass;
             cell.cooldown = body.cooldown;
-            if body.overlaps > 0 || body.mass != body.initial_mass {
-                let count = body.overlaps.max(1) as f32;
-                (position.x, position.y, _) = boundary.constrain(
-                    position.x + body.correction[0] / count,
-                    position.y + body.correction[1] / count,
-                    cell.mass,
-                    12.,
-                );
+            cell.recoil = body.collision.momentum;
+            *position = body.collision.position;
+            if body.mass != body.initial_mass {
+                (position.x, position.y, _) =
+                    boundary.constrain(position.x, position.y, cell.mass, 12.);
             }
             if let Some((infection, fragment)) = infection {
                 *genome = infection;

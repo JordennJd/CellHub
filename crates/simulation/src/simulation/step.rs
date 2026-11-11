@@ -2,6 +2,7 @@
 
 use super::Simulation;
 use super::bonds::{ADHESION_GAP, BondDivision};
+use super::interactions::ContactMotion;
 use crate::components::{Cell, LIMIT, MAX_RECOIL_MOMENTUM, Position, radius};
 use crate::genome::Genome;
 use std::collections::{BTreeMap, HashSet};
@@ -148,7 +149,7 @@ impl Simulation {
                 dead.push(e);
                 continue;
             }
-            paths.push([item.start, item.end]);
+            paths.push(item.motion);
         }
         let removed: HashSet<_> = dead.iter().copied().collect();
         self.deaths += (dead.len() - divisions.len()) as u32;
@@ -159,7 +160,10 @@ impl Simulation {
         for (p, c, g) in children {
             let id = c.id;
             let entity = self.world.spawn((p, c, g));
-            paths.push([p, p]);
+            paths.push(ContactMotion {
+                path: [p; 2],
+                drive: [0.; 2],
+            });
             entities.push((id, entity));
             self.births += 1;
         }
