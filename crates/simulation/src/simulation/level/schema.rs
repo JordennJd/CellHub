@@ -12,10 +12,6 @@ use std::collections::BTreeMap;
 
 pub const LEVEL_SCHEMA: u32 = 1;
 
-fn default_budget() -> u32 {
-    1
-}
-
 fn default_light() -> f32 {
     1.
 }
@@ -213,20 +209,6 @@ impl Level {
             }
         }
         Ok(())
-    }
-
-    pub fn genome_values(&self, index: usize) -> Result<Vec<f32>, String> {
-        self.genomes
-            .get(index)
-            .ok_or_else(|| "Геном уровня не найден".to_owned())?
-            .to_genome()
-            .map(|genome| genome.values())
-    }
-
-    pub fn demo_time_limit(&self) -> f32 {
-        self.test
-            .max_seconds
-            .unwrap_or_else(|| (self.conditions.max_time.unwrap_or(600.) + 60.).min(3600.))
     }
 }
 

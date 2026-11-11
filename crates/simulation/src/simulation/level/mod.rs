@@ -5,8 +5,10 @@
 //! evaluates its win/lose conditions without knowing anything about rendering.
 
 pub(crate) mod schema;
+mod observe;
 mod demo;
 
+pub(crate) use observe::LevelEvent;
 pub(crate) use schema::{ConditionKind, Level};
 
 use super::Simulation;
@@ -19,7 +21,7 @@ use crate::components::{
 use crate::genome::Genome;
 use crate::terrain::{GRID, Tile, map, nitrate_capacity};
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 /// Seconds per simulation tick. Kept local so demo timestamps and objective
 /// timers cannot drift from the step loop.
@@ -47,32 +49,33 @@ impl LevelState {
 pub(crate) struct LevelRuntime {
     pub(crate) level: Level,
     pub(crate) genomes: Vec<Genome>,
-    pub(crate) initial_ids: Vec<u32>,
     pub(crate) state: LevelState,
     pub(crate) win_hold: f32,
     pub(crate) demo: bool,
     pub(crate) demo_cursor: usize,
+    /// Bounded transition log for diagnostics. Never read by objective code.
+    pub(crate) events: VecDeque<LevelEvent>,
+    /// Previous met/unmet flag per condition, in canonical order.
+    pub(crate) condition_flags: Vec<bool>,
 }
 
 impl LevelRuntime {
-    fn new(level: Level, genomes: Vec<Genome>, initial_ids: Vec<u32>) -> Self {
+    fn new(level: Level, genomes: Vec<Genome>) -> Self {
+        let condition_flags = vec![false; level.conditions.values().len()];
         Self {
             level,
             genomes,
-            initial_ids,
             state: LevelState::Running,
             win_hold: 0.,
             demo: false,
             demo_cursor: 0,
+            events: VecDeque::new(),
+            condition_flags,
         }
     }
 
     fn elapsed(&self, tick: u32) -> f32 {
         tick as f32 * STEP
-    }
-
-    pub(crate) fn demo_finished(&self) -> bool {
-        self.demo && self.demo_cursor >= self.level.demo.len()
     }
 }
 
@@ -189,7 +192,22 @@ impl Simulation {
         self.entities = initial.entities;
         self.bonds = initial.bonds;
         self.births = initial.cells as u32;
-        self.level = Some(LevelRuntime::new(level, genomes, initial.ids));
+        self.level = Some(LevelRuntime::new(level, genomes));
+        let counts = self.level_counts();
+        let tick = self.tick;
+        let summary = format!(
+            "cells={} level={} user={} infected={} hybrid={} limit={} demo={}",
+            counts.total,
+            counts.level,
+            counts.user,
+            counts.infected,
+            counts.hybrid,
+            population_limit,
+            self.level
+                .as_ref()
+                .map_or(0, |runtime| runtime.level.demo.len()),
+        );
+        self.emit_level_event(LevelEvent::new(tick, "load").with_detail(summary));
         Ok(())
     }
 
@@ -202,6 +220,12 @@ impl Simulation {
         runtime.demo_cursor = 0;
         runtime.state = LevelState::Running;
         runtime.win_hold = 0.;
+        runtime.events.clear();
+        runtime.condition_flags.fill(false);
+        let actions = runtime.level.demo.len();
+        runtime.push_event(
+            LevelEvent::new(self.tick, "demo-start").with_detail(format!("actions={actions}")),
+        );
         Ok(())
     }
 
@@ -247,12 +271,33 @@ impl Simulation {
             return;
         };
         let elapsed = runtime.elapsed(tick);
-        let conditions = &runtime.level.conditions;
+        let conditions = runtime.level.conditions.values();
+        let values = conditions
+            .iter()
+            .map(|&(kind, target)| {
+                let current = condition_current(kind, counts, elapsed, runtime.win_hold);
+                (kind, target, current, condition_met(kind, current, target))
+            })
+            .collect::<Vec<_>>();
+        if runtime.condition_flags.len() != values.len() {
+            runtime.condition_flags = vec![false; values.len()];
+        }
+        let mut events = Vec::new();
+        for (index, &(kind, target, current, met)) in values.iter().enumerate() {
+            if runtime.condition_flags[index] == met {
+                continue;
+            }
+            runtime.condition_flags[index] = met;
+            events.push(LevelEvent::new(tick, "objective").with_detail(format!(
+                "{} {} ({current:.2}/{target:.2})",
+                condition_key(kind),
+                if met { "met" } else { "unmet" },
+            )));
+        }
         let mut required = true;
         let mut constrained = true;
-        for (kind, target) in conditions.values() {
-            let current = condition_current(kind, counts, elapsed, runtime.win_hold);
-            if condition_met(kind, current, target) {
+        for &(kind, _target, _, met) in &values {
+            if met {
                 continue;
             }
             if condition_required(kind) {
@@ -261,21 +306,30 @@ impl Simulation {
                 constrained = false;
             }
         }
+        let max_time = runtime.level.conditions.max_time();
+        let win_time = runtime.level.conditions.win_time();
+        let mut next = LevelState::Running;
         if !constrained {
-            runtime.state = LevelState::Lost;
-            return;
-        }
-        if required {
+            next = LevelState::Lost;
+        } else if required {
             runtime.win_hold += STEP;
-            if runtime.win_hold + 1e-6 >= conditions.win_time() {
-                runtime.state = LevelState::Won;
-                return;
+            if runtime.win_hold + 1e-6 >= win_time {
+                next = LevelState::Won;
             }
         } else {
             runtime.win_hold = 0.;
         }
-        if elapsed > conditions.max_time() + 1e-6 {
-            runtime.state = LevelState::Lost;
+        if next == LevelState::Running && elapsed > max_time + 1e-6 {
+            next = LevelState::Lost;
+        }
+        if next != LevelState::Running {
+            runtime.state = next;
+            events.push(
+                LevelEvent::new(tick, "state").with_detail(format!("{:?} at {elapsed:.2}s", next)),
+            );
+        }
+        for event in events {
+            runtime.push_event(event);
         }
     }
 
@@ -469,7 +523,6 @@ fn level_tiles(level: &Level) -> Vec<Tile> {
 struct InitialSpawn {
     entities: Vec<(u32, hecs::Entity)>,
     bonds: BTreeSet<(u32, u32)>,
-    ids: Vec<u32>,
     next_id: u32,
     cells: usize,
 }
@@ -524,7 +577,6 @@ fn spawn_initial_cells(
         cells: entities.len(),
         entities,
         bonds,
-        ids,
         next_id,
     })
 }

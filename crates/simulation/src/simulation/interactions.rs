@@ -4,6 +4,7 @@ use super::Simulation;
 use super::biology::GameteContact;
 use super::boundary::Boundary;
 use super::collisions::{CONTACT_PASSES, CONTACT_TRAVEL, CollisionBody};
+use super::level::LevelEvent;
 use super::spatial::SpatialGrid;
 use crate::cell_types::{DEVOROCYTE, VIROCYTE};
 use crate::components::{Cell, Position, radius};
@@ -565,6 +566,7 @@ impl Simulation {
         });
 
         // No job mutates ECS storage. Commit in stable island and cell order.
+        let mut events = Vec::new();
         for body in islands.into_iter().flat_map(|island| island.bodies) {
             let infection = body.infected_by.map(|donor| {
                 let (source, genome) = self.world.query_one_mut::<(&Cell, &Genome)>(donor).unwrap();
@@ -598,7 +600,16 @@ impl Simulation {
                 cell.cooldown = 3.;
                 cell.class = crate::components::CLASS_INFECTED;
                 self.infections += 1;
+                events.push(
+                    LevelEvent::new(self.tick, "infection")
+                        .with_cell(cell)
+                        .with_position(position)
+                        .with_color(genome, cell.mode),
+                );
             }
+        }
+        for event in events {
+            self.emit_level_event(event);
         }
     }
 }

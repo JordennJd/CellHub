@@ -3,6 +3,7 @@
 use super::Simulation;
 use super::bonds::{ADHESION_GAP, BondDivision};
 use super::interactions::ContactMotion;
+use super::level::LevelEvent;
 use crate::components::{Cell, LIMIT, MAX_RECOIL_MOMENTUM, Position, radius};
 use crate::genome::Genome;
 use std::collections::{BTreeMap, HashSet};
@@ -149,23 +150,53 @@ impl Simulation {
                     y: by,
                     angle: angle + std::f32::consts::PI + m.child_angle_b * handedness,
                 };
-                children.push((pa, a, offspring.clone()));
-                children.push((pb, b, offspring));
+                children.push((pa, a, offspring.clone(), c.id));
+                children.push((pb, b, offspring, c.id));
                 dead.push(e);
                 continue;
             }
             paths.push(item.motion);
         }
+        let mut death_events = Vec::new();
         if !dead.is_empty() {
             let removed: HashSet<_> = dead.iter().copied().collect();
             self.deaths += (dead.len() - divisions.len()) as u32;
+            death_events = dead
+                .iter()
+                .filter_map(|&entity| {
+                    let (position, cell, genome) = self
+                        .world
+                        .query_one_mut::<(&Position, &Cell, &Genome)>(entity)
+                        .ok()?;
+                    let replaced = divisions.contains_key(&cell.id);
+                    Some(
+                        LevelEvent::new(self.tick, if replaced { "divide" } else { "death" })
+                            .with_cell(cell)
+                            .with_position(position)
+                            .with_color(genome, cell.mode)
+                            .with_detail(if replaced {
+                                "replaced by daughters"
+                            } else {
+                                "metabolism"
+                            }),
+                    )
+                })
+                .collect::<Vec<_>>();
             entities.retain(|(_, entity)| !removed.contains(entity));
             for e in dead {
                 self.world.despawn(e).unwrap();
             }
         }
-        for (p, c, g) in children {
+        for event in death_events {
+            self.emit_level_event(event);
+        }
+        for (p, c, g, parent) in children {
             let id = c.id;
+            let event = LevelEvent::new(self.tick, "birth")
+                .with_cell(&c)
+                .with_position(&p)
+                .with_color(&g, c.mode)
+                .with_parent(parent);
             let entity = self.world.spawn((p, c, g));
             paths.push(ContactMotion {
                 path: [p; 2],
@@ -173,6 +204,7 @@ impl Simulation {
             });
             entities.push((id, entity));
             self.births += 1;
+            self.emit_level_event(event);
         }
         self.entities = entities;
         self.replace_bonds(&divisions, &degrees);

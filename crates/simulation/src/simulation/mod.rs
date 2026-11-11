@@ -3,6 +3,7 @@
 mod biology;
 mod boundary;
 mod environment;
+mod level;
 mod spatial;
 mod program;
 mod signals;
@@ -14,7 +15,6 @@ mod chaos;
 mod persistence;
 mod tools;
 mod step;
-mod level;
 mod metabolism;
 #[cfg(test)]
 mod tests;

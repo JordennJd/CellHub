@@ -3,6 +3,7 @@
 use super::Simulation;
 use super::biology::GameteContact;
 use super::boundary::Boundary;
+use super::level::LevelEvent;
 use super::program::{
     CILIA_LEFT_TARGET, CILIA_RIGHT_TARGET, DENSITY_TARGET, DIFFERENTIATION_A_TARGET,
     DIFFERENTIATION_B_TARGET, controlled_value,
@@ -270,17 +271,20 @@ impl Simulation {
             let x = a.position.x + (b.position.x - a.position.x) * share;
             let y = a.position.y + (b.position.y - a.position.y) * share;
             let (x, y, _) = self.boundary.constrain(x, y, cell.mass, 12.);
-            let entity = self.world.spawn((
-                Position {
-                    x,
-                    y,
-                    angle: a.position.angle,
-                },
-                cell,
-                genome,
-            ));
+            let position = Position {
+                x,
+                y,
+                angle: a.position.angle,
+            };
+            let event = LevelEvent::new(self.tick, "fusion")
+                .with_cell(&cell)
+                .with_position(&position)
+                .with_color(&genome, cell.mode)
+                .with_detail(format!("parents {} + {}", a.id, b.id));
+            let entity = self.world.spawn((position, cell, genome));
             self.entities.push((id, entity));
             self.births += 1;
+            self.emit_level_event(event);
             remapped.insert(a.id, id);
             remapped.insert(b.id, id);
         }
