@@ -62,6 +62,8 @@ pub struct Simulation {
     /// Per-level population cap from the original substrate (`max_cells`).
     population_limit: usize,
     chaos: Option<chaos::Chaos>,
+    /// Frontend-curated organisms, kept across resets but not serialized.
+    chaos_catalog: Vec<chaos::Primordial>,
 }
 
 #[wasm_bindgen]
@@ -89,6 +91,7 @@ impl Simulation {
             level: None,
             population_limit: LIMIT,
             chaos: None,
+            chaos_catalog: Vec::new(),
         }
     }
 

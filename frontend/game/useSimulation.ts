@@ -237,7 +237,7 @@ export function useSimulation() {
         pendingSpawns.current = current.previousPending;
         setInserted(current.previousInserted);
     }
-    function reset(settings = environment, chaos?: { seed: number; genome: Float32Array }, bounds?: { width: number; height: number }) {
+    function reset(settings = environment, chaos?: { seed: number; genome: Float32Array; organisms: Float32Array }, bounds?: { width: number; height: number }) {
         if (transition.current)
             return;
         const requestId = beginTransition('reset', 0);

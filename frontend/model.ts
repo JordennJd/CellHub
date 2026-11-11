@@ -32,7 +32,7 @@ export const TYPES = [
     name: "Вироцит",
     latin: "Virocyte",
     color: 0xc997ed,
-    info: "Заражает незащищённую клетку своим геномом или выбранным фрагментом. Перезарядка — 3 секунды.",
+    info: "Заражает незащищённую клетку своим геномом или выбранным фрагментом. Перезарядка короткая — 0,2 секунды, как в исходной игре.",
   },
   {
     name: "Кератиноцит",
@@ -458,7 +458,6 @@ export type WorldCommand = (
   | { type: "remove" | "boost"; id: number }
   | { type: "move"; id: number; x: number; y: number }
   | { type: "sterilize" }
-  | { type: "chaos-pool"; genome: Float32Array }
   | { type: "chaos-configure"; enabled: boolean; rate: number; viable: boolean }
 ) & { atTick?: number };
 export type Command = WorldCommand
@@ -469,7 +468,7 @@ export type Command = WorldCommand
     requestId?: string;
     level?: string;
     bounds?: { width: number; height: number };
-    chaos?: { seed: number; genome: Float32Array };
+    chaos?: { seed: number; genome: Float32Array; organisms: Float32Array };
   }
   | { type: "export"; requestId: string }
   | { type: "restore"; state: string; requestId?: string }

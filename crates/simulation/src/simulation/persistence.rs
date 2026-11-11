@@ -92,7 +92,7 @@ impl Simulation {
                 c.viable as u8 as f64,
                 c.next_spawn as f64,
                 c.spawned as f64,
-                c.organisms as f64,
+                c.organisms_spawned as f64,
             ]);
             let pool = c.pool.values();
             values.push(pool.len() as f64);
@@ -299,7 +299,7 @@ impl Simulation {
                 return Err("Invalid chaos scheduler".into());
             }
             let pool = read_genome(&mut input, version, false)?;
-            let mut chaos = super::chaos::Chaos::new(seed, pool);
+            let mut chaos = super::chaos::Chaos::new(seed, pool, Vec::new());
             chaos.initial_pool = read_genome(&mut input, version, false)?;
             chaos.rng = rng;
             chaos.enabled = enabled;
@@ -307,7 +307,7 @@ impl Simulation {
             chaos.viable = viable;
             chaos.next_spawn = next_spawn;
             chaos.spawned = spawned;
-            chaos.organisms = organisms;
+            chaos.organisms_spawned = organisms;
             let count = input.integer(super::chaos::HISTORY_LIMIT as u32)?;
             let mut previous = -1.;
             for _ in 0..count {

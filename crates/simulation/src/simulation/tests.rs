@@ -1999,7 +1999,7 @@ fn infection_copies_genome_and_obeys_cooldown() {
         .unwrap()
         .1
         .clone();
-    assert!(c.cooldown > 2.9);
+    assert!(c.cooldown > 0. && c.cooldown <= 0.2);
 }
 #[test]
 fn radiation_mutates_genomes() {

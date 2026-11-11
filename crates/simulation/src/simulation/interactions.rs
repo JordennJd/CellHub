@@ -17,6 +17,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const ATTACK_RANGE: f32 = 24.;
+/// The original game lets a virocyte infect again almost immediately. A short
+/// cooldown still prevents a whole chain from flipping in a single tick.
+pub(super) const VIROCYTE_COOLDOWN: f32 = 0.2;
 const PAIR_CACHE_PER_BODY: usize = 64;
 const LARGE_CONTACT_POPULATION: usize = 4096;
 const DENSE_PAIRS_PER_BODY: usize = 8;
@@ -412,7 +415,7 @@ fn solve_biology(
             });
             if in_range && infects {
                 target.infected_by = Some(body.entity);
-                body.cooldown = 3.;
+                body.cooldown = VIROCYTE_COOLDOWN;
             } else if in_range && eats {
                 let taken = predation.min((target.mass - 0.1).max(0.));
                 target.mass -= taken;
@@ -597,7 +600,7 @@ impl Simulation {
                     cell.mode.min(genome.len() - 1)
                 };
                 cell.mutations += 1;
-                cell.cooldown = 3.;
+                cell.cooldown = VIROCYTE_COOLDOWN;
                 cell.class = crate::components::CLASS_INFECTED;
                 self.infections += 1;
                 events.push(

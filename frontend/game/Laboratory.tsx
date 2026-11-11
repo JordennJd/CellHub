@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react';
 import { WorldView, type ViewState } from '../WorldView';
 import { initialBackend, type BackendPreference } from '../backend';
 import { defaultGenome, chaosGenome, flatten, inflate, TYPES, STRIDE, CELL_DETAILS_STRIDE, DEFAULT_ENVIRONMENT, type Mode } from '../model';
+import { chaosOrganismsBuffer } from '../organisms';
 import { GenomeEditor } from '../editor/GenomeEditor';
 import { useSimulation } from './useSimulation';
 import { EnvironmentPanel } from './EnvironmentPanel';
@@ -98,7 +99,7 @@ export function Laboratory({ session, onExit }: {
         else if (level)
             sim.resetLevel(JSON.stringify(level));
         else
-            sim.reset({ ...DEFAULT_ENVIRONMENT, ...(session.kind === 'tutorial' ? lesson.environment : {}) }, chaosMode ? { seed: chaosSeed.current, genome: flatten(genome) } : undefined, newBounds());
+            sim.reset({ ...DEFAULT_ENVIRONMENT, ...(session.kind === 'tutorial' ? lesson.environment : {}) }, chaosMode ? { seed: chaosSeed.current, genome: flatten(genome), organisms: chaosOrganismsBuffer() } : undefined, newBounds());
     }, [sim.ready]);
     useEffect(() => {
         if (!level || sim.resetting || victory.current || sim.levelStatus?.state !== 'won')
@@ -111,11 +112,9 @@ export function Laboratory({ session, onExit }: {
         }
     }, [sim.levelStatus?.state, sim.resetting]);
     useEffect(() => {
-        if (chaosMode && sim.ready && !sim.resetting) {
-            const values = flatten(genome);
-            sim.names.current.set(Array.from(values).join(','), genome.map(mode => mode.name));
-            sim.send({ type: 'chaos-pool', genome: values });
-        }
+        if (!chaosMode || !sim.ready || sim.resetting) return;
+        const values = flatten(genome);
+        sim.names.current.set(Array.from(values).join(','), genome.map(mode => mode.name));
     }, [genome, chaosMode, sim.ready, sim.resetting]);
     useEffect(() => {
         if (session.kind !== 'tutorial' || tutorialDone || sim.resetting)
@@ -269,7 +268,7 @@ export function Laboratory({ session, onExit }: {
  <div className="transport"><button className="primary" disabled={!sim.ready || sim.resetting} onClick={() => sim.changeSpeed(sim.speed ? 0 : 1)}>{sim.speed ? 'Пауза' : 'Продолжить'}</button><button disabled={!sim.ready || sim.resetting || sim.speed !== 0} onClick={() => sim.send({ type: 'step' })}>Один шаг</button><label>Скорость<select aria-label="Скорость" value={sim.speed || 1} onChange={e => sim.changeSpeed(Number(e.target.value))}><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label><div className="world-stats"><span>Время <strong>{((stats?.[0] ?? 0) / 30).toFixed(1)} с</strong></span><span>Клеток <strong>{count}</strong></span></div><button disabled={!sim.ready || sim.resetting} onClick={reset}>{level ? 'Повторить' : chaosMode ? 'Повторить мир' : 'Начать заново'}</button></div>
  </section><aside className="lab-sidebar"><nav className="tabs" aria-label="Панели лаборатории">{[...(level || session.kind === 'tutorial' ? [['objective', 'Задача']] : []), ['genome', 'Геном'], ['observe', 'Наблюдение'], ['environment', 'Среда']].map(([value, label]) => <button key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => setTab(value)}>{label}</button>)}</nav><div className="sidebar-content">{session.kind === 'tutorial' && tab !== 'objective' && !tutorialDone && <p className="tutorial-context" role="status">{lesson.steps[tutorial].title}: {lesson.steps[tutorial].description}</p>}
  {tab === 'genome' && <GenomeEditor genome={genome} onChange={setGenome} initialMode={initialMode} onInitialModeChange={setInitialMode} allowedKinds={level?.allowedKinds} onSave={() => { setName(''); setSaveKind('genome'); }} onLoad={() => setLibrary(true)}/>}
- {tab === 'environment' && <>{sim.frame?.chaos && <ChaosPanel data={sim.frame.chaos} disabled={sim.resetting || !sim.ready} onConfigure={(enabled, rate, viable) => sim.send({ type: 'chaos-configure', enabled, rate, viable })} onNewWorld={seed => ask('Создать новый мир?', 'Текущие клетки и время будут сброшены. Геном редактора останется.', () => { sim.reset(sim.environment, { seed, genome: flatten(genome) }, newBounds()); setSelected(null); setRecenter(v => v + 1); }, readSettings().confirmReset)}/>}<EnvironmentPanel value={sim.environment} onChange={sim.configure} locked={!!level || sim.resetting || !sim.ready} lockedReason={level ? 'Условия заданы испытанием.' : undefined}/>{!level && <button className="danger" onClick={() => ask('Стерилизовать чашку?', 'Все клетки и их связи будут удалены. Среда и её возраст останутся.', () => { sim.send({ type: 'sterilize' }); setSelected(null); }, readSettings().confirmReset)}>Стерилизовать чашку</button>}</>}
+ {tab === 'environment' && <>{sim.frame?.chaos && <ChaosPanel data={sim.frame.chaos} disabled={sim.resetting || !sim.ready} onConfigure={(enabled, rate, viable) => sim.send({ type: 'chaos-configure', enabled, rate, viable })} onNewWorld={seed => ask('Создать новый мир?', 'Текущие клетки и время будут сброшены. Геном редактора останется.', () => { sim.reset(sim.environment, { seed, genome: flatten(genome), organisms: chaosOrganismsBuffer() }, newBounds()); setSelected(null); setRecenter(v => v + 1); }, readSettings().confirmReset)}/>}<EnvironmentPanel value={sim.environment} onChange={sim.configure} locked={!!level || sim.resetting || !sim.ready} lockedReason={level ? 'Условия заданы испытанием.' : undefined}/>{!level && <button className="danger" onClick={() => ask('Стерилизовать чашку?', 'Все клетки и их связи будут удалены. Среда и её возраст останутся.', () => { sim.send({ type: 'sterilize' }); setSelected(null); }, readSettings().confirmReset)}>Стерилизовать чашку</button>}</>}
  {tab === 'observe' && <>{sim.frame?.chaos && <ChaosObservation data={sim.frame.chaos}/>}<section className="panel-section"><h2>Наблюдение</h2><dl className="metrics"><div><dt>Рождений</dt><dd>{stats?.[2] ?? 0}</dd></div><div><dt>Погибло</dt><dd>{stats?.[3] ?? 0}</dd></div><div><dt>Связей</dt><dd>{(sim.frame?.links.length ?? 0) / 2}</dd></div></dl>{cell ? <><h3>Выбранная клетка</h3><dl className="cell-details">{[['Тип', TYPES[cell[4]]?.name], ['Слот', diagnostic?.genome[diagnostic.mode]?.name ?? '…'], ['Зеркальность', cell[11] ? 'Да' : 'Нет'], ['Масса', `${cell[5].toFixed(2)} нг`], ['Азот', nitrogen === undefined ? '…' : `${(nitrogen * 100).toFixed(1)}%`], ['Постоянных связей', connections], ['Возраст', `${cell[6].toFixed(1)} с`], ['Поколение', cell[7]], ['Изменений генома', cell[8]]].map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl><CellDetails values={details}/>{!level && !touchControls && <div className="button-row"><button onClick={() => setTool('move')}>Переместить</button><button onClick={() => sim.send({ type: 'boost', id: selected! })}>Подпитать</button><button className="danger" onClick={() => { sim.send({ type: 'remove', id: selected! }); setSelected(null); }}>Удалить</button></div>}<button onClick={copyGenome}>Скопировать геном в редактор</button>{!level && <button onClick={() => ask('Изменить выбранную клетку?', 'Геном редактора будет применён только к этой клетке.', () => { const values = flatten(genome); sim.names.current.set(Array.from(values).join(','), genome.map(mode => mode.name)); sim.send({ type: 'edit', id: selected!, mode: initialMode, genome: values }); setDiagnosticRevision(value => value + 1); setNotice('Геном применён к клетке.'); })}>Применить геном редактора</button>}</> : <p>{selected === null ? touchControls ? 'Выберите клетку инструментом «Диагностика».' : 'Нажмите ПКМ на клетку для диагностики.' : 'Клетка разделилась или погибла. Выберите потомка.'}</p>}</section></>}
  {tab === 'objective' && <ObjectivePanel level={level} status={sim.levelStatus} inserted={sim.inserted} completed={completed} help={help} onHelp={setHelp} onDemo={demo} lesson={lesson} step={tutorial} tutorialDone={tutorialDone} progressSaved={progressSaved} onRetryProgress={saveProgress}/>}
  </div></aside></main>

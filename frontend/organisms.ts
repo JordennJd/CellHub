@@ -1,9 +1,9 @@
-import { multicellularGenome, newMode, type Mode } from "./model";
+import { flatten, newMode, multicellularGenome, type Mode, type Program } from "./model";
 
 /**
- * Curated multicellular organisms for the genome editor's demonstration mode.
- * `universality` is a manual ranking: high values survive in more environments
- * and need fewer specialised neighbours, so they are shown first.
+ * Curated multicellular organisms shared by the genome editor's demonstration
+ * mode and the chaos world's spontaneous immigration. `span` is the number of
+ * cells seeded in a chain when the organism appears in chaos.
  */
 export type OrganismOrigin = "substrate" | "player";
 
@@ -14,46 +14,104 @@ export type DemoOrganism = {
   origin: OrganismOrigin;
   universality: number;
   initialMode: number;
+  span: number;
   genome: () => Mode[];
 };
 
-const mode = (index: number, values: Partial<Mode>): Mode => ({ ...newMode(index), ...values });
+const mode = (index: number, values: Partial<Mode>): Mode => ({
+  ...newMode(index), angle: 0, lifespan: 1000, ...values,
+});
 
+const rule = (target: number, input: number, scale: number, offset = 0): Program => ({
+  target, input, kind: 0, scale, offset, threshold: 0, below: 0,
+});
+
+/** Photocyte + flagellocyte: the cheapest way to move towards light. */
 const swimmer = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Жгутикоцит", kind: 2, threshold: 2, speed: 42, angle: 0, lifespan: 1000, canDivide: false }),
+  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, bindChildren: true, maxConnections: 2 }),
+  mode(1, { name: "Жгутикоцит", kind: 2, threshold: 2, speed: 42, canDivide: false, prioritizeWhenStarving: true }),
 ];
 
-const colony = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.6, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Глюоцит", kind: 9, threshold: 2, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 4 }),
+/** A photocyte that keeps both daughters attached, growing a feeding filament. */
+const filament = (): Mode[] => [
+  mode(0, {
+    name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 0,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, maxConnections: 2,
+  }),
 ];
 
-const symbiont = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.9, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Фагоцит", kind: 1, threshold: 2.4, childA: 0, childB: 2, angle: 0, lifespan: 1000, bindChildren: true, keepAdhesionB: true, maxConnections: 2 }),
-  mode(2, { name: "Нитроцит", kind: 6, threshold: 2.5, angle: 0, lifespan: 1000, canDivide: false }),
+/** Photocyte + lipocyte: stores surplus mass and shares it back when starved. */
+const photoLipo = (): Mode[] => [
+  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, bindChildren: true, maxConnections: 3 }),
+  mode(1, { name: "Липоцит", kind: 7, canDivide: false, prioritizeWhenStarving: true }),
 ];
 
-const predator = (): Mode[] => [
-  mode(0, { name: "Фагоцит", kind: 1, threshold: 2, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Жгутикоцит", kind: 2, threshold: 2, speed: 38, angle: 0, lifespan: 1000, canDivide: false }),
+/** Phagocyte + sensocyte + myocyte + flagellocyte: turns towards food. */
+const smartPhagocyte = (): Mode[] => [
+  mode(0, { name: "Фагоцит", kind: 1, threshold: 2.2, childA: 0, childB: 1, bindChildren: true, maxConnections: 3 }),
+  mode(1, {
+    name: "Миоцит", kind: 12, threshold: 1.6, childA: 0, childB: 2,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+    programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
+  }),
+  mode(2, {
+    name: "Сенсоцит", kind: 11, threshold: 1.4, childA: 0, childB: 3,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+    sensor: 1, signalChannel: 0, sensorGain: 1,
+  }),
+  mode(3, {
+    name: "Жгутикоцит", kind: 2, canDivide: false, speed: 25, prioritizeWhenStarving: true,
+    programs: [rule(8, 1, 28, 6)],
+  }),
 ];
 
+/**
+ * Devorocyte + keratin + myocyte + sensocyte + flagellocyte. The keratin shield
+ * keeps the predator's own bonded cells out of its digestive range; the
+ * sensocyte steers it towards other cells.
+ */
+const smartPredator = (): Mode[] => [
+  mode(0, { name: "Девороцит", kind: 5, threshold: 2.4, childA: 0, childB: 1, bindChildren: true, maxConnections: 5 }),
+  mode(1, {
+    name: "Кератиноцит", kind: 4, threshold: 1.6, childA: 0, childB: 2,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+  }),
+  mode(2, {
+    name: "Миоцит", kind: 12, threshold: 1.4, childA: 0, childB: 3,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+    programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
+  }),
+  mode(3, {
+    name: "Сенсоцит", kind: 11, threshold: 1.2, childA: 0, childB: 4,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+    sensor: 3, signalChannel: 0, sensorGain: 1,
+  }),
+  mode(4, {
+    name: "Жгутикоцит", kind: 2, canDivide: false, speed: 25, prioritizeWhenStarving: true,
+    programs: [rule(8, 1, 28, 6)],
+  }),
+];
+
+/** Photocyte + glueocyte: a stationary mat that spreads over a rich patch. */
+const moss = (): Mode[] => [
+  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, bindChildren: true, maxConnections: 4 }),
+  mode(1, { name: "Глюоцит", kind: 9, canDivide: false, maxConnections: 4, prioritizeWhenStarving: true }),
+];
+
+/** Phagocyte + flagellocyte: a simple hunter for food patches. */
+const hunter = (): Mode[] => [
+  mode(0, { name: "Фагоцит", kind: 1, threshold: 2, childA: 0, childB: 1, bindChildren: true, maxConnections: 2 }),
+  mode(1, { name: "Жгутикоцит", kind: 2, canDivide: false, speed: 40, prioritizeWhenStarving: true }),
+];
+
+/** Photocyte + glueocyte + keratinocyte: a small armoured nursery. */
 const nanobot = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.7, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Глюоцит", kind: 9, threshold: 2.2, childA: 0, childB: 2, angle: 0, lifespan: 1000, bindChildren: true, keepAdhesionB: true, maxConnections: 3 }),
-  mode(2, { name: "Кератиноцит", kind: 4, threshold: 2.4, angle: 0, lifespan: 1000, canDivide: false }),
-];
-
-const buoy = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.7, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Буйоцит", kind: 8, threshold: 2.2, density: -2.2, angle: 0, lifespan: 1000, canDivide: false }),
-];
-
-const parasite = (): Mode[] => [
-  mode(0, { name: "Фагоцит", kind: 1, threshold: 2, childA: 0, childB: 1, angle: 0, lifespan: 1000, bindChildren: true, maxConnections: 2 }),
-  mode(1, { name: "Вироцит", kind: 3, threshold: 2.5, angle: 0, lifespan: 1000, canDivide: false }),
+  mode(0, { name: "Фотоцит", kind: 0, threshold: 2, childA: 0, childB: 1, bindChildren: true, maxConnections: 4 }),
+  mode(1, {
+    name: "Глюоцит", kind: 9, threshold: 1, childA: 1, childB: 2,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+  }),
+  mode(2, { name: "Кератиноцит", kind: 4, canDivide: false, prioritizeWhenStarving: true }),
 ];
 
 /** Built-ins, deliberately sorted from the most universal to the most niche. */
@@ -61,74 +119,92 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "swimmer",
     name: "Пловец",
-    description: "Фотоцит делится на такой же фотоцит и жгутикоцит. Простая подвижная цепочка, которой хватает света.",
+    description: "Фотоцит делится на такой же фотоцит и жгутикоцит. Самая универсальная подвижная связка: ей хватает света.",
     origin: "player",
     universality: 100,
     initialMode: 0,
+    span: 2,
     genome: swimmer,
+  },
+  {
+    id: "filament",
+    name: "Фотоцитовая нить",
+    description: "Один фотоцит с удержанием обеих дочерей вырастает в связанную нить. Быстро занимает освещённые участки.",
+    origin: "substrate",
+    universality: 96,
+    initialMode: 0,
+    span: 2,
+    genome: filament,
+  },
+  {
+    id: "photo-lipo",
+    name: "Фотоцит и липоцит",
+    description: "Липоцит копит излишки массы и отдаёт их фотоциту в голодные периоды. Полезна в нестабильной среде.",
+    origin: "substrate",
+    universality: 90,
+    initialMode: 0,
+    span: 2,
+    genome: photoLipo,
   },
   {
     id: "tutorial",
     name: "Учебная тройка",
     description: "Классическая связка из обучения: фотоцит, жгутикоцит и фагоцит с наследованием связи.",
     origin: "player",
-    universality: 95,
+    universality: 88,
     initialMode: 0,
+    span: 3,
     genome: multicellularGenome,
   },
   {
-    id: "symbiont",
-    name: "Симбионт",
-    description: "Фотоцит кормит фагоцита, а тот добавляет нитроцита для обмена азотом. Вдохновлён уровнем «Симбиоз».",
+    id: "smart-phagocyte",
+    name: "Умный фагоцит",
+    description: "Фагоцит, миоцит, сенсоцит и жгутикоцит. Сенсоцит чувствует пищу, миоцит направляет тело, жгутик тянет его к еде.",
     origin: "substrate",
-    universality: 90,
+    universality: 84,
     initialMode: 0,
-    genome: symbiont,
+    span: 4,
+    genome: smartPhagocyte,
   },
   {
-    id: "colony",
-    name: "Колония мха",
-    description: "Фотоциты и глюоциты образуют связанную колонию с несколькими точками крепления. Вдохновлена «Оплодотворением мха».",
+    id: "moss",
+    name: "Мох",
+    description: "Фотоцит и глюоцит образуют стелющуюся колонию. Вдохновлён «Оплодотворением мха».",
     origin: "substrate",
-    universality: 80,
+    universality: 76,
     initialMode: 0,
-    genome: colony,
+    span: 2,
+    genome: moss,
   },
   {
-    id: "predator",
+    id: "hunter",
     name: "Хищник",
     description: "Фагоцит с жгутиком ищет готовую пищу. Нуждается в пищевых пятнах, зато быстро занимает новые участки.",
     origin: "substrate",
     universality: 70,
     initialMode: 0,
-    genome: predator,
+    span: 2,
+    genome: hunter,
   },
   {
     id: "nanobot",
     name: "Нанобот",
     description: "Фотоцит, глюоцит и кератиноцит создают защищённую колонию. Вдохновлён уровнем «Нанобот».",
     origin: "substrate",
-    universality: 60,
+    universality: 62,
     initialMode: 0,
+    span: 3,
     genome: nanobot,
   },
   {
-    id: "buoy",
-    name: "Поплавок",
-    description: "Фотоцит удерживает буйоцит, меняющий плотность. Раскрывается при включённой гравитации.",
+    id: "smart-predator",
+    name: "Умный хищник",
+    description: "Девороцит, кератиновый щит, миоцит, сенсоцит и жгутикоцит. Ищет клетки, направляет тело и переваривает добычу, не задевая своих.",
     origin: "substrate",
-    universality: 50,
+    universality: 48,
     initialMode: 0,
-    genome: buoy,
-  },
-  {
-    id: "parasite",
-    name: "Паразит",
-    description: "Фагоцит прикрепляет вироцита, который заражает незащищённых соседей. Ниша для богатых пищей миров.",
-    origin: "substrate",
-    universality: 40,
-    initialMode: 0,
-    genome: parasite,
+    span: 5,
+    genome: smartPredator,
   },
 ];
 
@@ -137,4 +213,16 @@ export function demoOrganisms(allowedKinds?: number[]): DemoOrganism[] {
   return DEMO_ORGANISMS
     .filter(organism => organism.genome().every(mode => allowed(mode.kind)))
     .sort((a, b) => b.universality - a.universality || a.name.localeCompare(b.name, "ru"));
+}
+
+/**
+ * Catalog buffer for chaos: `[version, count, (span, weight, genome...)*]`.
+ * More universal organisms receive a larger weight.
+ */
+export function chaosOrganismsBuffer(): Float32Array {
+  const entries = DEMO_ORGANISMS.flatMap(organism => {
+    const genome = flatten(organism.genome());
+    return [organism.span, Math.max(1, Math.round(organism.universality / 10)), ...genome];
+  });
+  return new Float32Array([1, DEMO_ORGANISMS.length, ...entries]);
 }

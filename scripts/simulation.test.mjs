@@ -29,12 +29,13 @@ const genes = () =>
 
 test("demo organism catalog is ordered, valid and filtered by allowed cell types", () => {
   const list = organisms.DEMO_ORGANISMS;
-  assert(list.length >= 7);
+  assert(list.length >= 8);
   assert.equal(new Set(list.map(o => o.id)).size, list.length);
   for (let i = 1; i < list.length; i++) assert(list[i - 1].universality >= list[i].universality);
   for (const organism of list) {
     const genome = organism.genome();
-    assert(genome.length >= 2, `${organism.id} is not multicellular`);
+    assert(organism.span >= 1 && organism.span <= 8, `${organism.id} has an invalid span`);
+    assert(organism.span >= 2 || genome.length >= 2, `${organism.id} is not multicellular`);
     assert(organism.initialMode >= 0 && organism.initialMode < genome.length);
     assert(genome[organism.initialMode].canDivide, `${organism.id} cannot grow`);
     for (const [index, mode] of genome.entries()) {
@@ -45,22 +46,32 @@ test("demo organism catalog is ordered, valid and filtered by allowed cell types
     }
     assert.deepEqual(model.flatten(model.inflate(model.flatten(genome))), model.flatten(genome));
   }
-  assert.equal(organisms.demoOrganisms([0]).length, 0);
-  assert(organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "symbiont"));
-  assert(!organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "colony"));
+  assert(organisms.demoOrganisms([0]).some(o => o.id === "filament"));
+  assert(organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "swimmer"));
+  assert(!organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "smart-phagocyte"));
 });
 
-test("every demo organism grows into a linked multicellular structure", () => {
+const organismCatalog = (organism) =>
+  new Float32Array([1, 1, organism.span, 1, ...model.flatten(organism.genome())]);
+
+test("chaos seeds every curated organism as a bonded chain", () => {
   for (const organism of organisms.DEMO_ORGANISMS) {
     const sim = new Simulation(42);
     try {
-      sim.configure(2, 3, 0, 1, false, false);
-      sim.spawn(1500, 1500, organism.initialMode, model.flatten(organism.genome()));
-      for (let i = 0; i < 18; i++) sim.advance(120);
+      sim.start_chaos_with_organisms(42, model.flatten(model.chaosGenome()), organismCatalog(organism), 6144);
       const cells = sim.snapshot(), links = sim.links();
-      assert(cells.length / model.STRIDE >= 2, `${organism.id} did not divide`);
-      assert(links.length / 2 >= 1, `${organism.id} did not form a bond`);
-      assert(cells.length / model.STRIDE < 500, `${organism.id} grew without bounds`);
+      const ids = Array.from({ length: cells.length / model.STRIDE }, (_, i) => cells[i * model.STRIDE]);
+      const recent = ids.slice(-organism.span);
+      assert.equal(recent.length, organism.span, `${organism.id} did not seed its full chain`);
+      const modes = organism.genome().length;
+      for (let i = 0; i < recent.length; i++)
+        assert.equal(sim.cell_mode(recent[i]), Math.min(i, modes - 1),
+          `${organism.id} chain has the wrong mode order`);
+      const bonds = new Set(Array.from({ length: links.length / 2 }, (_, i) => `${links[i * 2]}/${links[i * 2 + 1]}`));
+      for (let i = 1; i < recent.length; i++)
+        assert(bonds.has(`${recent[i - 1]}/${recent[i]}`), `${organism.id} chain is not bonded`);
+      sim.advance(60);
+      assert(sim.stats()[1] >= 1, `${organism.id} died immediately`);
     } finally {
       sim.free();
     }
@@ -271,10 +282,12 @@ test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI"
 test("worker acknowledges ordered resets and correlates failed restore commands", async () => {
   const workerSource = await readFile(new URL("../frontend/simulation.worker.ts", import.meta.url), "utf8");
   const wasm = await readFile(new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url));
+  const organismsUrl = `data:text/javascript;base64,${Buffer.from(organismsBundle.outputFiles[0].text).toString("base64")}`;
   const workerJs = ts.transpileModule(workerSource, {compilerOptions: {
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
   }}).outputText
     .replace('"./wasm/simulation.js"', JSON.stringify(new URL("../frontend/wasm/simulation.js", import.meta.url).href))
+    .replace('"./organisms"', JSON.stringify(organismsUrl))
     .replace("await init();", `await init({module_or_path:new Uint8Array(${JSON.stringify(Array.from(wasm))})});`);
   const previousSelf = globalThis.self, previousInterval = globalThis.setInterval;
   const messages = [];
@@ -336,14 +349,14 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
     const finalState = replay => messages.find(message => message.requestId === `after-${replay}`).state;
     assert.equal(finalState(false), finalState(true));
 
-    // The real worker routes chaos resets and editor changes and serializes
-    // future pool/config commands with the same queue as sandbox commands.
-    send({type:"reset", requestId:"chaos-start", chaos:{seed:42, genome:model.flatten(model.chaosGenome())}});
+    // The real worker routes chaos resets and serializes future config
+    // commands with the same queue as sandbox commands.
+    const catalog = organisms.chaosOrganismsBuffer();
+    send({type:"reset", requestId:"chaos-start", chaos:{seed:42, genome:model.flatten(model.chaosGenome()), organisms:catalog}});
     tick();
     assert.equal(messages.at(-1).worldSize, 6144);
     assert.equal(messages.at(-1).chaos.info[5], 6);
-    const palette = model.flatten([{...model.newMode(0), kind:4, canDivide:false}]);
-    send({type:"chaos-pool", genome:palette, atTick:2});
+    assert.equal(messages.at(-1).chaos.info[9], organisms.DEMO_ORGANISMS.length);
     send({type:"chaos-configure", enabled:false, rate:10, viable:false, atTick:2});
     send({type:"export", requestId:"chaos-queue"});
     tick();
@@ -352,7 +365,7 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
       if (replay) { send({type:"restore", requestId:"chaos-reload", state:chaosSave}); tick(); }
       send({type:"step"}); send({type:"step"}); tick();
       assert.equal(messages.at(-1).chaos.info[2], 0);
-      assert.equal(messages.at(-1).chaos.info[9], 1);
+      assert.equal(messages.at(-1).chaos.info[9], organisms.DEMO_ORGANISMS.length);
       send({type:"export", requestId:`chaos-after-${replay}`}); tick();
     }
     assert.equal(messages.find(m => m.requestId === "chaos-after-false").state,
@@ -384,46 +397,55 @@ test("real WASM rejects invalid commands without corrupting the world", () => {
   }
 });
 
-test("chaos WASM uses editor slots, large terrain, timed organisms and exact checkpoints", () => {
+test("chaos WASM mixes curated organisms with mandatory single cells and checkpoints", () => {
   const sim = new Simulation(7), restored = new Simulation(99);
   try {
-    const pool = model.chaosGenome().map(m => ({ ...m, canDivide: false }));
-    sim.start_chaos(73421, model.flatten(pool));
+    const catalog = organisms.chaosOrganismsBuffer();
+    sim.start_chaos_with_organisms(73421, model.flatten(model.chaosGenome()), catalog, 6144);
     assert.equal(sim.world_size(), 6144);
     assert.equal(sim.terrain().length, 96 * 96 * 4);
-    assert(sim.stats()[1] >= 156);
+    assert(sim.stats()[1] >= 130, "initial soup is too small");
     assert.equal(sim.chaos_info()[5], 6);
-    const oldCell = sim.snapshot()[0];
-    const oldGenes = sim.genome(oldCell);
-    const edited = model.flatten([{ ...model.newMode(0), kind: 4, canDivide: false }]);
-    sim.set_chaos_pool(edited);
+    assert.equal(sim.chaos_info()[9], organisms.DEMO_ORGANISMS.length);
+    assert(sim.links().length > 0, "initial soup has no multicellular organisms");
+
     sim.sterilize();
-    sim.advance(120); sim.advance(59);
+    sim.advance(120);
+    sim.advance(59);
     assert.equal(sim.stats()[1], 0);
     sim.advance(1);
     assert.equal(sim.stats()[1], 1);
-    assert.equal(sim.snapshot()[4], 4);
-    assert.equal(sim.cell_mode(sim.snapshot()[0]), 0);
-    assert.deepEqual(sim.genome(sim.snapshot()[0]), edited);
-    assert.notDeepEqual(oldGenes, edited);
-    for (let i = 0; i < 6; i++) sim.advance(120);
-    assert.equal(sim.chaos_info()[8], 2);
+    assert([0, 1, 2, 3, 5].includes(sim.snapshot()[4]), "first single is not a mandatory role");
+    assert.equal(sim.genome(sim.snapshot()[0]).length, 2 + 102, "single should have one mode");
+    sim.advance(120);
+    sim.advance(60);
+    sim.advance(90);
+    assert.equal(sim.chaos_info()[8], 1);
     const events = sim.chaos_events();
-    assert.deepEqual(Array.from(events.slice(-3, -1)), [900, 4]);
-    assert(events.at(-1) >= 4 && events.at(-1) <= 7);
+    assert.deepEqual(Array.from(events.slice(-3, -1)), [450, 4]);
+    const span = events.at(-1);
+    assert(span >= 2 && span <= 5);
     const cells = sim.snapshot(), links = sim.links();
     const ids = Array.from({ length: cells.length / model.STRIDE }, (_, i) => cells[i * model.STRIDE]);
-    const recent = ids.slice(-events.at(-1));
+    const recent = ids.slice(-span);
+    assert.equal(recent.length, span);
+    const modes = (sim.genome(recent[0]).length - 2) / model.MODE_STRIDE;
+    for (let i = 0; i < recent.length; i++)
+      assert.equal(sim.cell_mode(recent[i]), Math.min(i, modes - 1));
     const bonds = new Set(Array.from({ length: links.length / 2 }, (_, i) => `${links[i * 2]}/${links[i * 2 + 1]}`));
     for (let i = 1; i < recent.length; i++)
       assert(bonds.has(`${recent[i - 1]}/${recent[i]}`), "organism cells are not bonded in a chain");
+
     restored.restore_state(sim.export_state());
+    restored.set_chaos_organisms(catalog);
     assert.deepEqual(restored.export_state(), sim.export_state());
     sim.configure_chaos(false, 10, false);
     restored.configure_chaos(false, 10, false);
     for (let i = 0; i < 10; i++) { sim.advance(120); restored.advance(120); }
     assert.deepEqual(sim.export_state(), restored.export_state());
     assert.throws(() => sim.configure_chaos(true, 0, true));
+    assert.throws(() => sim.set_chaos_organisms(new Float32Array([99, 1])));
+    assert.throws(() => sim.set_chaos_organisms(new Float32Array([1, 1, 2, 1, 1, 1])));
     assert.throws(() => sim.set_chaos_pool(new Float32Array()));
   } finally { sim.free(); restored.free(); }
 });
