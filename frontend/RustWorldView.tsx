@@ -20,6 +20,7 @@ type RustWorldViewProps = WorldViewProps & {
 };
 
 export function RustWorldView(props: RustWorldViewProps) {
+  const worldSize = props.frame?.worldSize ?? WORLD;
   const host = useRef<HTMLDivElement>(null),
     live = useRef(props);
   live.current = props;
@@ -137,7 +138,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     let viewport = measure();
     const reset = () => {
       viewport = measure();
-      Object.assign(camera.current, fitDishCamera(viewport, WORLD));
+      Object.assign(camera.current, fitDishCamera(viewport, worldSize));
       applyView(true);
       reportView(true);
     };
@@ -153,7 +154,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           }
         }
       }
-      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), WORLD));
+      Object.assign(camera.current, zoomDishCamera(camera.current, 1.5 ** steps, anchor, measure(), worldSize));
       applyView(true);
       reportView(true);
     };
@@ -161,7 +162,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     const resizeObserver = new ResizeObserver(() => {
       const next = measure();
       if (!next.width || !next.height || (next.width === viewport.width && next.height === viewport.height)) return;
-      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, WORLD));
+      Object.assign(camera.current, resizeDishCamera(camera.current, viewport, next, worldSize));
       viewport = next;
       applyView(true);
       reportView(true);
@@ -172,7 +173,7 @@ export function RustWorldView(props: RustWorldViewProps) {
     const addControls = () => {
       removeControls = bindCanvasControls(canvas, {
         camera: camera.current,
-        worldSize: WORLD,
+        worldSize,
         tool: () => live.current.tool,
         onView: (final) => { applyView(); reportView(final); },
         onPoint: (p, action) => {
@@ -249,6 +250,6 @@ export function RustWorldView(props: RustWorldViewProps) {
         instance.free();
       }
     };
-  }, []);
+  }, [worldSize]);
   return <div className="world" ref={host} />;
 }

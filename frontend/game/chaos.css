@@ -1,0 +1,21 @@
+.chaos-status { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 12px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+.chaos-settings fieldset { min-width: 0; }
+.chaos-settings input:not([type]) { width: 100%; }
+.chaos-table-wrap { overflow-x: auto; margin-top: 12px; }
+.chaos-biomes { border-collapse: collapse; font-size: 11px; width: 100%; }
+.chaos-biomes th, .chaos-biomes td { padding: 7px 5px; border-bottom: 1px solid var(--border); text-align: left; }
+.chaos-biomes tbody th { min-width: 130px; font-weight: 500; }
+.chaos-biomes i, .chaos-type-list i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; border: 1px solid var(--muted); flex-shrink: 0; }
+.chaos-observation figure { margin: 16px 0; }
+.chaos-observation figcaption { color: var(--muted); font-size: 12px; }
+.chaos-observation svg { display: block; width: 100%; color: var(--muted); }
+.chaos-observation svg text { fill: currentColor; font-size: 10px; }
+.chaos-type-list { padding: 0; list-style: none; }
+.chaos-type-list li { display: flex; align-items: center; padding: 3px 0; font-size: 12px; }
+.chaos-type-list strong { margin-left: auto; }
+.chaos-journal { padding: 0; list-style: none; max-height: 260px; overflow: auto; font-size: 12px; }
+.chaos-journal li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.chaos-journal time { color: var(--muted); white-space: nowrap; min-width: 48px; }
+.chaos-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; color: #e5b5f2; overflow: hidden; }
+.chaos-overlay circle, .chaos-overlay path { stroke: currentColor; stroke-width: 1.5; fill: none; }
+.chaos-overlay text { fill: currentColor; font-size: 11px; paint-order: stroke; stroke: #17291e; stroke-width: 3px; }

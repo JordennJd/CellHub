@@ -9,6 +9,7 @@ mod signals;
 mod interactions;
 mod bonds;
 mod specialized;
+mod chaos;
 mod persistence;
 mod tools;
 mod step;
@@ -55,6 +56,7 @@ pub struct Simulation {
     bonds: BTreeSet<(u32, u32)>,
     settings: Environment,
     boundary: Boundary,
+    chaos: Option<chaos::Chaos>,
 }
 
 #[wasm_bindgen]
@@ -79,10 +81,26 @@ impl Simulation {
             bonds: BTreeSet::new(),
             settings: Environment::default(),
             boundary: Boundary::default(),
+            chaos: None,
         }
     }
 
     pub fn reset(&mut self) {
+        if let Some(chaos) = &self.chaos {
+            let pool = chaos.pool.clone();
+            let initial_pool = chaos.initial_pool.clone();
+            let enabled = chaos.enabled;
+            let rate = chaos.rate;
+            let viable = chaos.viable;
+            self.start_chaos_checked(self.seed, initial_pool);
+            let chaos = self.chaos.as_mut().unwrap();
+            chaos.pool = pool;
+            chaos.enabled = enabled;
+            chaos.rate = rate;
+            chaos.viable = viable;
+            chaos.next_spawn = 1800 / rate;
+            return;
+        }
         let boundary = self.boundary;
         let track_divisions = self.division_events.is_some();
         *self = Self::new(self.seed);
@@ -92,6 +110,10 @@ impl Simulation {
 
     /// Opt in for the local laboratory without changing the native server map.
     pub fn set_circular_dish(&mut self, enabled: bool) {
+        if self.chaos.is_some() {
+            self.boundary = Boundary::Chaos;
+            return;
+        }
         self.boundary = if enabled {
             Boundary::Circle
         } else {
@@ -108,6 +130,9 @@ impl Simulation {
 
     /// Remove living cells while retaining the current substrate, time and settings.
     pub fn sterilize(&mut self) {
+        if let Some(chaos) = &mut self.chaos {
+            chaos.event(self.tick, 5, self.world.len());
+        }
         self.deaths += self.world.len();
         self.world.clear();
         self.entities.clear();

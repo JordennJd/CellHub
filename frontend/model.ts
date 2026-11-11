@@ -1,4 +1,5 @@
 export const WORLD = 3072;
+export const CHAOS_WORLD = 6144;
 export const POPULATION_LIMIT = 20_000;
 export const MAX_MODES = 1000;
 export const STRIDE = 12;
@@ -169,6 +170,13 @@ export const newMode = (index: number): Mode => ({
 });
 export const defaultGenome = (): Mode[] =>
   [newMode(0)];
+
+// A visible, fixed starting palette; immigration uses the user's edited slots.
+export const chaosGenome = (): Mode[] => TYPES.map((type, i) => ({
+  ...newMode(i), name: type.name, kind: i, childA: i, childB: i,
+  threshold: 2.6, lifespan: 360, canDivide: i === 0 || i === 1,
+  speed: i === 2 ? 28 : 0, keepAdhesionA: true,
+}));
 
 export const multicellularGenome = (): Mode[] => [
   { ...newMode(0), kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true, angle: 0, lifespan: 1000 },
@@ -450,11 +458,13 @@ export type WorldCommand = (
   | { type: "remove" | "boost"; id: number }
   | { type: "move"; id: number; x: number; y: number }
   | { type: "sterilize" }
+  | { type: "chaos-pool"; genome: Float32Array }
+  | { type: "chaos-configure"; enabled: boolean; rate: number; viable: boolean }
 ) & { atTick?: number };
 export type Command = WorldCommand
   | { type: "inspect"; id: number }
   | { type: "speed"; value: number }
-  | { type: "reset"; requestId?: string }
+  | { type: "reset"; requestId?: string; chaos?: { seed: number; genome: Float32Array } }
   | { type: "export"; requestId: string }
   | { type: "restore"; state: string; requestId?: string }
   | { type: "preview"; genome: Float32Array; mode: number; steps: number; requestId?: number }
@@ -488,4 +498,6 @@ export type Frame = {
   /** Rows: tick, parent ID, daughter A/B IDs, parent x/y/radius/angle. */
   divisions?: Float32Array;
   previewRequestId?: number;
+  worldSize?: number;
+  chaos?: { info: Float64Array; history: Float32Array; events: Uint32Array };
 };

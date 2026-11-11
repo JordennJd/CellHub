@@ -67,7 +67,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
                 <div className="home-mode-grid">
                     <ModeCard kind="challenge" title="Испытания" description="Задачи с заданными условиями и целями." onClick={() => setPage('challenges')}/>
                     <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
-                    <ModeCard kind="chaos" title="Хаос" description="Биомы, паразиты и сложные экосистемы."/>
+                    <ModeCard kind="chaos" title="Хаос" description="Биомы, день и ночь, мутации и самозарождение." onClick={() => onStart({ kind: 'chaos' })}/>
                     <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками." onClick={() => onStart({ kind: 'arena' })}/>
                 </div>
                 <div className="home-secondary-grid">
@@ -113,7 +113,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
         </main>
         {library && <Modal label="Библиотека" onClose={() => setLibrary(null)}>
             <Library kind={library} onClose={() => setLibrary(null)} onLoad={entry => onStart(entry.kind === 'plate'
-                ? { kind: (entry.data as PlateData).challengeId ? 'challenge' : 'sandbox', challengeId: (entry.data as PlateData).challengeId, entry }
+                ? { kind: (entry.data as PlateData).challengeId ? 'challenge' : (entry.data as PlateData).mode === 'chaos' ? 'chaos' : 'sandbox', challengeId: (entry.data as PlateData).challengeId, entry }
                 : { kind: 'sandbox', entry })}/>
         </Modal>}
         {settings && <Modal label="Настройки" onClose={() => setSettings(false)}><Settings onClose={() => setSettings(false)}/></Modal>}

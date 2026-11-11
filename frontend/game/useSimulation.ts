@@ -220,11 +220,11 @@ export function useSimulation() {
         pendingSpawns.current = current.previousPending;
         setInserted(current.previousInserted);
     }
-    function reset(settings = environment) {
+    function reset(settings = environment, chaos?: { seed: number; genome: Float32Array }) {
         if (transition.current)
             return;
         const requestId = beginTransition('reset', 0);
-        void request<boolean>(requestId, { type: 'reset', requestId })
+        void request<boolean>(requestId, { type: 'reset', requestId, chaos })
             .catch(reason => { failedTransition(requestId); setError(String(reason)); });
         configure(settings);
     }

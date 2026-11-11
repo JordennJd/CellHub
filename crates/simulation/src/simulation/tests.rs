@@ -819,7 +819,7 @@ fn corrupt_world_restore_is_atomic() {
     let state = s.encode_state();
     let mut variants = vec![vec![], state[..state.len() - 1].to_vec()];
     for (index, value) in [
-        (0, 7.),
+        (0, 8.),
         (2, 0.),
         (4, 1.),
         (8, f64::NAN),
@@ -830,7 +830,8 @@ fn corrupt_world_restore_is_atomic() {
         (16, -4.),
         (17, -1.),
         (18, 2.),
-        (19, 0.),
+        (19, 2.),
+        (20, 0.),
     ] {
         let mut corrupt = state.clone();
         corrupt[index] = value;

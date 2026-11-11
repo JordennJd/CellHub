@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const binary = fileURLToPath(new URL("../target/debug/cellhub-server", import.meta.url));
+const binary = fileURLToPath(new URL(`../target/debug/cellhub-server${process.platform === "win32" ? ".exe" : ""}`, import.meta.url));
 if (!existsSync(binary))
   throw new Error("Build the server first: bash scripts/rust.sh build -p cellhub-server");
 

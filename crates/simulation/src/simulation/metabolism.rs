@@ -9,7 +9,7 @@ use crate::cell_types::{
 };
 use crate::components::{Cell, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position};
 use crate::genome::Genome;
-use crate::terrain::tile_index;
+use crate::terrain::index;
 use std::collections::BTreeMap;
 
 const MIN_CELL_MASS: f32 = 0.18;
@@ -23,6 +23,8 @@ impl Simulation {
     ) -> MetabolismScratch {
         let population = entities.len();
         let settings = self.settings;
+        let grid = (self.boundary.size() / 64.) as usize;
+        let chaos = self.chaos.is_some();
         let passive_drift = settings.vertical_drift();
         let recoil_decay = libm::expf(-RECOIL_DRAG * settings.viscosity * STEP);
         let mut scratch = std::mem::take(&mut self.metabolism);
@@ -52,7 +54,7 @@ impl Simulation {
                 let order = scratch.indices[entity.id() as usize];
                 Body {
                     order,
-                    tile: tile_index(p.x, p.y),
+                    tile: index(p.x, p.y, grid),
                     result: MetabolismResult {
                         start: *p,
                         end: *p,
@@ -116,11 +118,21 @@ impl Simulation {
                     let modes = g.modes_mut();
                     let index =
                         ((mutation_gene * modes.len() as f32) as usize).min(modes.len() - 1);
+                    let modes_count = modes.len();
                     let target = &mut modes[index];
-                    if !settings.only_point_mutations {
-                        target.kind = (target.kind + 1) % COUNT;
+                    if chaos {
+                        super::chaos::mutate(
+                            target,
+                            modes_count,
+                            noise,
+                            settings.only_point_mutations,
+                        );
+                    } else {
+                        if !settings.only_point_mutations {
+                            target.kind = (target.kind + 1) % COUNT;
+                        }
+                        target.threshold = (target.threshold + (noise - 0.5) * 0.8).clamp(1., 8.);
                     }
-                    target.threshold = (target.threshold + (noise - 0.5) * 0.8).clamp(1., 8.);
                     c.mutations += 1;
                 }
                 c.mass -= t.radiation * STEP * 0.015;

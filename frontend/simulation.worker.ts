@@ -10,7 +10,7 @@ let previewRequestId: number | undefined;
 type ScheduledCommand = WorldCommand & { atTick: number };
 let scheduled: ScheduledCommand[] = [];
 const MAX_SCHEDULED_COMMANDS = 1024;
-const scheduledTypes = new Set(["spawn", "edit", "configure", "remove", "boost", "move", "sterilize"]);
+const scheduledTypes = new Set(["spawn", "edit", "configure", "remove", "boost", "move", "sterilize", "chaos-pool", "chaos-configure"]);
 const validTick = (tick: unknown): tick is number =>
   typeof tick === "number" && Number.isInteger(tick) && tick >= 0 && tick <= 0xffffffff;
 
@@ -24,10 +24,13 @@ function frame() {
     details = sim.cell_details(),
     coveredFood = sim.covered_food(),
     divisions = sim.take_division_events();
+  const info = sim.chaos_info(), history = sim.chaos_history(), events = sim.chaos_events();
   ctx.postMessage({
     type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood, divisions,
+    worldSize: sim.world_size(), chaos: info.length ? { info, history, events } : undefined,
     ...(previewRequestId === undefined ? {} : { previewRequestId }),
   }, [
+    info.buffer, history.buffer, events.buffer,
     cells.buffer,
     links.buffer,
     terrain.buffer,
@@ -54,7 +57,7 @@ function readScheduled(raw: unknown, tick: number): ScheduledCommand[] {
   return sortScheduled(raw.map(item => {
     if (!item || !scheduledTypes.has(item.type) || !validTick(item.atTick) || item.atTick <= tick)
       throw new Error("Некорректный тик отложенной команды");
-    if (item.type === "spawn" || item.type === "edit") {
+    if (item.type === "spawn" || item.type === "edit" || item.type === "chaos-pool") {
       if (!Array.isArray(item.genome) || item.genome.length > 1_200_000
         || !item.genome.every(Number.isFinite)) throw new Error("Некорректный геном отложенной команды");
       return { ...item, genome: new Float32Array(item.genome) };
@@ -123,6 +126,15 @@ function apply(c: Command) {
         if (![0, 0.25, 1, 2, 4].includes(c.value)) throw new Error("Недопустимая скорость симуляции");
         speed = c.value;
         debt = 0;
+        break;
+      case "chaos-pool":
+        sim.set_chaos_pool(c.genome);
+        changed = true;
+        break;
+      case "chaos-configure":
+        if (!Number.isInteger(c.rate) || c.rate < 1 || c.rate > 60) throw new Error("Недопустимая частота самозарождения");
+        sim.configure_chaos(c.enabled, c.rate, c.viable);
+        changed = true;
         break;
       case "configure": {
         const s = c.settings;
@@ -198,7 +210,10 @@ function apply(c: Command) {
         break;
       }
       case "reset":
-        sim.reset();
+        if (c.chaos) {
+          if (!Number.isInteger(c.chaos.seed) || c.chaos.seed < 0 || c.chaos.seed > 0xffffffff) throw new Error("Некорректный seed");
+          sim.start_chaos(c.chaos.seed, c.chaos.genome);
+        } else sim.reset();
         previewRequestId = undefined;
         scheduled = [];
         speed = 0;

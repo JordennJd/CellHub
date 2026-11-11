@@ -12,11 +12,17 @@ const DIVISION_SEPARATION_SPEED: f32 = 100.;
 impl Simulation {
     pub(super) fn step(&mut self) {
         self.tick += 1;
+        self.update_chaos();
         self.update_signals_and_secretions(STEP);
         let degrees = self.bond_degrees();
         self.exchange_bond_energy(STEP as f64 * 1.5, &degrees);
         for t in &mut self.tiles {
-            t.food = (t.food + STEP * 0.018 * t.capacity).min(t.capacity);
+            let regeneration = if self.chaos.is_some() {
+                crate::terrain::BIOMES[t.biome as usize][4]
+            } else {
+                1.
+            };
+            t.food = (t.food + STEP * 0.018 * t.capacity * regeneration).min(t.capacity);
             t.regenerate_nitrates(STEP);
         }
         // IDs only grow, and children are appended in ID order, so this list
@@ -164,5 +170,6 @@ impl Simulation {
         // colony. Build the contact graph only after those positions are known.
         self.resolve_contacts(paths, STEP);
         self.specialized_contacts(STEP);
+        self.record_chaos_history();
     }
 }

@@ -72,8 +72,9 @@ fn on_wall(boundary: Boundary, position: Position, mass: f32) -> bool {
             .min(position.y)
             .min(SIZE - position.x)
             .min(SIZE - position.y),
-        Boundary::Circle => {
-            SIZE / 2. - libm::hypotf(position.x - SIZE / 2., position.y - SIZE / 2.)
+        Boundary::Circle | Boundary::Chaos => {
+            let center = boundary.size() / 2.;
+            center - libm::hypotf(position.x - center, position.y - center)
         }
     };
     gap <= radius(mass).max(12.) + 0.5
