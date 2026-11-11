@@ -47,6 +47,9 @@ CELL_TYPES = [
 KIND = {name: index for index, name in enumerate(CELL_TYPES)}
 TOOL_NAMES = {"cell": "place", "info": "select", "move": "move", "add": "add", "remove": "remove"}
 MASS_SCALE = 6.0
+# The web port tests every demo with a 30-second real-time budget. A hold timer
+# longer than this cannot be demonstrated; keep the original value for reference.
+MAX_WIN_TIME = 60.0
 
 
 def signed_angle(value: float) -> float:
@@ -322,6 +325,9 @@ def build_level(entry: dict, data: dict) -> dict:
     if not allowed:
         allowed = list(range(len(CELL_TYPES)))
     conditions = dict(challenge["conditions"])
+    win_time_original = conditions.get("win-time")
+    if win_time_original and float(win_time_original) > MAX_WIN_TIME:
+        conditions["win-time"] = MAX_WIN_TIME
     tools = [TOOL_NAMES[name] for name in challenge["tools"] if name in TOOL_NAMES]
     max_cells = {
         name: int(value)
@@ -375,7 +381,11 @@ def build_level(entry: dict, data: dict) -> dict:
             "food": food,
         },
         "demo": build_demo(challenge, substrate, len(genomes), radius),
-        "test": {"maxSeconds": None, "seed": 0xCE11AB},
+        "test": {
+            "maxSeconds": None,
+            "seed": 0xCE11AB,
+            **({"winTimeOriginal": win_time_original} if win_time_original and float(win_time_original) > MAX_WIN_TIME else {}),
+        },
     }
 
 

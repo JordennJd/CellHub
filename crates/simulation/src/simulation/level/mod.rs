@@ -297,7 +297,10 @@ impl Simulation {
         let mut required = true;
         let mut constrained = true;
         for &(kind, _target, _, met) in &values {
-            if met {
+            // `win-time` is the hold accumulator itself, not a prerequisite for
+            // accumulating. Counting it as unmet froze the timer at zero on
+            // every level whose win condition is "hold for N seconds".
+            if met || kind == ConditionKind::WinTime {
                 continue;
             }
             if condition_required(kind) {
@@ -673,6 +676,27 @@ mod tests {
         assert!(condition_met(ConditionKind::UserCells, 100., 100.));
         assert!(!condition_met(ConditionKind::UserCellsMax, 1., 0.));
         assert!(condition_met(ConditionKind::BlackLevelCells, 0., 0.));
+    }
+
+    #[test]
+    fn win_time_accumulates_while_other_conditions_hold() {
+        let level = Level {
+            id: "win-time".into(),
+            conditions: schema::Conditions {
+                user_cells: Some(0),
+                win_time: Some(0.5),
+                ..schema::Conditions::default()
+            },
+            ..Level::default()
+        };
+        let mut simulation = Simulation::new(1);
+        simulation.install_level(level).unwrap();
+        simulation.advance(20);
+        assert_eq!(
+            simulation.level.as_ref().unwrap().state,
+            LevelState::Won,
+            "win-time must count up even though it is itself an unmet condition"
+        );
     }
 
     #[test]
