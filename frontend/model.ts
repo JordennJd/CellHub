@@ -172,7 +172,7 @@ export const defaultGenome = (): Mode[] =>
 export const multicellularGenome = (): Mode[] => [
   { ...newMode(0), kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true, angle: 0, lifespan: 1000 },
   { ...newMode(1), kind: 2, canDivide: false, speed: 40, lifespan: 1000 },
-  { ...newMode(2), kind: 1, threshold: 2.4, childA: 2, childB: 0, keepAdhesionA: true, angle: 0, lifespan: 1000 },
+  { ...newMode(2), kind: 1, threshold: 2.4, childA: 0, childB: 2, keepAdhesionB: true, angle: 0, lifespan: 1000 },
 ];
 
 // Header avoids ambiguity between old 12-number rows and extended rows.

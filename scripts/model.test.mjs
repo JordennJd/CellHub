@@ -8,8 +8,8 @@ test("archetype settings and all adhesion flags survive encoding and saving", ()
   assert.deepEqual(inflate(flatten(modes)), modes.map((m, i) => ({ ...m, name: `M${i + 1}` })));
   assert.deepEqual(parseGenome(serializeGenome(modes)), modes);
   assert.equal(modes[1].canDivide, false);
-  assert.equal(modes[2].keepAdhesionA, true);
-  assert.equal(modes[2].keepAdhesionB, false);
+  assert.equal(modes[2].keepAdhesionA, false);
+  assert.equal(modes[2].keepAdhesionB, true);
   assert.equal(modes[2].bindChildren, false);
 });
 
@@ -58,7 +58,7 @@ test("deleting an archetype remaps incoming references and permits cycles", () =
   const g = multicellularGenome();
   const removed = removeMode(g, 1);
   assert.equal(removed.length, 2);
-  assert.deepEqual(removed.map((m) => [m.childA, m.childB]), [[1, 1], [1, 0]]);
+  assert.deepEqual(removed.map((m) => [m.childA, m.childB]), [[1, 1], [0, 1]]);
   const last = removeMode(g, 2);
   assert.deepEqual(last.map((m) => [m.childA, m.childB]), [[1, 1], [1, 1]]);
   const only = [newMode(0)];
