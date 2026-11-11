@@ -89,12 +89,12 @@ struct CellOut {
     return o;
 }
 @fragment fn cell_fs(o:CellOut)->@location(0) vec4f {
-    let palette=array<u32,7>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,0x8ed6b3u);
-    var color=rgb(palette[min(o.kind,6u)]);
+    let palette=array<u32,18>(0xa4db71u,0xf1bf72u,0x71cbd4u,0xc997edu,0xb3c3d0u,0xf08373u,0x8ed6b3u,
+        0xe4b978u,0x8ebfe8u,0xccbd78u,0xb8a0e5u,0xa7cbe6u,0xe68fa1u,0xb89ce0u,0xdca18cu,0x9ed8bdu,0xe7c893u,0x88c9c3u);
+    var color=rgb(palette[min(o.kind,17u)]);
     if o.custom_color>=0. {color=rgb(u32(o.custom_color));}
     let r=o.radius;let d=length(o.local);let direction=vec2f(cos(o.angle),sin(o.angle));
     let halo=coverage(d-r-1./camera.zoom);let body=coverage(d-r);let outline=coverage(abs(d-r)-0.6/camera.zoom);
-    let nucleus=coverage(d-r*0.21);
     let mutation=coverage(length(o.local-vec2f(r*0.55,-r*0.55))-2.);
     let selection=coverage(abs(d-r-4./camera.zoom)-0.75/camera.zoom);
     // Type markings rotate and mirror with the cell, while the custom RGB
@@ -104,6 +104,8 @@ struct CellOut {
     let p = vec2f(dot(radial, direction), dot(radial, side));
     let aa = clamp(0.5 * length(fwidth(radial)), 0.001, 0.5);
     let appendages = marking_coverage(appendage_distance(o.kind, p), aa);
+    let internal_marks = marking_coverage(interior_distance(o.kind, p), aa);
+    let nucleus = marking_coverage(nucleus_distance(o.kind, p), aa);
     let patch_grain = grain(p * 0.68 + o.material_phase) * 0.17;
     let cytoplasm = 0.34 - 0.08 * min(dot(radial, radial), 1.);
     // Keep custom body RGB; lift only details that fall below 3:1 against the dish.
@@ -120,6 +122,17 @@ struct CellOut {
         let inner_membrane = marking_coverage(abs(length(radial) - 0.72) - 0.05, aa);
         out = over(out, ink, inner_membrane * 0.8);
     }
+    if o.kind == 7u {
+        let lipid = marking_coverage(length(p) - 0.69, aa);
+        out = over(out, mix(rgb(0xa77c51u), color, 0.28), lipid * 0.85);
+    }
+    if o.kind == 15u {
+        let first = marking_coverage(stem_lobe_distance(p), aa);
+        let second = marking_coverage(stem_lobe_distance(-p), aa);
+        out = over(out, mix(ink, rgb(0xdf7777u), 0.55), first * body * 0.85);
+        out = over(out, mix(ink, rgb(0x79a9e1u), 0.55), second * body * 0.85);
+    }
+    out = over(out, ink, internal_marks * body * 0.85);
     out = over(out, ink, appendages);
     out = over(out, ink, outline);
     out = over(out, ink, nucleus * 0.9);

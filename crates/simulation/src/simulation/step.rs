@@ -1,6 +1,8 @@
 //! One simulation tick: metabolism, interactions, death, division and bonds.
 
 use super::Simulation;
+use super::program::{SPEED_TARGET, controlled_value};
+use super::specialized::{BUOYOCYTE, GAMETE, LIPOCYTE, buoyant_drift, corpse_food, differentiate};
 use crate::components::{
     Cell, LIMIT, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position, radius,
 };
@@ -13,6 +15,7 @@ const STEP: f32 = 1. / 30.;
 impl Simulation {
     pub(super) fn step(&mut self) {
         self.tick += 1;
+        self.update_signals_and_secretions(STEP);
         let degrees = self.bond_degrees();
         self.exchange_bond_energy(STEP as f64 * 1.5, &degrees);
         for t in &mut self.tiles {
@@ -27,7 +30,8 @@ impl Simulation {
         let mut children = Vec::new();
         let mut inheritors: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
         let mut new_bonds = Vec::new();
-        let vertical_drift = self.settings.vertical_drift();
+        let settings = self.settings;
+        let passive_drift = settings.vertical_drift();
         let mut paths = Vec::with_capacity(population);
         for &(_, e) in &entities {
             let noise = self.random();
@@ -37,10 +41,13 @@ impl Simulation {
                 .world
                 .query_one_mut::<(&mut Position, &mut Cell, &mut Genome)>(e)
                 .unwrap();
-            let m = *g.mode(c.mode);
             let start = *p;
             c.age += STEP;
             c.cooldown = (c.cooldown - STEP).max(0.);
+            let degree = degrees.get(&c.id).copied().unwrap_or(0);
+            let differentiated = differentiate(c, g, degree);
+            let m = *g.mode(c.mode);
+            let programmed_speed = controlled_value(c, &m, SPEED_TARGET, degree).clamp(0., 60.);
             let t = &mut self.tiles[tile_index(p.x, p.y)];
             t.feed_nitrogen(c, m.kind, STEP);
             let gain = if m.kind == 0 {
@@ -52,7 +59,12 @@ impl Simulation {
             } else {
                 0.
             };
-            c.mass += gain - STEP * (if m.kind == 4 { 0.014 } else { 0.025 } + m.speed * 0.0003);
+            let maintenance = match m.kind {
+                LIPOCYTE => 0.004 + programmed_speed * 0.00005,
+                4 => 0.014 + programmed_speed * 0.0003,
+                _ => 0.025 + programmed_speed * 0.0003,
+            };
+            c.mass += gain - STEP * maintenance;
             if mutation_roll < t.radiation * STEP * 0.035 {
                 let modes = g.modes_mut();
                 let index = ((mutation_gene * modes.len() as f32) as usize).min(modes.len() - 1);
@@ -66,34 +78,55 @@ impl Simulation {
             c.mass -= t.radiation * STEP * 0.015;
             // A bonded flagellum supplies directed propulsion to the organism.
             // Passive members have drag, but no independent random locomotion.
-            let degree = degrees.get(&c.id).copied().unwrap_or(0);
             let linked = degree != 0;
             if !linked {
                 p.angle += (noise - 0.5) * 0.35;
             }
             let speed = if m.kind == 2 {
-                m.speed
+                programmed_speed
             } else if linked {
                 0.
             } else {
-                m.speed * 0.15
+                programmed_speed * 0.15
             };
-            let next_x = p.x + libm::cosf(p.angle) * speed * STEP / self.settings.viscosity;
+            let vertical_drift = if m.kind == BUOYOCYTE {
+                buoyant_drift(
+                    c,
+                    &m,
+                    degree,
+                    settings.gravity,
+                    settings.density,
+                    settings.viscosity,
+                )
+            } else {
+                passive_drift
+            };
+            let next_x = p.x + libm::cosf(p.angle) * speed * STEP / settings.viscosity;
             let next_y = p.y
-                + libm::sinf(p.angle) * speed * STEP / self.settings.viscosity
+                + libm::sinf(p.angle) * speed * STEP / settings.viscosity
                 + vertical_drift * STEP;
-            let (x, y, reached_edge) = self.boundary.constrain(next_x, next_y, c.mass, 12.);
+            let (x, y, reached_edge) = if c.anchored {
+                (p.x, p.y, false)
+            } else {
+                self.boundary.constrain(next_x, next_y, c.mass, 12.)
+            };
             p.x = x;
             p.y = y;
             if c.mass < 0.18
                 || c.nitrogen < NITROGEN_DEATH
+                || c.toxin >= 1.
+                || c.injury >= 1.
+                || c.telomeres == 0
                 || (self.settings.aging && c.age > m.lifespan)
                 || (self.settings.kill_at_edge && reached_edge)
             {
+                corpse_food(t, c, m.kind);
                 dead.push(e);
                 continue;
             }
             if m.can_divide
+                && m.kind != GAMETE
+                && !differentiated
                 && c.age + 0.000001 >= MIN_DIVISION_AGE
                 && c.mass >= m.threshold
                 && c.nitrogen >= NITROGEN_DIVISION
@@ -125,6 +158,12 @@ impl Simulation {
                 b.mode = m.child_b;
                 a.age = 0.;
                 b.age = 0.;
+                a.anchored = false;
+                b.anchored = false;
+                if c.telomeres > 0 {
+                    a.telomeres = c.telomeres - 1;
+                    b.telomeres = a.telomeres;
+                }
                 a.mirrored = c.mirrored ^ m.mirror_a;
                 b.mirrored = c.mirrored ^ m.mirror_b;
                 a.generation += 1;
@@ -182,5 +221,6 @@ impl Simulation {
         // Constraint solving can move cells across buckets or into a different
         // colony. Build the contact graph only after those positions are known.
         self.resolve_contacts(paths, STEP);
+        self.specialized_contacts(STEP);
     }
 }

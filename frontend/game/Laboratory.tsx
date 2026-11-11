@@ -1,8 +1,9 @@
+import { CellDetails } from "./CellDetails";
 import { Modal } from './Modal';
 import { useEffect, useRef, useState } from 'react';
 import { WorldView, type ViewState } from '../WorldView';
 import { initialBackend, type BackendPreference } from '../backend';
-import { defaultGenome, flatten, inflate, TYPES, STRIDE, DEFAULT_ENVIRONMENT, type Mode } from '../model';
+import { defaultGenome, flatten, inflate, TYPES, STRIDE, CELL_DETAILS_STRIDE, DEFAULT_ENVIRONMENT, type Mode } from '../model';
 import { GenomeEditor } from '../editor/GenomeEditor';
 import { useSimulation } from './useSimulation';
 import { EnvironmentPanel } from './EnvironmentPanel';
@@ -45,13 +46,14 @@ export function Laboratory({ session, onExit }: {
     const initialized = useRef(false), victory = useRef(false), copyPending = useRef(false);
     const stats = sim.frame?.stats, count = stats?.[1] ?? 0;
     const objective = challenge ? evaluateChallenge(challenge, sim.frame, sim.inserted) : null;
-    let cell: Float32Array | undefined, nitrogen: number | undefined;
+    let cell: Float32Array | undefined, details: Float32Array | undefined, nitrogen: number | undefined;
     let connections = 0;
     if (sim.frame && selected !== null)
         for (let i = 0; i < sim.frame.cells.length; i += STRIDE)
             if (sim.frame.cells[i] === selected) {
                 cell = sim.frame.cells.subarray(i, i + STRIDE);
                 nitrogen = sim.frame.nitrogen?.[i / STRIDE];
+                details = sim.frame.details?.subarray(i / STRIDE * CELL_DETAILS_STRIDE, (i / STRIDE + 1) * CELL_DETAILS_STRIDE);
                 break;
             }
     if (cell && sim.frame) {
@@ -97,7 +99,7 @@ export function Laboratory({ session, onExit }: {
         let active = true;
         sim.inspect(selected).then(result => { if (active) setDiagnostic(result); }).catch(() => {});
         return () => { active = false; };
-    }, [selected, cell?.[4], cell?.[8], sim.resetting, diagnosticRevision]);
+    }, [selected, cell?.[4], cell?.[8], details?.[11], sim.resetting, diagnosticRevision]);
     useEffect(() => { const hidden = () => { if (document.hidden && readSettings().pauseWhenHidden)
         sim.changeSpeed(0); }; const before = (e: BeforeUnloadEvent) => { if (readSettings().confirmExit) {
         e.preventDefault();
@@ -190,7 +192,7 @@ export function Laboratory({ session, onExit }: {
             string
         ][] : [])];
     return <div className="laboratory"><header className="app-header"><button onClick={leave}>← Меню</button><h1>{title}</h1><button disabled={!sim.ready || sim.resetting} onClick={() => { sim.changeSpeed(0); setSaveKind('plate'); setName(title === 'Новый эксперимент' ? '' : title); }}>Сохранить эксперимент</button></header>
- <main className="lab-layout"><section className="microscope" aria-label="Микроскоп"><div className="canvas-actions"><div className="canvas-view-controls" role="group" aria-label="Масштаб чашки"><button aria-label="Уменьшить масштаб" onClick={() => setZoomStep(v => v - 1)}>−</button><button aria-label="Увеличить масштаб" onClick={() => setZoomStep(v => v + 1)}>+</button><button onClick={() => setRecenter(v => v + 1)}>Вся чашка</button></div><label><span className="sr-only">Показать слой</span><select value={layer} onChange={e => setLayer(e.target.value)}><option value="biome">Среда</option><option value="light">Свет</option><option value="food">Пища</option><option value="nitrates">Нитраты</option><option value="radiation">Радиация</option></select></label></div><div className="canvas-wrap"><WorldView frame={sim.frame} tool={tool} layer={layer} selected={selected} backend={backend} onPoint={point} onView={setView} onError={() => failure('Не удалось показать чашку. Попробуйте перезагрузить страницу.')} recenter={recenter} zoomStep={zoomStep} onBackendFailure={(failed) => { if (failed === 'webgpu')
+ <main className="lab-layout"><section className="microscope" aria-label="Микроскоп"><div className="canvas-actions"><div className="canvas-view-controls" role="group" aria-label="Масштаб чашки"><button aria-label="Уменьшить масштаб" onClick={() => setZoomStep(v => v - 1)}>−</button><button aria-label="Увеличить масштаб" onClick={() => setZoomStep(v => v + 1)}>+</button><button onClick={() => setRecenter(v => v + 1)}>Вся чашка</button></div><label><span className="sr-only">Показать слой</span><select value={layer} onChange={e => setLayer(e.target.value)}><option value="biome">Среда</option><option value="light">Свет</option><option value="food">Пища</option><option value="covered">Покрытая пища</option><option value="nitrates">Нитраты</option><option value="radiation">Радиация</option></select></label></div><div className="canvas-wrap"><WorldView frame={sim.frame} tool={tool} layer={layer} selected={selected} backend={backend} onPoint={point} onView={setView} onError={() => failure('Не удалось показать чашку. Попробуйте перезагрузить страницу.')} recenter={recenter} zoomStep={zoomStep} onBackendFailure={(failed) => { if (failed === 'webgpu')
         setBackend('webgl');
     else
         failure('В этом браузере не удалось открыть изображение чашки.'); }}/>
@@ -202,7 +204,7 @@ export function Laboratory({ session, onExit }: {
  </section><aside className="lab-sidebar"><nav className="tabs" aria-label="Панели лаборатории">{[...(challenge || session.kind === 'tutorial' ? [['objective', 'Задача']] : []), ['genome', 'Геном'], ['observe', 'Наблюдение'], ['environment', 'Среда']].map(([value, label]) => <button key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => setTab(value)}>{label}</button>)}</nav><div className="sidebar-content">{session.kind === 'tutorial' && tab !== 'objective' && !tutorialDone && <p className="tutorial-context" role="status">{lesson.steps[tutorial].title}: {lesson.steps[tutorial].description}</p>}
  {tab === 'genome' && <GenomeEditor genome={genome} onChange={setGenome} initialMode={initialMode} onInitialModeChange={setInitialMode} allowedKinds={challenge?.allowedKinds} onSave={() => { setName(''); setSaveKind('genome'); }} onLoad={() => setLibrary(true)}/>}
  {tab === 'environment' && <><EnvironmentPanel value={sim.environment} onChange={sim.configure} locked={!!challenge || sim.resetting || !sim.ready} lockedReason={challenge ? 'Условия заданы испытанием.' : undefined}/>{!challenge && <button className="danger" onClick={() => ask('Стерилизовать чашку?', 'Все клетки и их связи будут удалены. Среда и её возраст останутся.', () => { sim.send({ type: 'sterilize' }); setSelected(null); }, readSettings().confirmReset)}>Стерилизовать чашку</button>}</>}
- {tab === 'observe' && <section className="panel-section"><h2>Наблюдение</h2><dl className="metrics"><div><dt>Рождений</dt><dd>{stats?.[2] ?? 0}</dd></div><div><dt>Погибло</dt><dd>{stats?.[3] ?? 0}</dd></div><div><dt>Связей</dt><dd>{(sim.frame?.links.length ?? 0) / 2}</dd></div></dl>{cell ? <><h3>Выбранная клетка</h3><dl className="cell-details">{[['Тип', TYPES[cell[4]]?.name], ['Режим', diagnostic?.genome[diagnostic.mode]?.name ?? '…'], ['Зеркальность', cell[11] ? 'Да' : 'Нет'], ['Масса', `${cell[5].toFixed(2)} нг`], ['Азот', nitrogen === undefined ? '…' : `${(nitrogen * 100).toFixed(1)}%`], ['Постоянных связей', connections], ['Возраст', `${cell[6].toFixed(1)} с`], ['Поколение', cell[7]], ['Изменений генома', cell[8]]].map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl><button onClick={copyGenome}>Скопировать геном в редактор</button>{!challenge && <button onClick={() => ask('Изменить выбранную клетку?', 'Геном редактора будет применён только к этой клетке.', () => { const values = flatten(genome); sim.names.current.set(Array.from(values).join(','), genome.map(mode => mode.name)); sim.send({ type: 'edit', id: selected!, mode: initialMode, genome: values }); setDiagnosticRevision(value => value + 1); setNotice('Геном применён к клетке.'); })}>Применить геном редактора</button>}</> : <p>{selected === null ? 'Выберите клетку инструментом «Диагностика».' : 'Клетка разделилась или погибла. Выберите потомка.'}</p>}</section>}
+ {tab === 'observe' && <section className="panel-section"><h2>Наблюдение</h2><dl className="metrics"><div><dt>Рождений</dt><dd>{stats?.[2] ?? 0}</dd></div><div><dt>Погибло</dt><dd>{stats?.[3] ?? 0}</dd></div><div><dt>Связей</dt><dd>{(sim.frame?.links.length ?? 0) / 2}</dd></div></dl>{cell ? <><h3>Выбранная клетка</h3><dl className="cell-details">{[['Тип', TYPES[cell[4]]?.name], ['Режим', diagnostic?.genome[diagnostic.mode]?.name ?? '…'], ['Зеркальность', cell[11] ? 'Да' : 'Нет'], ['Масса', `${cell[5].toFixed(2)} нг`], ['Азот', nitrogen === undefined ? '…' : `${(nitrogen * 100).toFixed(1)}%`], ['Постоянных связей', connections], ['Возраст', `${cell[6].toFixed(1)} с`], ['Поколение', cell[7]], ['Изменений генома', cell[8]]].map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl><CellDetails values={details}/><button onClick={copyGenome}>Скопировать геном в редактор</button>{!challenge && <button onClick={() => ask('Изменить выбранную клетку?', 'Геном редактора будет применён только к этой клетке.', () => { const values = flatten(genome); sim.names.current.set(Array.from(values).join(','), genome.map(mode => mode.name)); sim.send({ type: 'edit', id: selected!, mode: initialMode, genome: values }); setDiagnosticRevision(value => value + 1); setNotice('Геном применён к клетке.'); })}>Применить геном редактора</button>}</> : <p>{selected === null ? 'Выберите клетку инструментом «Диагностика».' : 'Клетка разделилась или погибла. Выберите потомка.'}</p>}</section>}
  {tab === 'objective' && <ObjectivePanel challenge={challenge} objectives={objective?.objectives ?? []} inserted={sim.inserted} completed={completed} help={help} onHelp={setHelp} lesson={lesson} step={tutorial} tutorialDone={tutorialDone} progressSaved={progressSaved} onRetryProgress={saveProgress}/>}
  </div></aside></main>
  {(sim.error || notice) && <div className={'toast ' + (sim.error ? 'error' : '')} role={sim.error ? 'alert' : 'status'}><span>{sim.error || notice}</span><button aria-label="Закрыть сообщение" onClick={() => { sim.setError(''); setNotice(''); }}>×</button></div>}

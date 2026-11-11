@@ -6,15 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const WORLD_SIZE: f32 = 3072.;
 pub const CHUNK_SIZE: f32 = 512.;
 pub const CHUNKS_PER_AXIS: u32 = 6;
 pub const CHUNK_COUNT: usize = (CHUNKS_PER_AXIS * CHUNKS_PER_AXIS) as usize;
 pub const TERRAIN_GRID: usize = 48;
 pub const TERRAIN_TILES_PER_CHUNK: usize = TERRAIN_GRID / CHUNKS_PER_AXIS as usize;
-pub const CELL_STRIDE: usize = 15;
-pub const TERRAIN_STRIDE: usize = 5;
+pub const CELL_STRIDE: usize = 28;
+pub const TERRAIN_STRIDE: usize = 6;
 pub const BIN_CHUNK: u8 = 1;
 
 pub fn chunk_of(x: f32, y: f32) -> (u8, u8) {

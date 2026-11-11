@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { defaultGenome, modeColor, multicellularGenome, newMode, removeMode, POPULATION_LIMIT, TYPES, type Mode, type NumericModeKey } from "../model";
+import { defaultGenome, modeColor, multicellularGenome, newMode, removeMode, MAX_MODES, POPULATION_LIMIT, TYPES, type Mode, type NumericModeKey } from "../model";
 import { GenomePreview } from "./GenomePreview";
+import { CellSettings, Setting } from "./CellSettings";
 import "./editor.css";
 
 export type GenomeEditorProps = {
@@ -12,19 +13,6 @@ export type GenomeEditorProps = {
   onLoad: () => void;
   allowedKinds?: number[];
 };
-
-function Setting({ label, help, value, min, max, step, unit = "", onChange }: {
-  label: string; help: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (value: number) => void;
-}) {
-  return <div className="genome-setting">
-    <label><span>{label}{unit && `, ${unit}`}</span>
-      <input type="number" aria-label={label} value={Number(value.toFixed(3))} min={min} max={max} step={step}
-        onChange={e => { const n = e.currentTarget.valueAsNumber; if (Number.isFinite(n)) onChange(Math.min(max, Math.max(min, n))); }} />
-    </label>
-    <input aria-label={`${label}: ползунок`} type="range" value={value} min={min} max={max} step={step} onChange={e => onChange(Number(e.target.value))} />
-    <details><summary>О параметре</summary><p>{help}</p></details>
-  </div>;
-}
 
 function ModeName({ value, onChange }: { value: string; onChange: (name: string) => void }) {
   const [draft, setDraft] = useState(value);
@@ -45,8 +33,16 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
     onChange(genome.map((item, i) => i === mode ? { ...item, [key]: value } : item));
   }
   function add(copy: boolean) {
+    if (genome.length >= MAX_MODES) return;
     const index = genome.length;
-    const next = copy ? { ...m, name: `${m.name} — копия`, childA: m.childA === mode ? index : m.childA, childB: m.childB === mode ? index : m.childB }
+    const copiedReference = (reference: number) => reference === mode ? index : reference;
+    const next = copy ? {
+      ...m, name: `${m.name} — копия`,
+      childA: copiedReference(m.childA), childB: copiedReference(m.childB),
+      transitionA: copiedReference(m.transitionA), transitionB: copiedReference(m.transitionB),
+      offspringMode: copiedReference(m.offspringMode), compatibleMode: copiedReference(m.compatibleMode),
+      virusCopyFrom: copiedReference(m.virusCopyFrom), programs: m.programs.map(program => ({ ...program })),
+    }
       : { ...newMode(index), kind: allowedKinds?.[0] ?? 0 };
     onChange([...genome, next]); setEditing(index); setMessage("");
   }
@@ -84,7 +80,8 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
     <section className="genome-modes-section" aria-label="Режимы генома">
       <h3>Режимы</h3>
       <div className="genome-modes">{genome.map((g, i) => <button key={i} onClick={() => setEditing(i)} aria-pressed={mode === i} className={mode === i ? "active" : ""} title={`${g.name}: ${TYPES[g.kind].name}${i === initialMode ? ", начальный режим" : ""}`}><span className="genome-color-dot" aria-hidden="true" style={{backgroundColor:`#${modeColor(g).toString(16).padStart(6,"0")}`}} />{g.name}{i === initialMode ? " · начальный" : ""}</button>)}</div>
-      <div className="genome-mode-actions"><button onClick={() => add(false)}>Добавить режим</button><button onClick={() => add(true)}>Копировать</button><button disabled={genome.length === 1} onClick={() => setConfirm("remove")}>Удалить</button></div>
+      <div className="genome-mode-actions"><button disabled={genome.length >= MAX_MODES} onClick={() => add(false)}>Добавить режим</button><button disabled={genome.length >= MAX_MODES} onClick={() => add(true)}>Копировать</button><button disabled={genome.length === 1} onClick={() => setConfirm("remove")}>Удалить</button></div>
+      {genome.length >= MAX_MODES && <p>Достигнут предел: {MAX_MODES} режимов.</p>}
     </section>
     <ModeName key={`${mode}:${m.name}`} value={m.name} onChange={name => update("name", name)} />
     <label className="genome-cell-type">Тип клетки<select value={m.kind} onChange={e => update("kind", Number(e.target.value))}>
@@ -99,9 +96,10 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
     </section>
     <section className="genome-division">
       <h3>Деление</h3>
-      <label className="genome-check"><input type="checkbox" checked={m.canDivide} onChange={e => update("canDivide", e.target.checked)} />Разрешить деление</label>
-      {!m.canDivide && <p>Клетка продолжает питаться, двигаться и стареть, но не создаёт потомков.</p>}
-      <fieldset disabled={!m.canDivide}>
+      <label className="genome-check"><input type="checkbox" checked={m.canDivide && m.kind !== 16} disabled={m.kind === 16} onChange={e => update("canDivide", e.target.checked)} />Разрешить деление</label>
+      {m.kind === 16 ? <p>Гамета создаёт потомка при слиянии с другой гаметой. Настройки слияния находятся ниже.</p>
+        : !m.canDivide && <p>Клетка продолжает питаться, двигаться и стареть, но не создаёт потомков.</p>}
+      <fieldset disabled={!m.canDivide || m.kind === 16}>
         <legend className="sr-only">Параметры деления</legend>
         {setting("Масса для деления", "threshold", 1, 8, 0.1, "Деление возможно при достижении этой массы и возраста 0,5 с. Рост зависит от типа клетки, доступной пищи и света.", "нг")}
         <label className="genome-check"><input type="checkbox" checked={m.maxConnections >= 0}
@@ -122,7 +120,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
         {setting("Доля массы дочери A", "ratio", 0.2, 0.8, 0.01, "Дочь A получает указанную долю массы, дочь B — оставшуюся. Например, 0,5 означает равное распределение.")}
         {orientation("Угол деления","angle","Поворачивает ось, вдоль которой располагаются дочерние клетки, относительно направления родителя. Зеркально отражённая клетка поворачивает её в обратную сторону.")}
       </fieldset>
-      <p className="genome-lineage">{m.name} → {m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}</p>
+      <p className="genome-lineage">{m.name} → {m.kind === 16 ? "слияние гамет" : m.canDivide ? `${genome[m.childA].name} ${m.bindChildren ? "↔" : "+"} ${genome[m.childB].name}` : "без деления"}</p>
     </section>
     <section><h3>Питание</h3>
       {setting("Приоритет питания", "nutrientPriority", 0.25, 4, 0.05, "Повышает долю питания, которую получает клетка при обмене по постоянным связям.", "×")}
@@ -133,6 +131,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       {setting(m.kind === 2 ? "Скорость жгутика" : "Подвижность", "speed", 0, 60, 1, m.kind === 2 ? "Жгутик двигает клетку и связанные с ней клетки. Более высокая скорость увеличивает расход массы." : "Задаёт подвижность свободной клетки. Связанная клетка без жгутика сама не перемещает организм.")}
       {setting("Продолжительность жизни", "lifespan", 20, 1000, 10, "После этого возраста клетка погибает, если старение включено в настройках среды.", "с")}
     </section>
+    <CellSettings mode={m} genome={genome} onChange={changes => onChange(genome.map((item, index) => index === mode ? { ...item, ...changes } : item))} />
     <details className="genome-examples"><summary>Начать с готового генома</summary>
       <button onClick={() => setConfirm("reset")}>Одна клетка</button>
       {[0, 1, 2].every(allowed) && <button onClick={() => setConfirm("example")}>Многоклеточный организм</button>}

@@ -7,7 +7,7 @@ import type { WorldViewProps } from "./world-view-types";
 export type { BackendPreference } from "./backend";
 let moduleReady: Promise<unknown> | undefined;
 const layerIndex = (layer: string) =>
-  ({ biome: 0, light: 1, radiation: 2, food: 3, nitrates: 4 } as Record<string, number>)[
+  ({ biome: 0, light: 1, radiation: 2, food: 3, covered: 3, nitrates: 4 } as Record<string, number>)[
     layer
   ] ?? 0;
 
@@ -24,7 +24,7 @@ export function RustWorldView(props: RustWorldViewProps) {
   const camera = useRef({ x: WORLD / 2, y: WORLD / 2, zoom: 0.55 });
   const frame = useRef<Frame | null>(null);
   const appliedFrame = useRef<Frame | null>(null);
-  const appliedNitrateLayer = useRef(false);
+  const appliedProjectionLayer = useRef("");
   const appliedView = useRef("");
   const resetView = useRef<(() => void) | null>(null);
   const zoomView = useRef<((steps: number) => void) | null>(null);
@@ -54,18 +54,19 @@ export function RustWorldView(props: RustWorldViewProps) {
     const instance = renderer.current,
       next = frame.current;
     if (!instance || !next) return;
-    const nitrateLayer = live.current.layer === "nitrates";
-    if (!force && next === appliedFrame.current && nitrateLayer === appliedNitrateLayer.current) return;
+    const layer = live.current.layer;
+    const field = layer === "nitrates" ? next.nitrates : layer === "covered" ? next.coveredFood : null;
+    if (!force && next === appliedFrame.current && layer === appliedProjectionLayer.current) return;
     try {
-      const terrain = nitrateLayer ? next.terrain.slice() : next.terrain;
-      if (nitrateLayer) {
+      const terrain = field ? next.terrain.slice() : next.terrain;
+      if (field) {
         for (let tile = 0; tile < terrain.length / 4; tile++) {
-          terrain[tile * 4 + 2] = next.nitrates?.[tile] ?? 0;
+          terrain[tile * 4 + 2] = field[tile] ?? 0;
         }
       }
       instance.set_frame(next.cells, terrain, next.links);
       appliedFrame.current = next;
-      appliedNitrateLayer.current = nitrateLayer;
+      appliedProjectionLayer.current = layer;
     } catch (e) {
       live.current.onError(`Renderer: ${String(e)}`);
     }

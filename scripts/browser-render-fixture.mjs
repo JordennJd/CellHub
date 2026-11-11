@@ -148,7 +148,7 @@ export async function verifyCellTypeFixtures(evaluate, backend) {
       const links=new Uint32Array();
       const signatures=[];
       renderer.set_view(1536,1536,2,0,-1);
-      for(let kind=0;kind<7;kind++){
+      for(let kind=0;kind<18;kind++){
         cell[4]=kind;
         renderer.set_frame(cell,terrain,links);
         if(webgpu)window.__captureGPU=canvas.id;
@@ -164,7 +164,7 @@ export async function verifyCellTypeFixtures(evaluate, backend) {
       return signatures;
     }finally{renderer.destroy();renderer.free();canvas.remove();}
   })()`);
-  assert.equal(signatures.length, 7, "all implemented types were rendered");
+  assert.equal(signatures.length, 18, "all implemented types were rendered");
   for (let i = 0; i < signatures.length; i++) {
     for (let j = 0; j < i; j++) {
       const changed = signatures[i].filter((value, index) => {
@@ -174,5 +174,5 @@ export async function verifyCellTypeFixtures(evaluate, backend) {
       assert(changed.length >= 10, `${backend} types ${j} and ${i} differ at only ${changed.length} sampled pixels with the same custom RGB`);
     }
   }
-  console.log(`PASS: seven distinguishable cell textures with the same custom RGB on ${backend}`);
+  console.log(`PASS: eighteen distinguishable cell textures with the same custom RGB on ${backend}`);
 }

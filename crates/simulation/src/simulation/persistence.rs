@@ -6,9 +6,9 @@ use super::environment::Environment;
 use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, Position, SIZE};
 use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, nitrate_capacity};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 5;
 
 struct Reader<'a> {
     values: &'a [f64],
@@ -82,6 +82,7 @@ impl Simulation {
                     tile.biome,
                     tile.nitrates,
                     tile.nitrate_capacity,
+                    tile.covered_food,
                 ]
                 .map(f64::from),
             );
@@ -93,8 +94,26 @@ impl Simulation {
             .map(|(_, (p, c, g))| (*p, c.clone(), g.clone()))
             .collect();
         cells.sort_by_key(|(_, c, _)| c.id);
+        let mut genome_ids = BTreeMap::new();
+        let mut genomes = Vec::new();
+        let mut references = Vec::with_capacity(cells.len());
+        for (_, _, genome) in &cells {
+            let genes = genome.values();
+            let key = genes.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+            let next_id = genomes.len();
+            let id = *genome_ids.entry(key).or_insert_with(|| {
+                genomes.push(genes);
+                next_id
+            });
+            references.push(id);
+        }
+        values.push(genomes.len() as f64);
+        for genes in genomes {
+            values.push(genes.len() as f64);
+            values.extend(genes.into_iter().map(f64::from));
+        }
         values.push(cells.len() as f64);
-        for (p, c, genome) in cells {
+        for ((p, c, _), genome_id) in cells.into_iter().zip(references) {
             values.extend([
                 c.id as f64,
                 p.x as f64,
@@ -108,10 +127,20 @@ impl Simulation {
                 c.cooldown as f64,
                 c.mirrored as u8 as f64,
                 c.nitrogen as f64,
+                c.signals[0] as f64,
+                c.signals[1] as f64,
+                c.signals[2] as f64,
+                c.signals[3] as f64,
+                c.signals[4] as f64,
+                c.signals[5] as f64,
+                c.signals[6] as f64,
+                c.signals[7] as f64,
+                c.toxin as f64,
+                c.injury as f64,
+                c.telomeres as f64,
+                c.anchored as u8 as f64,
+                genome_id as f64,
             ]);
-            let genes = genome.values();
-            values.push(genes.len() as f64);
-            values.extend(genes.into_iter().map(f64::from));
         }
         values.push(self.bonds.len() as f64);
         for &(a, b) in &self.bonds {
@@ -124,7 +153,7 @@ impl Simulation {
         let mut replacement = Self::decode_state(values)?;
         // Old saves did not encode geometry. Keep their migration path into
         // the current dish. Current saves restore geometry and coordinates as-is.
-        if values[0] < f64::from(VERSION) {
+        if values[0] < 4. {
             replacement.set_circular_dish(matches!(self.boundary, Boundary::Circle));
         }
         *self = replacement;
@@ -202,12 +231,24 @@ impl Simulation {
                 biome,
                 nitrates,
                 nitrate_capacity,
+                covered_food: if version >= 5 {
+                    input.float(0., 5.)?
+                } else {
+                    0.
+                },
             };
             if tile.food > tile.capacity {
                 return Err("Запас пищи превышает ёмкость среды".into());
             }
             if tile.nitrates > tile.nitrate_capacity {
                 return Err("Запас нитратов превышает ёмкость среды".into());
+            }
+        }
+        let mut genomes = Vec::new();
+        if version >= 5 {
+            let count = input.integer(LIMIT as u32)?;
+            for _ in 0..count {
+                genomes.push(read_genome(&mut input, version)?);
             }
         }
         let count = input.integer(LIMIT as u32)?;
@@ -222,7 +263,7 @@ impl Simulation {
                 y: input.float(0., SIZE)?,
                 angle: input.float(-f32::MAX, f32::MAX)?,
             };
-            let cell = Cell {
+            let mut cell = Cell {
                 id,
                 mode: input.integer(u32::MAX)? as usize,
                 mass: input.float(f32::MIN_POSITIVE, 1_000_000.)?,
@@ -236,22 +277,29 @@ impl Simulation {
                 } else {
                     INITIAL_NITROGEN
                 },
+                ..Cell::default()
             };
-            let length = input.integer(1_200_000)? as usize;
-            if input.values.len().saturating_sub(input.offset) < length {
-                return Err("Геном в сохранении обрезан".into());
-            }
-            let genes = (0..length)
-                .map(|_| input.float(-f32::MAX, f32::MAX))
-                .collect::<Result<Vec<_>, _>>()?;
-            let genome = decode_checked(&genes)?;
-            // The ordinary input ABI clamps sliders; stored state must never be silently changed.
-            let canonical = match version {
-                1 => genome.legacy_values(),
-                2 | 3 => genome.values_v3(),
-                _ => genome.values(),
+            let genome = if version >= 5 {
+                for signal in &mut cell.signals {
+                    *signal = input.float(-1000., 1000.)?;
+                }
+                cell.toxin = input.float(0., 1000.)?;
+                cell.injury = input.float(0., 1000.)?;
+                let telomeres = input.float(-1., 1000.)?;
+                if telomeres.fract() != 0. {
+                    return Err("Некорректный запас теломер".into());
+                }
+                cell.telomeres = telomeres as i32;
+                cell.anchored = input.flag()?;
+                let id = input.integer(LIMIT as u32)? as usize;
+                genomes
+                    .get(id)
+                    .cloned()
+                    .ok_or("Некорректная ссылка на геном")?
+            } else {
+                read_genome(&mut input, version)?
             };
-            if canonical != genes || cell.mode >= genome.len() {
+            if cell.mode >= genome.len() {
                 return Err("Некорректный геном или режим клетки в сохранении".into());
             }
             let entity = restored.world.spawn((position, cell, genome));
@@ -271,4 +319,25 @@ impl Simulation {
         restored.entities.sort_by_key(|&(id, _)| id);
         Ok(restored)
     }
+}
+
+fn read_genome(input: &mut Reader<'_>, version: u32) -> Result<Genome, String> {
+    let length = input.integer(1_200_000)? as usize;
+    if input.values.len().saturating_sub(input.offset) < length {
+        return Err("Геном в сохранении обрезан".into());
+    }
+    let genes = (0..length)
+        .map(|_| input.float(-f32::MAX, f32::MAX))
+        .collect::<Result<Vec<_>, _>>()?;
+    let genome = decode_checked(&genes)?;
+    let canonical = match version {
+        1 => genome.legacy_values(),
+        2 | 3 => genome.values_v3(),
+        4 => genome.values_v4(),
+        _ => genome.values(),
+    };
+    if canonical != genes {
+        return Err("Некорректный геном в сохранении".into());
+    }
+    Ok(genome)
 }

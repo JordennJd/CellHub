@@ -66,7 +66,7 @@ export function validateData(kind: LibraryKind, data: unknown): GenomeData | Pla
     if (data.slotNames !== undefined && (!Array.isArray(data.slotNames) || data.slotNames.some(n => typeof n !== "string" || n.length > 80)))
         throw new Error("Имена режимов сохранения некорректны.");
     if (data.genomeNames !== undefined && (!record(data.genomeNames) || Object.keys(data.genomeNames).length > 20000
-        || Object.entries(data.genomeNames).some(([key, names]) => !key || key.length > 200000
+        || Object.entries(data.genomeNames).some(([key, names]) => !key || key.length > 2400000
             || !Array.isArray(names) || names.length > 1000 || names.some(n => typeof n !== "string" || !n.trim() || n.length > 80))))
         throw new Error("Имена режимов живых клеток некорректны.");
     return { ...base, state: data.state, environment: e as PlateData["environment"], inserted: data.inserted,

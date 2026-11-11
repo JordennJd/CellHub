@@ -11,6 +11,7 @@ pub(crate) struct Tile {
     pub(crate) biome: f32,
     pub(crate) nitrates: f32,
     pub(crate) nitrate_capacity: f32,
+    pub(crate) covered_food: f32,
 }
 
 pub(crate) fn nitrate_capacity(biome: f32) -> f32 {
@@ -45,6 +46,7 @@ pub(crate) fn map() -> Vec<Tile> {
                 biome,
                 nitrates: nitrate_capacity,
                 nitrate_capacity,
+                covered_food: 0.,
             }
         })
         .collect()

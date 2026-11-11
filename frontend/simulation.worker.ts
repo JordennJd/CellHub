@@ -19,14 +19,18 @@ function frame() {
     terrain = sim.terrain(),
     stats = sim.stats(),
     nitrogen = sim.nitrogen_reserves(),
-    nitrates = sim.nitrates();
-  ctx.postMessage({ type: "frame", cells, links, terrain, stats, nitrogen, nitrates }, [
+    nitrates = sim.nitrates(),
+    details = sim.cell_details(),
+    coveredFood = sim.covered_food();
+  ctx.postMessage({ type: "frame", cells, links, terrain, stats, nitrogen, nitrates, details, coveredFood }, [
     cells.buffer,
     links.buffer,
     terrain.buffer,
     stats.buffer,
     nitrogen.buffer,
     nitrates.buffer,
+    details.buffer,
+    coveredFood.buffer,
   ]);
 }
 const pending: Command[] = [];

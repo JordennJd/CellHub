@@ -4,8 +4,11 @@ mod biology;
 mod boundary;
 mod environment;
 mod spatial;
+mod program;
+mod signals;
 mod interactions;
 mod bonds;
+mod specialized;
 mod persistence;
 mod tools;
 mod step;
@@ -18,6 +21,7 @@ use crate::terrain::{GRID, Tile, map};
 use boundary::Boundary;
 use environment::Environment;
 use hecs::World;
+use program::{SPEED_TARGET, controlled_value};
 use spatial::SpatialGrid;
 use std::collections::{BTreeSet, HashMap};
 use wasm_bindgen::prelude::*;
@@ -270,6 +274,34 @@ impl Simulation {
             .collect()
     }
 
+    pub fn cell_details(&self) -> Vec<f32> {
+        self.entities
+            .iter()
+            .flat_map(|&(_, entity)| {
+                let cell = self.world.get::<&Cell>(entity).unwrap();
+                [
+                    cell.signals[0],
+                    cell.signals[1],
+                    cell.signals[2],
+                    cell.signals[3],
+                    cell.signals[4],
+                    cell.signals[5],
+                    cell.signals[6],
+                    cell.signals[7],
+                    cell.toxin,
+                    cell.injury,
+                    cell.telomeres as f32,
+                    cell.mode as f32,
+                    cell.anchored as u8 as f32,
+                ]
+            })
+            .collect()
+    }
+
+    pub fn covered_food(&self) -> Vec<f32> {
+        self.tiles.iter().map(|tile| tile.covered_food).collect()
+    }
+
     pub fn nitrates(&self) -> Vec<f32> {
         self.tiles.iter().map(|tile| tile.nitrates).collect()
     }
@@ -313,21 +345,9 @@ impl Simulation {
         self.next_id += 1;
         let angle = self.random() * std::f32::consts::TAU;
         let (x, y, _) = self.boundary.constrain(x, y, 1., 10.);
-        let entity = self.world.spawn((
-            Position { x, y, angle },
-            Cell {
-                id,
-                mode,
-                mass: 1.,
-                age: 0.,
-                generation: 0,
-                mutations: 0,
-                cooldown: 0.,
-                mirrored: false,
-                nitrogen: crate::components::INITIAL_NITROGEN,
-            },
-            genome,
-        ));
+        let entity = self
+            .world
+            .spawn((Position { x, y, angle }, Cell::new(id, mode), genome));
         self.entities.push((id, entity));
         self.births += 1;
         Ok(id)
@@ -359,16 +379,16 @@ impl Simulation {
 
     /// Native-only region export used by the authoritative server.
     ///
-    /// Cells are emitted with stride 12: the original ten render fields plus the
-    /// effective speed used for client-side prediction and a flag bit for
-    /// adhesion. Each bond is emitted once, in the chunk of its lower ID, so a
-    /// client can replace chunk-local links without duplicates.
+    /// Cells are emitted with stride 28, including the effective world speed
+    /// used directly for client-side prediction. Each bond is emitted once, in
+    /// the chunk of its lower ID, so a client can replace chunk-local links
+    /// without duplicates.
     pub fn chunk_snapshot(&self, chunk_x: u32, chunk_y: u32, chunk_size: f32) -> ChunkSnapshot {
         let mut cells = Vec::new();
         let mut links = Vec::new();
         let mut terrain = Vec::new();
         let mut cell_chunks = HashMap::new();
-        let linked = self.linked_ids();
+        let degrees = self.bond_degrees();
         for (_, (position, cell, genome)) in
             self.world.query::<(&Position, &Cell, &Genome)>().iter()
         {
@@ -379,14 +399,18 @@ impl Simulation {
                 continue;
             }
             let mode = genome.mode(cell.mode);
-            let is_linked = linked.contains(&cell.id);
-            let speed = if mode.kind == 2 {
-                mode.speed
+            let degree = degrees.get(&cell.id).copied().unwrap_or(0);
+            let is_linked = degree != 0;
+            let programmed_speed = controlled_value(cell, mode, SPEED_TARGET, degree);
+            let speed = if cell.anchored {
+                0.
+            } else if mode.kind == 2 {
+                programmed_speed
             } else if is_linked {
                 0.
             } else {
-                mode.speed * 0.15
-            };
+                programmed_speed * 0.15
+            } / self.settings.viscosity;
             cells.extend([
                 cell.id as f32,
                 position.x,
@@ -403,6 +427,19 @@ impl Simulation {
                 packed_color(mode.color),
                 cell.mirrored as u8 as f32,
                 cell.nitrogen,
+                cell.signals[0],
+                cell.signals[1],
+                cell.signals[2],
+                cell.signals[3],
+                cell.signals[4],
+                cell.signals[5],
+                cell.signals[6],
+                cell.signals[7],
+                cell.toxin,
+                cell.injury,
+                cell.telomeres as f32,
+                cell.mode as f32,
+                cell.anchored as u8 as f32,
             ]);
         }
         for &(a, b) in &self.bonds {
@@ -424,6 +461,7 @@ impl Simulation {
                     tile.food,
                     tile.biome,
                     tile.nitrates,
+                    tile.covered_food,
                 ]);
             }
         }

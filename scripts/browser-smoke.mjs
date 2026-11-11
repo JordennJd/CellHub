@@ -18,6 +18,7 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const until=async expression=>{for(let i=0;i<200;i++){if(await evaluate(`Boolean(${expression})`))return;const error=await evaluate("document.querySelector('.toast.error,.error-message[role=alert]')?.textContent");if(error)throw Error(error);await delay(150);}throw Error(`Timeout: ${expression}`);};
 const click=async(text,scope='document')=>{assert(await evaluate(`(()=>{const b=[...${scope}.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b||b.disabled)return false;b.click();return true;})()`),`Missing enabled button: ${text}`);await delay(80);};
 const input=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(String(value))});el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
+const select=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing select');el.value=${JSON.stringify(String(value))};el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
 const screenshot=async path=>{const r=await call('Page.captureScreenshot',{format:'png'});await writeFile(path,Buffer.from(r.data,'base64'));};
 const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("document.querySelector('#mode-sandbox-title').closest('button').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
 const clickWorld=async(x,y,button='left')=>{const point=await evaluate(`(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();const z=Math.min(r.width,r.height)/3072*.93;return{x:r.x+r.width/2+(${x}-1536)*z,y:r.y+r.height/2+(${y}-1536)*z};})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button,clickCount:1,...point});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button,clickCount:1,...point});};
@@ -71,6 +72,24 @@ try{
  await screenshot('work/cellhub-reopened-experiment.png');
  console.log('PASS: named saves, reset semantics, Home library reopen and exact world restoration');
  if(hasWebGPU){await verifyRenderFixtures({evaluate,delay});await verifyCellTypeFixtures(evaluate,'webgpu');}else console.log('SKIP: WebGPU pixel fixtures; browser uses WebGL fallback');
+ // Exercise an eighth-channel neuron through the real editor, worker and save route.
+ await click('Начать заново');await confirm();await until('window.__cellhubFrame?.cells.length===0');
+ await click('Геном',"document.querySelector('.tabs')");
+ await select('.genome-cell-type select',13);
+ await evaluate("(()=>{const label=[...document.querySelectorAll('.genome-cell-type')].find(el=>el.textContent.startsWith('Сигнальный канал'));const el=label.querySelector('select');el.value='7';el.dispatchEvent(new Event('change',{bubbles:true}));})()");
+ await input('input[aria-label="Выходной сигнал"]',-0.75);
+ await click('Поместить');await clickWorld(600,600);await until('window.__cellhubFrame?.cells.length===12');
+ await click('Один шаг');await until('window.__cellhubFrame.stats[0]===1');
+ assert.equal(await evaluate('window.__cellhubFrame.details[7]'),-0.75);
+ await click('Диагностика');await clickWorld(600,600);
+ await until("document.querySelector('.cell-details') && document.body.innerText.includes('S8')");
+ assert(await evaluate("[...document.querySelectorAll('.cell-details div')].some(row=>row.querySelector('dt')?.textContent==='S8'&&row.querySelector('dd')?.textContent==='-0.750')"));
+ const signalPlateName=`Eight signals ${suffix}`;
+ await click('Сохранить эксперимент');await input('[role=dialog] input',signalPlateName);await click('Сохранить',"document.querySelector('[role=dialog]')");await until("!document.querySelector('[role=dialog]')");
+ await click('← Меню');await confirm();await click('Открыть эксперимент');await until("document.querySelector('.library-list li')");
+ await evaluate(`(()=>{const item=[...document.querySelectorAll('.library-list li')].find(el=>el.querySelector('h3')?.textContent===${JSON.stringify(signalPlateName)});item.querySelector('button').click();})()`);
+ await until('window.__cellhubFrame?.details?.[7]===-0.75');
+ console.log('PASS: real editor S8 output, cell inspector and exact experiment reload');
  // Engine stress is isolated from the UI; no undocumented ?count entry route.
  await evaluate(`(async()=>{const m=await import('/frontend/wasm/simulation.js');await m.default();const s=new m.Simulation(42);try{const g=new Float32Array([0,8,0,0,.5,0,0,1000,1,0,0,0]);for(let i=0;i<20000;i++)s.spawn(20+(i%142)*21,20+Math.floor(i/142)*21,0,g);s.advance(1);if(s.snapshot().length!==240000||!Array.from(s.snapshot()).every(Number.isFinite))throw Error('Invalid 20000-cell fixture');}finally{s.free();}})()`);
  await click('← Меню');await confirm();

@@ -35,8 +35,8 @@ const addressReady = new Promise((resolve, reject) => {
   server.once("exit", (code) => reject(new Error(`server exited early (${code}):\n${output}`)));
 });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const CELL_STRIDE = 15;
-const TERRAIN_STRIDE = 5;
+const CELL_STRIDE = 28;
+const TERRAIN_STRIDE = 6;
 const waitFor = async (predicate, label, timeout = 10_000) => {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -147,7 +147,7 @@ try {
     () => first.messages.find((m) => m.type === "welcome"),
     "welcome",
   );
-  assert.equal(welcome.protocol, 2);
+  assert.equal(welcome.protocol, 3);
   assert.equal(welcome.host, true);
   const room = welcome.room.id;
 
@@ -182,12 +182,12 @@ try {
   await waitFor(() => second.chunks.length >= 3, "second client chunks");
 
   const inspected = await second.command({ type: "inspect", id: cellId }, 4);
-  // Legacy input is normalized to the shared v4 genome ABI by the simulation.
-  assert.deepEqual(inspected.genome.slice(0, 2), [-4, 1]);
-  assert.equal(inspected.genome.length, 24);
+  // Legacy input is normalized to the shared v5 genome ABI by the simulation.
+  assert.deepEqual(inspected.genome.slice(0, 2), [-5, 1]);
+  assert.equal(inspected.genome.length, 104);
   genome.forEach((value, index) => assert(Math.abs(inspected.genome[index + 2] - value) < 1e-6,
     `shared genome field ${index} survives legacy normalization`));
-  assert.deepEqual(inspected.genome.slice(14), [0, 0, 0, 0, -1, -1, -1, -1, 1, 0]);
+  assert.deepEqual(inspected.genome.slice(14, 24), [0, 0, 0, 0, -1, -1, -1, -1, 1, 0]);
   const otherGenome = [-4, 1,
     1, 2.4, 0, 0, 0.5, 0, 0.8, 1000, 0, 0, 0, 0,
     0, 0, 0, 0, 1, 0, 0, 3, 2, 1,

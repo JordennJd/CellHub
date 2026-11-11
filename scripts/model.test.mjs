@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defaultGenome, newMode, multicellularGenome, flatten, inflate, parseGenome, serializeGenome, removeMode, modeColor, TYPES, MODE_STRIDE } from "../frontend/model.ts";
+import { defaultGenome, newMode, newProgram, multicellularGenome, flatten, inflate, parseGenome, serializeGenome, removeMode, modeColor, TYPES, MODE_STRIDE, MAX_MODES } from "../frontend/model.ts";
 
 test("archetype settings and all adhesion flags survive encoding and saving", () => {
   const modes = multicellularGenome();
@@ -21,12 +21,30 @@ test("legacy eight-mode saves migrate without adding bonds", () => {
   assert.deepEqual(inflate(new Float32Array(legacy.flatMap(Object.values))), loaded);
 });
 
-test("genomes accept unbounded slots and reject broken references and flags", () => {
-  for (const n of [1, 3, 12, 19, 41, 100]) {
+test("inspection preserves small coefficients and all float32 genome bits", () => {
+  const coefficients = [1e-7, -3.7e-8, 0.123456789, 1.015e-12, 0.5, -999.997];
+  const genome = [{ ...newMode(0), kind: 13, speed: 1e-7, sensorGain: -3.7e-8,
+    programs: coefficients.map((value, channel) => ({
+      ...newProgram(), target: channel, input: 8, scale: value,
+      offset: value / 3, threshold: value / 7, below: -value,
+    })),
+  }];
+  const encoded = flatten(genome);
+  const decoded = inflate(encoded);
+  assert.equal(decoded[0].programs[0].scale, 1e-7);
+  assert.deepEqual(flatten(decoded), encoded);
+  assert.deepEqual(flatten(parseGenome(serializeGenome(decoded))), encoded);
+});
+
+test("genomes accept up to a thousand modes and reject broken references and flags", () => {
+  for (const n of [1, 3, 12, 19, 41, 100, MAX_MODES]) {
     const g = Array.from({ length: n }, (_, i) => newMode(i));
     assert.equal(parseGenome(serializeGenome(g)).length, n);
     assert.equal(inflate(flatten(g)).length, n);
   }
+  const oversized = Array.from({ length: MAX_MODES + 1 }, (_, i) => newMode(i));
+  assert.throws(() => parseGenome(serializeGenome(oversized)));
+  assert.throws(() => inflate(flatten(oversized)));
   for (const invalid of [[],
     [{ ...newMode(0), childA: 1 }], [{ ...newMode(0), childB: -1 }],
     [{ ...newMode(0), kind: 0.5 }], [{ ...newMode(0), bindChildren: 1 }],
@@ -77,7 +95,7 @@ test("independent daughter directions, handedness and colors survive all current
   Object.assign(genome[1], { mirrorB: true, red: 1, green: 0, blue: 0 });
   const encoded = flatten(genome);
   assert.equal(encoded.length, 2 + genome.length * MODE_STRIDE);
-  assert.equal(encoded[0], -4);
+  assert.equal(encoded[0], -5);
   assert.equal(encoded[1], genome.length);
   assert.deepEqual(inflate(encoded), genome);
   assert.deepEqual(parseGenome(serializeGenome(genome)), genome);
@@ -95,6 +113,9 @@ test("resource settings survive ABI and library round trips and legacy modes get
   const old = flatten([newMode(0)]).slice(0, 21);
   old[0] = -3;
   assert.deepEqual(inflate(old), [newMode(0)]);
+  const version4 = flatten([mode]).slice(0, 24);
+  version4[0] = -4;
+  assert.deepEqual(inflate(version4), [mode]);
   for (const [index, value] of [[19, 2.5], [19, -2], [20, 0], [21, 0.5]]) {
     const broken = flatten([mode]);
     broken[2 + index] = value;
@@ -105,7 +126,7 @@ test("resource settings survive ABI and library round trips and legacy modes get
 test("old twelve-field genomes preserve type hues and daughter directions", () => {
   const old = Array.from({length:19}, (_,i) => {
     const {childAngleA,childAngleB,mirrorA,mirrorB,red,green,blue,...mode} = newMode(i);
-    return {...mode,kind:i%TYPES.length};
+    return {...mode,kind:i%6};
   });
   const migrated = parseGenome(JSON.stringify({version:2,modes:old}));
   const raw = new Float32Array(old.flatMap(m => [m.kind,m.threshold,m.childA,m.childB,m.ratio,m.speed,m.angle,m.lifespan,
@@ -117,6 +138,75 @@ test("old twelve-field genomes preserve type hues and daughter directions", () =
     assert.deepEqual([m.childAngleA,m.childAngleB,m.mirrorA,m.mirrorB],[0,0,false,false]);
     assert.deepEqual([m.red,m.green,m.blue],[-1,-1,-1]);
     assert.equal(modeColor(m),TYPES[m.kind].color);
+  }
+});
+
+test("all eighteen types and eight signal equations survive the version-five formats", () => {
+  assert.equal(TYPES.length, 18);
+  assert.equal(MODE_STRIDE, 102);
+  const modes = TYPES.map((_, index) => ({
+    ...newMode(index), kind: index, density: -1.1, signalChannel: 7,
+    sensor: 3, sensorGain: -2.5, targetRed: 0.2, targetGreen: 0.4, targetBlue: 0.8,
+    senseTolerance: 0.3, secretion: 22, secretionRate: 2.5,
+    transitionA: (index + 1) % TYPES.length, transitionB: (index + 2) % TYPES.length,
+    transitionThresholdA: -0.4, transitionThresholdB: 0.7,
+    offspringMode: (index + 3) % TYPES.length, compatibleMode: (index + 4) % TYPES.length,
+    telomeres: 23, ciliaLeft: -15, ciliaRight: 21,
+    contraction: -0.6, bending: 0.2, lift: -0.3, virusCopyFrom: index,
+    programs: Array.from({ length: 8 }, (_, channel) => ({
+      ...newProgram(), target: channel, input: channel + 1, kind: channel % 2,
+      scale: -2, offset: 3, threshold: 0.5, below: -1,
+    })),
+  }));
+  const encoded = flatten(modes);
+  assert.equal(encoded.length, 2 + 18 * 102);
+  assert.deepEqual(inflate(encoded), modes);
+  assert.deepEqual(parseGenome(serializeGenome(modes)), modes);
+  assert.equal(JSON.parse(serializeGenome(modes)).version, 5);
+  assert.deepEqual(inflate(encoded)[13].programs[7], {
+    target: 7, input: 8, kind: 1, scale: -2, offset: 3, threshold: 0.5, below: -1,
+  });
+});
+
+test("advanced mode references are validated and remapped on deletion", () => {
+  const referenceKeys = ["transitionA", "transitionB", "offspringMode", "compatibleMode", "virusCopyFrom"];
+  for (const key of referenceKeys) {
+    assert.throws(() => serializeGenome([{ ...newMode(0), [key]: 1 }]));
+    assert.throws(() => serializeGenome([{ ...newMode(0), [key]: -2 }]));
+  }
+  for (const key of referenceKeys.filter(key => key !== "virusCopyFrom"))
+    assert.throws(() => serializeGenome([{ ...newMode(0), [key]: -1 }]));
+  const genome = Array.from({ length: 3 }, (_, index) => ({
+    ...newMode(index), transitionA: 2, transitionB: 1, offspringMode: 2, compatibleMode: 1,
+    virusCopyFrom: index === 0 ? -1 : 2, programs: [{ ...newProgram(), target: 7, input: 8 }],
+  }));
+  const removed = removeMode(genome, 1);
+  assert.deepEqual(removed.map(mode => [mode.transitionA, mode.transitionB, mode.offspringMode, mode.compatibleMode, mode.virusCopyFrom]),
+    [[1, 1, 1, 1, -1], [1, 1, 1, 1, 1]]);
+  assert.deepEqual(parseGenome(serializeGenome(removed)), removed);
+  assert.equal(genome[0].transitionA, 2);
+  assert.equal(removed[0].programs[0].target, 7);
+});
+
+test("advanced fields and program headers reject unsupported values", () => {
+  for (const invalid of [
+    { density: 3.31 }, { signalChannel: 8 }, { signalChannel: -1 }, { sensor: 7 },
+    { sensorGain: 16.01 }, { senseTolerance: -0.01 }, { targetRed: -1, targetGreen: 0, targetBlue: 0 },
+    { secretion: 23 }, { secretion: 1.5 }, { secretionRate: 4.01 },
+    { transitionThresholdA: 1001 }, { ciliaLeft: -61 }, { ciliaRight: 61 },
+    { contraction: 1.01 }, { bending: -1.01 }, { lift: 1.01 },
+    { telomeres: 1.5 }, { telomeres: -2 }, { telomeres: 1001 }, { programs: undefined },
+    { programs: Array.from({ length: 9 }, newProgram) },
+  ]) assert.throws(() => serializeGenome([{ ...newMode(0), ...invalid }]));
+  for (const invalid of [
+    { target: 18 }, { input: 14 }, { kind: 2 }, { scale: 1001 },
+    { offset: -1001 }, { threshold: NaN }, { below: Infinity },
+  ]) assert.throws(() => serializeGenome([{ ...newMode(0), programs: [{ ...newProgram(), ...invalid }] }]));
+  const encoded = flatten([newMode(0)]);
+  for (const count of [-1, 8.5, 9]) {
+    const broken = encoded.slice();
+    broken[2 + 45] = count;
+    assert.throws(() => inflate(broken));
   }
 });
 

@@ -18,7 +18,7 @@ pub(crate) struct Position {
     pub(crate) angle: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct Cell {
     pub(crate) id: u32,
     pub(crate) mode: usize,
@@ -29,6 +29,42 @@ pub(crate) struct Cell {
     pub(crate) mutations: u32,
     pub(crate) cooldown: f32,
     pub(crate) mirrored: bool,
+    pub(crate) signals: [f32; 8],
+    pub(crate) toxin: f32,
+    pub(crate) injury: f32,
+    pub(crate) telomeres: i32,
+    pub(crate) anchored: bool,
+}
+
+impl Default for Cell {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            mode: 0,
+            mass: 1.,
+            nitrogen: INITIAL_NITROGEN,
+            age: 0.,
+            generation: 0,
+            mutations: 0,
+            cooldown: 0.,
+            mirrored: false,
+            signals: [0.; 8],
+            toxin: 0.,
+            injury: 0.,
+            telomeres: -1,
+            anchored: false,
+        }
+    }
+}
+
+impl Cell {
+    pub(crate) fn new(id: u32, mode: usize) -> Self {
+        Self {
+            id,
+            mode,
+            ..Self::default()
+        }
+    }
 }
 
 /// Drawing and collision radius derived from mass.

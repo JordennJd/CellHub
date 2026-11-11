@@ -1,13 +1,13 @@
 //! Wire constants and binary chunk decoding for the optional server mode.
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const CHUNK_SIZE = 512;
 export const CHUNKS_PER_AXIS = 6;
 export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
 export const TERRAIN_SIZE = 48;
 export const TERRAIN_TILES_PER_CHUNK = TERRAIN_SIZE / CHUNKS_PER_AXIS;
-export const CELL_STRIDE = 15;
-export const TERRAIN_STRIDE = 5;
+export const CELL_STRIDE = 28;
+export const TERRAIN_STRIDE = 6;
 /** Client frame layout matches the renderer and the local model: 12 floats. */
 export const RENDER_STRIDE = 12;
 const BIN_CHUNK = 1;

@@ -1,5 +1,6 @@
+import { CellDetails } from "./CellDetails";
 import { useEffect, useRef, useState } from 'react';
-import { STRIDE, TYPES, defaultGenome, type Mode } from '../model';
+import { CELL_DETAILS_STRIDE, STRIDE, TYPES, defaultGenome, type Mode } from '../model';
 import { OnlinePanel } from '../OnlinePanel';
 import { WorldView, type ViewState } from '../WorldView';
 import { initialBackend, type BackendPreference } from '../backend';
@@ -68,13 +69,14 @@ export function Arena({ onExit }: { onExit: () => void }) {
     const stats = arena.frame?.stats;
     const count = stats?.[1] ?? 0;
 
-    let cell: Float32Array | undefined, nitrogen: number | undefined;
+    let cell: Float32Array | undefined, details: Float32Array | undefined, nitrogen: number | undefined;
     let connections = 0;
     if (arena.frame && selected !== null)
         for (let i = 0; i < arena.frame.cells.length; i += STRIDE)
             if (arena.frame.cells[i] === selected) {
                 cell = arena.frame.cells.subarray(i, i + STRIDE);
                 nitrogen = arena.frame.nitrogen?.[i / STRIDE];
+                details = arena.frame.details?.subarray(i / STRIDE * CELL_DETAILS_STRIDE, (i / STRIDE + 1) * CELL_DETAILS_STRIDE);
                 break;
             }
 
@@ -97,6 +99,10 @@ export function Arena({ onExit }: { onExit: () => void }) {
         setSelected(null);
         setDiagnostic(null);
     }, [online]);
+
+    useEffect(() => {
+        if (online && selected !== null && selected > 0 && cell) void inspectCell(selected);
+    }, [online, selected, cell?.[4], cell?.[8], details?.[11]]);
 
     function exit() {
         arena.disconnect();
@@ -133,7 +139,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
         }
         setSelected(id);
         setTab('observe');
-        void inspectCell(id);
+
     }
 
     async function copyGenome() {
@@ -210,7 +216,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                         <select value={layer} onChange={event => setLayer(event.target.value)}>
                             <option value="biome">Среда</option>
                             <option value="light">Свет</option>
-                            <option value="food">Пища</option>
+                            <option value="food">Пища</option><option value="covered">Покрытая пища</option>
                             <option value="nitrates">Нитраты</option>
                             <option value="radiation">Радиация</option>
                         </select>
@@ -281,6 +287,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                                     ['Изменений генома', cell[8]]].map(([key, value]) =>
                                     <div key={key}><dt>{key}</dt><dd>{value}</dd></div>)}
                             </dl>
+                            <CellDetails values={details}/>
                             <button onClick={() => void copyGenome()}>Скопировать геном в редактор</button>
                             <button onClick={applyGenome}>Применить геном редактора</button>
                         </> : <p>{selected === null ? 'Выберите клетку инструментом «Диагностика».' : 'Клетка разделилась или погибла. Выберите потомка.'}</p>}

@@ -4,6 +4,12 @@ import { test } from "node:test";
 import ts from "typescript";
 import init, { Simulation } from "../frontend/wasm/simulation.js";
 
+const modelSource = await readFile(new URL("../frontend/model.ts", import.meta.url), "utf8");
+const modelJs = ts.transpileModule(modelSource, {compilerOptions: {
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+}}).outputText;
+const model = await import(`data:text/javascript;base64,${Buffer.from(modelJs).toString("base64")}`);
+
 await init({
   module_or_path: await readFile(
     new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url),
@@ -71,6 +77,63 @@ test("saved world JSON restores exact state and deterministic continuation", () 
   } finally { original.free(); restored.free(); }
 });
 
+test("all eighteen types and eight signal channels survive the real WASM ABI and checkpoints", () => {
+  const sim = new Simulation(41), restored = new Simulation(1);
+  try {
+    sim.configure(2, 2, 0, 1, false, false);
+    for (let kind = 0; kind < model.TYPES.length; kind++) {
+      const mode = { ...model.newMode(0), kind, speed: 0, canDivide: false };
+      if (kind === 13) mode.programs = Array.from({ length: 8 }, (_, channel) => ({
+        ...model.newProgram(), target: channel, scale: (channel - 3) * 0.25,
+      }));
+      const id = sim.spawn(300 + kind * 120, 1400, 0, model.flatten([mode]));
+      assert.deepEqual(sim.genome(id), model.flatten([mode]));
+    }
+    sim.advance(1);
+    const details = sim.cell_details();
+    assert.equal(details.length, 18 * model.CELL_DETAILS_STRIDE);
+    for (let channel = 0; channel < 8; channel++)
+      assert.equal(details[13 * model.CELL_DETAILS_STRIDE + channel], (channel - 3) * 0.25);
+    restored.restore_state(sim.export_state());
+    assert.deepEqual(restored.cell_details(), details);
+    for (let tick = 0; tick < 60; tick++) {
+      sim.advance(1);
+      restored.advance(1);
+      assert.equal(restored.checksum(), sim.checksum(), `checkpoint continuation at tick ${tick}`);
+    }
+    assert.equal(sim.covered_food().length, 48 * 48);
+  } finally { sim.free(); restored.free(); }
+});
+
+test("gamete hybridization and stem differentiation execute through the real WASM entry points", () => {
+  const sim = new Simulation(42);
+  try {
+    sim.configure(2, 2, 0, 1, false, false);
+    const gametes = [
+      { ...model.newMode(0), kind: 16, speed: 0, compatibleMode: 0, offspringMode: 1, telomeres: 3 },
+      { ...model.newMode(1), kind: 0, speed: 0, canDivide: false },
+    ];
+    sim.spawn(600, 600, 0, model.flatten(gametes));
+    sim.spawn(612, 600, 0, model.flatten(gametes));
+    sim.advance(15);
+    assert.equal(sim.stats()[1], 1);
+    const id = sim.snapshot()[0];
+    assert.equal(sim.genome(id).length, 2 + 4 * model.MODE_STRIDE);
+    assert.equal(sim.cell_details()[10], 3);
+    sim.reset();
+    sim.configure(2, 2, 0, 1, false, false);
+    const stem = [
+      { ...model.newMode(0), kind: 15, speed: 0, transitionA: 1,
+        programs: [{ ...model.newProgram(), target: 16 }] },
+      { ...model.newMode(1), kind: 1, speed: 0, canDivide: false },
+    ];
+    const founder = sim.spawn(600, 600, 0, model.flatten(stem));
+    sim.advance(15);
+    assert.equal(sim.cell_mode(founder), 1);
+    assert.equal(sim.stats()[2], 1);
+  } finally { sim.free(); }
+});
+
 test("laboratory tools and substrate settings work through the real WASM ABI", () => {
   const sim = new Simulation(73421);
   try {
@@ -114,7 +177,7 @@ test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI"
     ]);
     sim.configure(1, 1, 0, 1, true, false, true, 0.5, -0.5);
     const id = sim.spawn(500, 500, 0, g);
-    assert.deepEqual(sim.genome(id), new Float32Array([-4, 1, ...g.slice(2), -1, 1, 0]));
+    assert.deepEqual(sim.genome(id), model.flatten(model.inflate(g)));
     sim.boost(id);
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
@@ -272,7 +335,7 @@ test("real WASM preserves variable genomes and transfers integer bond endpoints"
       1, 8, 2, 0, 0.5, 0, 0, 1000, 1, 0, 1, 0,
     ]);
     const id = sim.spawn(300, 300, 0, g);
-    assert.deepEqual(Array.from(sim.genome(id)), [-4, 3, ...Array.from({length:3}, (_,i)=>[...g.slice(i*12,i*12+12),0,0,0,0,-1,-1,-1,-1,1,0]).flat()]);
+    assert.deepEqual(sim.genome(id), model.flatten(model.inflate(g)));
     sim.advance(14);
     assert.equal(sim.stats()[1], 1);
     sim.advance(1);

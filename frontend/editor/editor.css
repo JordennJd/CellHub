@@ -24,6 +24,9 @@
 .genome-division { border-block: 1px solid var(--border); padding-block: 16px; }
 .genome-editor fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .genome-editor fieldset:disabled { opacity: .55; }
+.genome-editor .genome-program { border-top: 1px solid var(--border); margin: 16px 0; padding: 12px 0 0; }
+.genome-program > legend { padding-right: 8px; color: var(--text); font-size: 13px; font-weight: 650; }
+.genome-program > label + label { margin-top: 12px; }
 .genome-children { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
 .genome-children > section { min-width: 0; }
 .genome-children .genome-check { margin-top: 9px; }

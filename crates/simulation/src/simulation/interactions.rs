@@ -7,7 +7,7 @@ use crate::genome::Genome;
 use hecs::Entity;
 #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -123,10 +123,49 @@ struct ContactBody {
     radius: f32,
     cooldown: f32,
     protected: bool,
+    anchored: bool,
     infected_by: Option<Entity>,
     path: [Position; 3],
     correction: [f32; 2],
     overlaps: u32,
+}
+
+fn viral_fragment(genome: &Genome, root: usize) -> Genome {
+    let mut indices = vec![root];
+    let mut seen = BTreeMap::from([(root, 0)]);
+    let mut frontier = vec![root];
+    for _ in 0..2 {
+        let mut next = Vec::new();
+        for parent in frontier {
+            let mode = genome.mode(parent);
+            for child in [mode.child_a, mode.child_b] {
+                if !seen.contains_key(&child) {
+                    seen.insert(child, indices.len());
+                    indices.push(child);
+                    next.push(child);
+                }
+            }
+        }
+        frontier = next;
+    }
+    let reference = |index| seen.get(&index).copied().unwrap_or(0);
+    let modes = indices
+        .into_iter()
+        .map(|index| {
+            let mut mode = *genome.mode(index);
+            mode.child_a = reference(mode.child_a);
+            mode.child_b = reference(mode.child_b);
+            mode.transition_a = reference(mode.transition_a);
+            mode.transition_b = reference(mode.transition_b);
+            mode.offspring_mode = reference(mode.offspring_mode);
+            mode.compatible_mode = reference(mode.compatible_mode);
+            if mode.virus_copy_from != usize::MAX {
+                mode.virus_copy_from = reference(mode.virus_copy_from);
+            }
+            mode
+        })
+        .collect();
+    Genome::from_modes(modes)
 }
 
 fn segment_distance_squared(a: &[Position; 3], b: &[Position; 3], start: usize) -> f32 {
@@ -146,6 +185,9 @@ fn segment_distance_squared(a: &[Position; 3], b: &[Position; 3], start: usize) 
 
 impl ContactBody {
     fn overlap(&mut self, other: &Self) {
+        if self.anchored {
+            return;
+        }
         let dx = self.path[2].x - other.path[2].x;
         let dy = self.path[2].y - other.path[2].y;
         let distance_squared = dx * dx + dy * dy;
@@ -241,6 +283,7 @@ impl Simulation {
                     radius,
                     cooldown: cell.cooldown,
                     protected: protected.contains(&id),
+                    anchored: cell.anchored,
                     infected_by: None,
                     path,
                     correction: [0.; 2],
@@ -277,9 +320,15 @@ impl Simulation {
         // No job mutates ECS storage. Commit in stable island and cell order.
         let boundary = self.boundary;
         for body in islands.into_iter().flatten() {
-            let infection = body
-                .infected_by
-                .map(|donor| (*self.world.get::<&Genome>(donor).unwrap()).clone());
+            let infection = body.infected_by.map(|donor| {
+                let (source, genome) = self.world.query_one_mut::<(&Cell, &Genome)>(donor).unwrap();
+                let root = genome.mode(source.mode).virus_copy_from;
+                if root == usize::MAX {
+                    (genome.clone(), false)
+                } else {
+                    (viral_fragment(genome, root), true)
+                }
+            });
             let (position, cell, genome) = self
                 .world
                 .query_one_mut::<(&mut Position, &mut Cell, &mut Genome)>(body.entity)
@@ -295,9 +344,13 @@ impl Simulation {
                     12.,
                 );
             }
-            if let Some(infection) = infection {
+            if let Some((infection, fragment)) = infection {
                 *genome = infection;
-                cell.mode = cell.mode.min(genome.len() - 1);
+                cell.mode = if fragment {
+                    0
+                } else {
+                    cell.mode.min(genome.len() - 1)
+                };
                 cell.mutations += 1;
                 cell.cooldown = 3.;
                 self.infections += 1;
@@ -313,6 +366,38 @@ mod tests {
 
     fn genes(kind: u8) -> [f32; 12] {
         [kind as f32, 8., 0., 0., 0.5, 0., 0., 1000., 0., 0., 0., 0.]
+    }
+
+    #[test]
+    fn viral_fragment_keeps_two_generations_and_remaps_mode_references() {
+        let mut modes: Vec<_> = (0..8)
+            .map(|kind| crate::genome::Mode {
+                kind,
+                ..crate::genome::Mode::default()
+            })
+            .collect();
+        modes[2].child_a = 3;
+        modes[2].child_b = 4;
+        modes[3].child_a = 5;
+        modes[3].child_b = 6;
+        modes[4].child_a = 6;
+        modes[4].child_b = 7;
+        let copied = viral_fragment(&Genome::from_modes(modes), 2);
+        assert_eq!(copied.len(), 6);
+        assert_eq!(copied.mode(0).kind, 2);
+        assert_eq!(copied.mode(0).child_a, 1);
+        assert_eq!(copied.mode(0).child_b, 2);
+        assert_eq!(copied.mode(1).child_a, 3);
+        assert_eq!(copied.mode(2).child_b, 5);
+        assert_eq!(copied.mode(3).child_a, 0);
+        assert!(
+            copied
+                .cloned_modes()
+                .iter()
+                .all(|mode| mode.child_a < copied.len()
+                    && mode.child_b < copied.len()
+                    && mode.transition_a < copied.len())
+        );
     }
 
     #[test]
