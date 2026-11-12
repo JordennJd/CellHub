@@ -80,9 +80,9 @@ export function Laboratory({ session, onExit }: {
     }
     function newBounds() {
         const box = canvasHost.current?.getBoundingClientRect();
-        const height = chaosMode ? 6144 : 3072;
+        const height = 3072;
         const ratio = box && box.height > 0 ? box.width / box.height : 1.6;
-        return { width: Math.round(3072 * Math.max(0.5, Math.min(4, ratio)) / 64) * 64 * (chaosMode ? 2 : 1), height };
+        return { width: Math.round(3072 * Math.max(0.5, Math.min(4, ratio)) / 64) * 64, height };
     }
     useEffect(() => {
         if (!sim.ready || initialized.current)
@@ -268,7 +268,7 @@ export function Laboratory({ session, onExit }: {
     else
         failure('В этом браузере не удалось открыть изображение чашки.'); }}/>
  {chaosMode && <ChaosStatus frame={sim.frame}/>}
- {sim.frame?.chaos && layer === 'radiation' && <ChaosOverlay data={sim.frame.chaos} view={view} width={sim.frame.worldWidth ?? 6144} height={sim.frame.worldSize ?? 6144}/>}
+ {sim.frame?.chaos && layer === 'radiation' && <ChaosOverlay data={sim.frame.chaos} view={view} width={sim.frame.worldWidth ?? 3072} height={sim.frame.worldSize ?? 3072}/>}
  {!sim.ready && <div className="canvas-note" role="status">Открываем лабораторию…</div>}{sim.ready && !count && <div className="canvas-note">{chaosMode ? 'Клеток не осталось. Можно заселить чашку вручную или дождаться самозарождения, если оно включено.' : sim.inserted ? 'Клеток не осталось. Измените геном или начните заново.' : touchControls ? 'Коснитесь поля, чтобы поместить клетку.' : 'ЛКМ по полю — поместить клетку.'}</div>}
  </div>
  {touchControls && <div className="tool-bar" role="toolbar" aria-label="Инструменты">{toolLabels.map(([value, label]) => <button key={value} aria-pressed={tool === value} onClick={() => setTool(value)}>{label}</button>)}</div>}

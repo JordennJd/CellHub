@@ -137,7 +137,12 @@ impl Simulation {
 
     /// Rectangular worlds keep their physical bounds when a viewport is resized.
     pub fn set_rectangular_dish(&mut self, width: f32, height: f32) -> Result<(), JsError> {
-        let base = if self.chaos.is_some() {
+        let chaos = self.chaos.is_some();
+        // Reset keeps the geometry of a restored pre-shrink chaos checkpoint.
+        let legacy_chaos = chaos && height == crate::terrain::CHAOS_SIZE_LEGACY;
+        let base = if legacy_chaos {
+            height
+        } else if chaos {
             crate::terrain::CHAOS_SIZE
         } else {
             crate::components::SIZE

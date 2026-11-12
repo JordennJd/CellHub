@@ -92,7 +92,7 @@ test("rectangular WASM worlds preserve wide coordinates and exact checkpoints", 
     assert(restored.snapshot()[1] > 5900);
     sim.start_chaos(42, model.flatten(model.chaosGenome()), 12288);
     assert.equal(sim.world_width(), 12288);
-    assert.equal(sim.world_size(), 6144);
+    assert.equal(sim.world_size(), 3072);
     restored.restore_state(sim.export_state());
     assert.deepEqual(restored.export_state(), sim.export_state());
   } finally { sim.free(); restored.free(); }
@@ -354,7 +354,7 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
     const catalog = organisms.chaosOrganismsBuffer();
     send({type:"reset", requestId:"chaos-start", chaos:{seed:42, genome:model.flatten(model.chaosGenome()), organisms:catalog}});
     tick();
-    assert.equal(messages.at(-1).worldSize, 6144);
+    assert.equal(messages.at(-1).worldSize, 3072);
     assert.equal(messages.at(-1).chaos.info[5], 6);
     assert.equal(messages.at(-1).chaos.info[9], organisms.DEMO_ORGANISMS.length);
     send({type:"chaos-configure", enabled:false, rate:10, viable:false, atTick:2});
@@ -401,9 +401,9 @@ test("chaos WASM mixes curated organisms with mandatory single cells and checkpo
   const sim = new Simulation(7), restored = new Simulation(99);
   try {
     const catalog = organisms.chaosOrganismsBuffer();
-    sim.start_chaos_with_organisms(73421, model.flatten(model.chaosGenome()), catalog, 6144);
-    assert.equal(sim.world_size(), 6144);
-    assert.equal(sim.terrain().length, 96 * 96 * 4);
+    sim.start_chaos_with_organisms(73421, model.flatten(model.chaosGenome()), catalog, 3072);
+    assert.equal(sim.world_size(), 3072);
+    assert.equal(sim.terrain().length, 48 * 48 * 4);
     assert(sim.stats()[1] >= 130, "initial soup is too small");
     assert.equal(sim.chaos_info()[5], 6);
     assert.equal(sim.chaos_info()[9], organisms.DEMO_ORGANISMS.length);

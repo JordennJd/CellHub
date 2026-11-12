@@ -223,7 +223,7 @@ function apply(c: Command) {
         } else if (c.chaos) {
           if (!Number.isInteger(c.chaos.seed) || c.chaos.seed < 0 || c.chaos.seed > 0xffffffff) throw new Error("Некорректный seed");
           if (c.chaos.organisms?.length) chaosOrganisms = c.chaos.organisms;
-          sim.start_chaos_with_organisms(c.chaos.seed, c.chaos.genome, chaosOrganisms, c.bounds?.width ?? 6144);
+          sim.start_chaos_with_organisms(c.chaos.seed, c.chaos.genome, chaosOrganisms, c.bounds?.width ?? 3072);
         } else { sim.reset(); if (c.bounds) sim.set_rectangular_dish(c.bounds.width, c.bounds.height); }
         previewRequestId = undefined;
         scheduled = [];

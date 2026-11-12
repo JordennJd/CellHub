@@ -32,8 +32,11 @@ pub(crate) fn index_rect(x: f32, y: f32, columns: usize, rows: usize) -> usize {
     ((y / 64.) as usize).min(rows - 1) * columns + ((x / 64.) as usize).min(columns - 1)
 }
 
-pub(crate) const CHAOS_GRID: usize = 96;
+pub(crate) const CHAOS_GRID: usize = 48;
 pub(crate) const CHAOS_SIZE: f32 = CHAOS_GRID as f32 * 64.;
+/// Older worlds used a 96 × 96 chaos dish. Their dimensions are still read
+/// from v9+ checkpoints so existing experiments keep running unchanged.
+pub(crate) const CHAOS_SIZE_LEGACY: f32 = 6144.;
 
 /// light, radiation, food capacity, nitrate capacity, food regeneration multiplier.
 pub(crate) const BIOMES: [[f32; 5]; 10] = [

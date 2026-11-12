@@ -343,13 +343,22 @@ impl Simulation {
         }
         if version >= 9 {
             let width = input.float(64., 24576.)?;
-            let height = input.float(64., 6144.)?;
+            let height = input.float(64., crate::terrain::CHAOS_SIZE_LEGACY)?;
             let base = if restored.chaos.is_some() {
                 crate::terrain::CHAOS_SIZE
             } else {
                 crate::components::SIZE
             };
-            if height != base || width % 64. != 0. || width < height * 0.5 || width > height * 4. {
+            // Chaos checkpoints from before the arena was halved may still
+            // carry the 6144-tall geometry. Keep them as-is instead of
+            // rejecting or rescaling their cells.
+            let legacy_chaos =
+                restored.chaos.is_some() && height == crate::terrain::CHAOS_SIZE_LEGACY;
+            if (height != base && !legacy_chaos)
+                || width % 64. != 0.
+                || width < height * 0.5
+                || width > height * 4.
+            {
                 return Err("Некорректные размеры поля".into());
             }
             let circle = saved_circle;
@@ -595,7 +604,7 @@ mod tests {
         let mut chaos = Simulation::new(74);
         chaos.start_chaos_checked(74, genes.clone());
         chaos.sterilize();
-        chaos.spawn(5000., 3000., 0, &genes.values()).unwrap();
+        chaos.spawn(2000., 1500., 0, &genes.values()).unwrap();
         let current = chaos.encode_state();
         let mut chaos_v6 = current.clone();
         chaos_v6.remove(chaos_v6.len() - 2);
@@ -613,7 +622,7 @@ mod tests {
         chaos_v6.drain(end - 3..end - 1);
         restored.restore_checked(&chaos_v6).unwrap();
         assert_eq!(restored.encode_state(), current);
-        assert_eq!(restored.world_size(), 6144.);
+        assert_eq!(restored.world_size(), crate::terrain::CHAOS_SIZE);
         chaos.advance(120);
         restored.advance(120);
         assert_eq!(restored.encode_state(), chaos.encode_state());

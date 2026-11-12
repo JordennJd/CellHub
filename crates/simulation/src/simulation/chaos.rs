@@ -670,21 +670,21 @@ mod tests {
     #[test]
     fn rectangular_worlds_keep_scale_corners_resources_and_exact_saves() {
         let mut sandbox = Simulation::new(91);
-        sandbox.set_rectangular_dish(6144., 3072.).unwrap();
-        let id = sandbox.spawn(6000., 100., 1, &pool().values()).unwrap();
-        let tile = sandbox.boundary.tile(6000., 100.);
-        assert_eq!(sandbox.tiles.len(), 96 * 48);
+        sandbox.set_rectangular_dish(3072., 3072.).unwrap();
+        let id = sandbox.spawn(3000., 100., 1, &pool().values()).unwrap();
+        let tile = sandbox.boundary.tile(3000., 100.);
+        assert_eq!(sandbox.tiles.len(), 48 * 48);
         let food = sandbox.tiles[tile].food;
         sandbox.advance(1);
         assert!(sandbox.tiles[tile].food < food);
         let row = sandbox.snapshot();
         assert_eq!(row[0], id as f32);
-        assert!(row[1] > 5900. && row[2] < 200.);
+        assert!(row[1] > 2900. && row[2] < 200.);
         let mut chaos = Simulation::new(91);
-        chaos.start_chaos_in_bounds(91, pool(), 12288., 6144., true);
+        chaos.start_chaos_in_bounds(91, pool(), 6144., 3072., true);
         assert_eq!(chaos.world_width(), sandbox.world_width() * 2.);
-        assert_eq!(chaos.world_size(), sandbox.world_size() * 2.);
-        assert_eq!(chaos.tiles.len(), sandbox.tiles.len() * 4);
+        assert_eq!(chaos.world_size(), sandbox.world_size());
+        assert_eq!(chaos.tiles.len(), sandbox.tiles.len() * 2);
         for sim in [&mut sandbox, &mut chaos] {
             let state = sim.encode_state();
             let mut restored = Simulation::new(1);
@@ -702,23 +702,41 @@ mod tests {
     }
 
     #[test]
+    fn legacy_6144_worlds_load_and_reset_without_rescaling_cells() {
+        let mut legacy = Simulation::new(17);
+        legacy.start_chaos_in_bounds(17, pool(), 8192., 6144., true);
+        legacy.sterilize();
+        legacy.spawn(6000., 3000., 1, &pool().values()).unwrap();
+        let state = legacy.encode_state();
+        let mut restored = Simulation::new(1);
+        restored.restore_checked(&state).unwrap();
+        assert_eq!(restored.world_width(), 8192.);
+        assert_eq!(restored.world_size(), 6144.);
+        assert_eq!(restored.encode_state(), state);
+        restored.reset();
+        assert_eq!(restored.world_width(), 8192.);
+        assert_eq!(restored.world_size(), 6144.);
+    }
+
+    #[test]
     fn seeded_map_has_ten_biomes_and_large_initial_population_inside_dish() {
         for seed in [0, 1, 73421, u32::MAX] {
             let mut sim = world(seed);
-            assert_eq!(sim.tiles.len(), 96 * 96);
-            assert_eq!(sim.world_size(), 6144.);
+            let center = CHAOS_SIZE / 2.;
+            assert_eq!(sim.tiles.len(), CHAOS_GRID * CHAOS_GRID);
+            assert_eq!(sim.world_size(), CHAOS_SIZE);
             assert!(sim.world.len() >= 150);
             let mut biomes = std::collections::BTreeSet::new();
             for (i, tile) in sim.tiles.iter().enumerate() {
-                let x = (i % 96) as f32 * 64. + 32.;
-                let y = (i / 96) as f32 * 64. + 32.;
-                if libm::hypotf(x - 3072., y - 3072.) < 3072. {
+                let x = (i % CHAOS_GRID) as f32 * 64. + 32.;
+                let y = (i / CHAOS_GRID) as f32 * 64. + 32.;
+                if libm::hypotf(x - center, y - center) < center {
                     biomes.insert(tile.biome as u32);
                 }
             }
             assert_eq!(biomes.len(), 10);
             for (_, p) in sim.world.query::<&Position>().iter() {
-                assert!(libm::hypotf(p.x - 3072., p.y - 3072.) < 3050.);
+                assert!(libm::hypotf(p.x - center, p.y - center) < center - 22.);
             }
             let state = sim.encode_state();
             sim.reset();
@@ -728,7 +746,7 @@ mod tests {
     }
 
     #[test]
-    fn tile_owned_metabolism_feeds_cells_beyond_the_classic_world_size() {
+    fn tile_owned_metabolism_feeds_cells_across_the_chaos_grid() {
         let mut sim = world(71);
         sim.sterilize();
         sim.configure_chaos(false, 10, true).unwrap();
@@ -739,11 +757,11 @@ mod tests {
             tile.food = 0.;
             tile.capacity = 0.;
         }
-        let tile = index(5000., 3000., CHAOS_GRID);
+        let tile = index(2000., 1500., CHAOS_GRID);
         sim.tiles[tile].food = 0.5;
         sim.tiles[tile].capacity = 1.;
         let regeneration = crate::terrain::BIOMES[sim.tiles[tile].biome as usize][4];
-        let id = sim.spawn(5000., 3000., 1, &pool().values()).unwrap();
+        let id = sim.spawn(2000., 1500., 1, &pool().values()).unwrap();
         sim.advance(1);
         let row = sim.snapshot();
         assert_eq!(row[0], id as f32);
