@@ -128,6 +128,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
   </div>;
 
   return <div className="genome-editor">
+    <p className="editor-intro">Геном — инструкция для новых клеток и их потомков. Настройте его здесь, затем выберите «Добавить клетку» и нажмите на поле. Клетки, уже находящиеся в чашке, сохранят прежний геном.</p>
     <GenomeSlots genome={genome} selected={mode} initial={initial} onInitialChange={onInitialModeChange}
       onSelect={index => { setEditing(index); setConfirm(null); }}
       onDaughterChange={(key, index) => changeMode({ [key]: index })}

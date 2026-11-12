@@ -1004,3 +1004,42 @@ progress {
     padding: 18px;
   }
 }
+
+.next-action { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; background:var(--accent-soft); border-bottom:1px solid var(--border); }
+.next-action-label { font-size:11px; text-transform:uppercase; letter-spacing:.8px; color:var(--accent); font-weight:700; }
+.next-action h2 { margin:5px 0; font-size:18px; line-height:1.3; }
+.next-action p { margin:0; font-size:13px; line-height:1.5; max-width:700px; }
+.next-action button { flex-shrink:0; min-height:44px; }
+.tool-bar button { min-height:40px; }
+.tool-bar button[aria-pressed=true] { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.editor-intro { margin:0 0 16px; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--panel-subtle); font-size:13px; line-height:1.6; }
+@media(max-width:760px) { .next-action { flex-direction:column; align-items:stretch; padding:12px 16px; gap:10px; } .next-action button { align-self:flex-start; } }
+
+/* Keep the experiment on the main screen; open detailed controls on demand. */
+.laboratory .lab-layout { display:flex; flex-direction:column; }
+.laboratory .microscope { flex:1; }
+.laboratory .canvas-actions { justify-content:flex-end; background:var(--canvas-bg); border-bottom:0; }
+.laboratory .canvas-view-controls button { background:transparent; border-color:transparent; color:var(--muted); }
+.experiment-actions { display:flex; justify-content:center; flex-wrap:wrap; gap:8px; padding:16px 16px 8px; background:var(--panel); }
+.experiment-actions button { min-height:44px; border-radius:24px; padding:10px 18px; }
+.experiment-actions button[aria-pressed=true] { background:var(--accent-soft); border-color:var(--accent); }
+.laboratory .control-hint { text-align:center; min-height:0; padding:4px 20px 12px; }
+.laboratory .transport { justify-content:center; padding:12px 20px 18px; border-top:0; background:var(--panel); }
+.laboratory .transport .primary { min-width:140px; border-radius:24px; min-height:44px; }
+.laboratory .world-stats { margin:0; flex:0 1 auto; gap:18px; font-size:12px; }
+.lab-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:24px; }
+.lab-panel-heading h2 { margin:0; font-size:22px; }
+.lab-panel-heading button { flex-shrink:0; }
+.lab-panel-content { position:relative; }
+.experiment-options { display:grid; gap:24px; }
+.experiment-option-links { display:grid; gap:8px; }
+.experiment-option-links button { text-align:left; min-height:48px; }
+.experiment-options > label { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.experiment-options > .danger { justify-self:start; }
+@media(max-width:760px) {
+ .laboratory .canvas-wrap { height:54dvh; min-height:280px; }
+ .experiment-actions { gap:6px; padding:12px 10px 8px; }
+ .experiment-actions button { font-size:12px; padding:8px 12px; }
+ .lab-panel-heading { align-items:flex-start; flex-direction:column; gap:12px; }
+ .experiment-options > label { align-items:flex-start; flex-direction:column; }
+}

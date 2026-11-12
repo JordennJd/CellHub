@@ -222,7 +222,7 @@ export function RustWorldView(props: RustWorldViewProps) {
         camera: camera.current,
         worldSize, worldWidth,
         tool: () => live.current.tool,
-        mouseTool: () => live.current.tool === "move" ? "move" : "place",
+        mouseTool: () => live.current.tool,
         onView: (final) => { applyView(); reportView(final); },
         onPoint: (p, action) => {
           let id: number | null = null, best = Infinity;
