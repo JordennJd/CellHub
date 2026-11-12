@@ -199,7 +199,7 @@ test("slow client frames leave idle time and closing during a frame cancels sche
   }
 });
 
-function scene(rows, tick = 1, chunkX = 0, links = []) {
+function scene(rows, tick = 1, chunkX = 0, links = [], chunkY = 0) {
   const cells = new Float32Array(rows.length * CELL_STRIDE);
   rows.forEach((row, i) => {
     const p = i * CELL_STRIDE;
@@ -210,7 +210,12 @@ function scene(rows, tick = 1, chunkX = 0, links = []) {
     cells[p + 27] = Number(row.anchored ?? false);
   });
   return { tick, population: rows.length, births: rows.length, deaths: 0, infections: 0,
-    chunkX, chunkY: 0, cells, links: Uint32Array.from(links), terrain: new Float32Array() };
+    chunkX, chunkY, cells, links: Uint32Array.from(links), terrain: new Float32Array() };
+}
+/** Deliver every region of one authoritative tick, as the server cycle does. */
+function coverTick(world, tick, rowsAt = () => [], now = tick * 100) {
+  for (let y = 0; y < 6; y++) for (let x = 0; x < 6; x++)
+    world.applyChunk(scene(rowsAt(x, y) ?? [], tick, x, [], y), now);
 }
 const positions = world => {
   const result = new Map(), cells = world.frame().cells;
@@ -266,8 +271,24 @@ test('prediction never divides, ages or creates descendants; server births and p
   assert.equal(world.cellCount, 1);
   assert.equal(world.frame().cells[6], 0, 'age is server-owned');
   assert.equal(world.frame().cells[7], 0, 'generation is server-owned');
-  world.applyChunk(scene([{ id: 2, x: 100 }, { id: 3, x: 120 }], 8), 10000);
-  assert.deepEqual([...positions(world).keys()], [2, 3], 'old parent is pruned on the shorter sync cycle');
+  coverTick(world, 8, (x, y) => x === 0 && y === 0 ? [{ id: 2, x: 100 }, { id: 3, x: 120 }] : [], 10000);
+  assert.deepEqual([...positions(world).keys()], [2, 3], 'old parent is pruned when a complete snapshot omits it');
+});
+
+test('a parent phantom cannot survive a complete snapshot, but partial regions cannot prove death', () => {
+  const world = new PredictionWorld();
+  world.applyChunk(scene([{ id: 1, x: 100, speed: 60 }], 1), 0);
+  world.applyChunk(scene([{ id: 2, x: 100 }, { id: 3, x: 120 }], 2), 100);
+  assert(positions(world).has(1), 'one refreshed region cannot confirm that the parent is gone');
+  coverTick(world, 2, (x, y) => x === 0 && y === 0 ? [{ id: 2, x: 100 }, { id: 3, x: 120 }] : [], 200);
+  assert.deepEqual([...positions(world).keys()], [2, 3], 'the parent disappears together with its daughters');
+});
+
+test('cells crossing region borders survive a complete snapshot', () => {
+  const world = new PredictionWorld();
+  world.applyChunk(scene([{ id: 1, x: 498 }], 1, 0), 0);
+  coverTick(world, 2, (x, y) => x === 1 && y === 0 ? [{ id: 1, x: 523 }] : [], 100);
+  assert(positions(world).has(1), 'moving between regions is not death');
 });
 
 test('out-of-date chunks never rewind moved cells or global stats', () => {

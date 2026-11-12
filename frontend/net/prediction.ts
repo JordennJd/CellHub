@@ -69,6 +69,7 @@ export class PredictionWorld {
   private lastSeen = new Map<number, number>();
   private seenChunks = new Set<number>();
   private chunkTicks = new Map<number, number>();
+  private completeTick = -1;
   private pendingBySeq = new Map<number, number>();
   private nextGhostId = -1;
   private lastTick = 0;
@@ -147,8 +148,20 @@ export class PredictionWorld {
       this.lastSeen.set(id, chunk.tick);
     }
     this.replaceChunkLinks(key, chunk.links, chunk.tick);
-    if (chunk.chunkX === 0 && chunk.chunkY === 0)
-      this.prune(chunk.tick, now);
+    this.advanceCompleteTick(now);
+  }
+
+  /** Cells can move between regions, so a missing cell is only confirmed dead
+   * after every region has been refreshed at least once since it was last seen.
+   * Once that happens, absence from all regions is authoritative and the cell
+   * can be removed in the same frame as its daughters arrive. */
+  private advanceCompleteTick(now: number) {
+    if (this.seenChunks.size < CHUNK_COUNT) return;
+    let oldest = Infinity;
+    for (const tick of this.chunkTicks.values()) oldest = Math.min(oldest, tick);
+    if (oldest <= this.completeTick) return;
+    this.completeTick = oldest;
+    this.prune(oldest, now);
   }
 
   private copyTerrain(chunk: ChunkFrame) {
@@ -201,13 +214,10 @@ export class PredictionWorld {
     this.linksByChunk.set(key, next);
   }
 
-  /** Remove cells that have not appeared in any authoritative chunk for a
-   * full cycle. This tolerates entities crossing chunk borders and keeps dead
-   * cells visible for at most one extra cycle. */
-  private prune(tick: number, now: number) {
-    const threshold = tick - SYNC_CYCLE_TICKS;
+  /** Remove cells absent from a complete authoritative world snapshot. */
+  private prune(completeTick: number, now: number) {
     for (const [id, seen] of this.lastSeen) {
-      if (seen < threshold) {
+      if (seen < completeTick) {
         this.cells.delete(id);
         this.lastSeen.delete(id);
       }
@@ -383,6 +393,7 @@ export class PredictionWorld {
     this.lastSeen.clear();
     this.seenChunks.clear();
     this.chunkTicks.clear();
+    this.completeTick = -1;
     this.pendingBySeq.clear();
     this.lastTick = 0;
     this.population = 0;
