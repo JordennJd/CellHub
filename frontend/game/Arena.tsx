@@ -219,7 +219,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
     }
 
     return <div className="laboratory arena-shell" data-controls={touchControls ? "touch" : "mouse"}>
-        <SimulationHeader title={room ? `${arenaMode ? 'Арена' : 'Песочница'} · ${room.name}` : 'Многопользовательская игра'} onExit={exit}
+        <SimulationHeader title={room ? `${arenaMode ? 'Арена' : 'Песочница'} · ${room.name}` : 'Сетевая игра'} onExit={exit}
             action={{ label: 'Комната', run: () => setLobbyOpen(true) }}/>
         <main className="lab-layout">
             <section className="microscope" aria-label="Общая сцена арены">
