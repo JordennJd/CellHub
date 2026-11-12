@@ -37,55 +37,83 @@ const filament = (): Mode[] => [
 ];
 
 /**
- * Photocyte seed + phagocyte + sensocyte + myocyte + flagellocyte: turns
- * towards food. The seed closes the energy loop, so a lone founder can grow
- * the mobile hunter instead of starving before its flagellum appears.
+ * A mobile phagocyte assembled as a branching tree. M1 is the seed: it becomes
+ * a phagocyte head (M2) and a flagellated body (M3). M2 keeps itself and buds a
+ * fresh M1, so the colony grows module by module. Each module adds one muscle
+ * pair, a food sensor and a pulling flagellum.
  */
 const smartPhagocyte = (): Mode[] => [
   mode(0, {
-    name: "Фотоцит-семя", kind: 0, threshold: 1.8, childA: 1, childB: 0,
-    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN, angle: QUARTER_TURN,
-    maxConnections: 4,
+    name: "Фагоцит-семя", kind: 1, threshold: 1.8, childA: 1, childB: 2,
+    bindChildren: true, keepAdhesionA: true, angle: QUARTER_TURN, maxConnections: 4,
   }),
-  mode(1, { name: "Фагоцит", kind: 1, threshold: 2.2, childA: 1, childB: 2, bindChildren: true, angle: QUARTER_TURN, maxConnections: 3 }),
+  mode(1, {
+    name: "Фагоцит-голова", kind: 1, threshold: 1.8, childA: 0, childB: 1,
+    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN,
+    angle: 0, maxConnections: 3,
+  }),
   mode(2, {
-    name: "Миоцит", kind: 12, threshold: 1.6, childA: 1, childB: 3,
-    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
-    angle: QUARTER_TURN, programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
+    name: "Жгутикоцит-тело", kind: 2, threshold: 1.6, childA: 3, childB: 6,
+    bindChildren: true, keepAdhesionA: true, prioritizeWhenStarving: true,
+    speed: 12, angle: QUARTER_TURN, maxConnections: 3,
   }),
   mode(3, {
-    name: "Сенсоцит", kind: 11, threshold: 1.4, childA: 1, childB: 4,
-    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
-    angle: QUARTER_TURN, sensor: 1, signalChannel: 0, sensorGain: 1,
+    name: "Миоцит", kind: 12, threshold: 1.4, childA: 4, childB: 5,
+    bindChildren: true, keepAdhesionA: true, prioritizeWhenStarving: true,
+    angle: QUARTER_TURN, maxConnections: 3,
+    programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
   }),
   mode(4, {
+    name: "Миоцит-2", kind: 12, canDivide: false, prioritizeWhenStarving: true,
+    contraction: 0.3, bending: 0.2,
+  }),
+  mode(5, {
+    name: "Сенсоцит", kind: 11, canDivide: false, prioritizeWhenStarving: true,
+    sensor: 1, signalChannel: 0, sensorGain: 1,
+  }),
+  mode(6, {
     name: "Жгутикоцит", kind: 2, canDivide: false, speed: 25, prioritizeWhenStarving: true,
     programs: [rule(8, 1, 28, 6)],
   }),
 ];
 
 /**
- * Devorocyte + keratin + myocyte + sensocyte + flagellocyte. The keratin shield
- * keeps the predator's own bonded cells out of its digestive range; the
- * sensocyte steers it towards other cells.
+ * The same corrected branching tree as the smart phagocyte. The head (M2) stays
+ * a devorocyte so it can feed and reproduce seeds; the body (M3) is a
+ * keratinocyte that shields the head, the myocytes and the flagellum from the
+ * predator's own digestive range.
  */
 const smartPredator = (): Mode[] => [
-  mode(0, { name: "Девороцит", kind: 5, threshold: 2.4, childA: 0, childB: 1, bindChildren: true, maxConnections: 5 }),
+  mode(0, {
+    name: "Девороцит-семя", kind: 5, threshold: 1.8, childA: 1, childB: 2,
+    bindChildren: true, keepAdhesionA: true, angle: QUARTER_TURN,
+    nutrientPriority: 1, maxConnections: 4,
+  }),
   mode(1, {
-    name: "Кератиноцит", kind: 4, threshold: 1.6, childA: 0, childB: 2,
-    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+    name: "Девороцит-голова", kind: 5, threshold: 1.8, childA: 0, childB: 1,
+    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN,
+    angle: 0, nutrientPriority: 1, maxConnections: 3,
   }),
   mode(2, {
-    name: "Миоцит", kind: 12, threshold: 1.4, childA: 0, childB: 3,
-    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
-    programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
+    name: "Кератиноцит-тело", kind: 4, threshold: 1.2, childA: 3, childB: 6,
+    bindChildren: true, keepAdhesionA: true, prioritizeWhenStarving: true,
+    angle: QUARTER_TURN, nutrientPriority: 1, maxConnections: 3,
   }),
   mode(3, {
-    name: "Сенсоцит", kind: 11, threshold: 1.2, childA: 0, childB: 4,
-    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
-    sensor: 3, signalChannel: 0, sensorGain: 1,
+    name: "Миоцит", kind: 12, threshold: 1.1, childA: 4, childB: 5,
+    bindChildren: true, keepAdhesionA: true, prioritizeWhenStarving: true,
+    angle: QUARTER_TURN, nutrientPriority: 1.2, maxConnections: 3,
+    programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
   }),
   mode(4, {
+    name: "Миоцит-2", kind: 12, canDivide: false, prioritizeWhenStarving: true,
+    contraction: 0.3, bending: 0.2,
+  }),
+  mode(5, {
+    name: "Сенсоцит", kind: 11, canDivide: false, prioritizeWhenStarving: true,
+    sensor: 3, signalChannel: 0, sensorGain: 1,
+  }),
+  mode(6, {
     name: "Жгутикоцит", kind: 2, canDivide: false, speed: 25, prioritizeWhenStarving: true,
     programs: [rule(8, 1, 28, 6)],
   }),
@@ -102,19 +130,6 @@ const moss = (): Mode[] => [
     maxConnections: 4,
   }),
   mode(1, { name: "Глюоцит", kind: 9, canDivide: false, maxConnections: 4, prioritizeWhenStarving: true }),
-];
-
-/**
- * Phagocyte + flagellocyte: a simple hunter for food patches. The phagocyte
- * keeps itself at the rear and sends the new flagellum forward.
- */
-const hunter = (): Mode[] => [
-  mode(0, {
-    name: "Фагоцит", kind: 1, threshold: 2, childA: 1, childB: 0,
-    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN, angle: QUARTER_TURN,
-    maxConnections: 2,
-  }),
-  mode(1, { name: "Жгутикоцит", kind: 2, canDivide: false, speed: 40, prioritizeWhenStarving: true }),
 ];
 
 /** Photocyte + glueocyte + keratinocyte: a small armoured nursery. */
@@ -139,7 +154,7 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   },
   {
     id: "tutorial",
-    name: "Учебная тройка",
+    name: "Двигающийся фагоцит",
     description: "Классическая связка из обучения: фотоцит, жгутикоцит и фагоцит с наследованием связи.",
     initialMode: 0,
     span: 3,
@@ -148,9 +163,9 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "smart-phagocyte",
     name: "Умный фагоцит",
-    description: "Фотоцит-семя выращивает фагоцита, миоцита, сенсоцита и жгутикоцит. Сенсоцит чувствует пищу, миоцит направляет тело, жгутик тянет его к еде.",
+    description: "Фагоцит-семя выращивает голову, жгутиковое тело, пару миоцитов и сенсоцит. Голова размножается новыми семенами, сенсоцит чувствует пищу, миоциты направляют тело, жгутики тянут его к еде.",
     initialMode: 0,
-    span: 5,
+    span: 1,
     genome: smartPhagocyte,
   },
   {
@@ -160,14 +175,6 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
     initialMode: 0,
     span: 2,
     genome: moss,
-  },
-  {
-    id: "hunter",
-    name: "Хищник",
-    description: "Фагоцит с жгутиком ищет готовую пищу. Нуждается в пищевых пятнах, зато быстро занимает новые участки.",
-    initialMode: 0,
-    span: 2,
-    genome: hunter,
   },
   {
     id: "nanobot",
@@ -180,9 +187,9 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "smart-predator",
     name: "Умный хищник",
-    description: "Девороцит, кератиновый щит, миоцит, сенсоцит и жгутикоцит. Ищет клетки, направляет тело и переваривает добычу, не задевая своих.",
+    description: "Девороцит-семя выращивает девороцитовую голову, кератиновое тело, пару миоцитов и сенсоцит. Голова питается добычей и размножается новыми семенами, кератиновое тело прикрывает своих от пищеварения, сенсоцит ищет клетки, миоциты направляют тело, жгутики тянут его к добыче.",
     initialMode: 0,
-    span: 5,
+    span: 1,
     genome: smartPredator,
   },
 ];

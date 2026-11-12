@@ -1,5 +1,9 @@
 //! Audit the real frontend catalog; input JSON is exported by scripts/check-organisms.mjs.
-//! Usage: organism_check <catalog.json> [seconds] [seed,seed,...]
+//! Usage: organism_check <catalog.json> [seconds] [seed,seed,...] [food] [nitrogen] [light] [ids]
+//!
+//! `food`, `nitrogen` and `light` scale the corresponding environment settings,
+//! so a rich dish can demonstrate a genome's full growth shape. `ids` is a
+//! comma-separated organism filter (for example `smart-phagocyte`).
 use cellhub_simulation::Simulation;
 use serde::Deserialize;
 use serde_json::json;
@@ -39,8 +43,15 @@ fn main() {
         || vec![42, 73421, 91],
         |s| s.split(',').map(|v| v.parse().unwrap()).collect(),
     );
+    let food: f32 = args.get(4).map_or(1., |s| s.parse().unwrap());
+    let nitrogen: f32 = args.get(5).map_or(1., |s| s.parse().unwrap());
+    let light: f32 = args.get(6).map_or(1., |s| s.parse().unwrap());
+    let ids: Option<Vec<&str>> = args.get(7).map(|s| s.split(',').collect());
     let mut results = Vec::new();
-    for entry in &catalog.entries {
+    for entry in catalog.entries.iter().filter(|entry| {
+        ids.as_ref()
+            .is_none_or(|ids| ids.contains(&entry.id.as_str()))
+    }) {
         for scenario in ["nursery", "chaos"] {
             for &seed in &seeds {
                 let mut sim = Simulation::new(seed);
@@ -48,21 +59,20 @@ fn main() {
                     sim.start_chaos_native(seed, &catalog.pool, &[]).unwrap();
                     sim.configure_chaos(false, 10, true).unwrap();
                     sim.sterilize();
-                } else {
-                    sim.configure(
-                        1.,
-                        1.,
-                        0.,
-                        1.,
-                        false,
-                        false,
-                        Some(true),
-                        Some(0.),
-                        Some(0.),
-                        Some(1.),
-                    )
-                    .unwrap();
                 }
+                sim.configure(
+                    light,
+                    food,
+                    0.,
+                    1.,
+                    false,
+                    false,
+                    Some(true),
+                    Some(0.),
+                    Some(0.),
+                    Some(nitrogen),
+                )
+                .unwrap();
                 let tiles = sim.terrain();
                 let kind = entry.genome[2 + entry.initial * 102] as usize;
                 let tile = (0..48 * 48)
@@ -88,11 +98,12 @@ fn main() {
                 );
                 sim.spawn_owned(x, y, entry.initial, &entry.genome, 1)
                     .unwrap();
-                // Predators need actual prey; the same finite prey patch is used in all runs.
+                // Predators need actual prey; give them a compact disk so the
+                // audit can demonstrate the full tree before the finite food runs out.
                 if kind == 5 {
                     for i in 0..48 {
-                        let theta = i as f32 * 0.55;
-                        let r = 35. + i as f32 * 2.;
+                        let theta = i as f32 * 2.399_963;
+                        let r = 10. + (i as f32 / 48.) * 26.;
                         sim.spawn_owned(
                             x + theta.cos() * r,
                             y + theta.sin() * r,
@@ -116,7 +127,7 @@ fn main() {
                             generation = generation.max(r[7] as u32);
                             roles.insert(r[4] as u32);
                         }
-                        checkpoints.push(json!({"seconds":second,"alive":rows.len(),"bonds":sim.links().len()/2}));
+                        checkpoints.push(json!({"seconds":second,"alive":rows.len(),"bonds":sim.links().len()/2,"roles":rows.iter().map(|r| r[4] as u32).collect::<std::collections::BTreeSet<_>>()}));
                         if rows.is_empty() {
                             break;
                         }

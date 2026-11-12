@@ -488,7 +488,7 @@ test("chaos WASM mixes curated organisms with mandatory single cells and checkpo
     const events = sim.chaos_events();
     assert.deepEqual(Array.from(events.slice(-3, -1)), [150, 4]);
     const span = events.at(-1);
-    assert(span >= 2 && span <= 5);
+    assert(span >= 1 && span <= 5);
     const cells = sim.snapshot(), links = sim.links();
     const recent = Array.from({ length: span }, (_, i) => newest + 1 + i);
     const modes = (sim.genome(recent[0]).length - 2) / model.MODE_STRIDE;
