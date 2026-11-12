@@ -36,7 +36,7 @@ test("demo organism catalog is valid and filtered by allowed cell types", () => 
     assert(!("origin" in organism) && !("universality" in organism));
     const genome = organism.genome();
     assert(organism.span >= 1 && organism.span <= 8, `${organism.id} has an invalid span`);
-    assert(organism.span >= 2 || genome.length >= 2, `${organism.id} is not multicellular`);
+    assert(genome.length >= 1, `${organism.id} has no modes`);
     assert(organism.initialMode >= 0 && organism.initialMode < genome.length);
     assert(genome[organism.initialMode].canDivide, `${organism.id} cannot grow`);
     for (const [index, mode] of genome.entries()) {
@@ -90,6 +90,23 @@ test("chaos seeds every curated organism as a bonded chain", () => {
       sim.free();
     }
   }
+});
+
+test("catalog virocyte infects a mature neighbour and the infection splits", () => {
+  const sim = new Simulation(42);
+  try {
+    sim.configure(1, 1, 0, 1, false, false);
+    const viroid = organisms.DEMO_ORGANISMS.find(o => o.id === "virocyte").genome();
+    const host = sim.spawn(500, 500, 0, genes());
+    sim.boost(host);
+    sim.advance(6);
+    const before = sim.stats()[1];
+    sim.spawn(516, 500, 0, model.flatten(viroid));
+    sim.advance(2);
+    assert.equal(sim.stats()[4], 1, "virocyte infects an unprotected neighbour");
+    sim.advance(10);
+    assert(sim.stats()[1] > before, "infected host becomes a fast-splitting virion");
+  } finally { sim.free(); }
 });
 
 test("tutorial phagocyte survives repeated self-division without losing its bond", () => {

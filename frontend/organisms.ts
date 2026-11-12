@@ -1,9 +1,9 @@
 import { flatten, newMode, multicellularGenome, HALF_TURN, type Mode, type Program } from "./model";
 
 /**
- * Curated multicellular organisms shared by the genome editor's demonstration
- * mode and the chaos world's spontaneous immigration. `span` is the number of
- * cells seeded in a chain when the organism appears in chaos.
+ * Curated organisms shared by the genome editor's demonstration mode and the
+ * chaos world's spontaneous immigration. `span` is the number of cells seeded
+ * in a chain when the organism appears in chaos.
  */
 export type DemoOrganism = {
   id: string;
@@ -142,6 +142,19 @@ const nanobot = (): Mode[] => [
   mode(2, { name: "Кератиноцит", kind: 4, canDivide: false, prioritizeWhenStarving: true }),
 ];
 
+/**
+ * A lone virocyte with the most aggressive split the engine allows. On contact
+ * it injects this whole genome into an unprotected cell. The host keeps its
+ * mass and bonds, so a mature cell becomes a virion that divides at once and
+ * drains its former colony through the inherited bonds.
+ */
+const virocyte = (): Mode[] => [
+  mode(0, {
+    name: "Вироцит", kind: 3, threshold: 1, childA: 0, childB: 0,
+    angle: QUARTER_TURN, nutrientPriority: 4, prioritizeWhenStarving: true,
+  }),
+];
+
 /** Built-ins in curated order. */
 export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
@@ -183,6 +196,14 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
     initialMode: 0,
     span: 3,
     genome: nanobot,
+  },
+  {
+    id: "virocyte",
+    name: "Вироцит",
+    description: "Одиночный вироцит вставляет свой геном в незащищённую клетку. Заражённая клетка сохраняет массу и связи, делится при минимальной массе и вытягивает питание из бывшей колонии.",
+    initialMode: 0,
+    span: 1,
+    genome: virocyte,
   },
   {
     id: "smart-predator",
