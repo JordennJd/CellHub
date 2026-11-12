@@ -1,0 +1,81 @@
+.cell-type-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.cell-type-picker .genome-cell-type {
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.cell-type-picker > .genome-cell-type {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.genome-editor .cell-type-picker select {
+  min-height: 44px;
+  text-overflow: ellipsis;
+}
+
+.cell-type-help {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 1px 7px 1px 1px;
+  background: var(--input-bg);
+  border-color: var(--border-strong);
+}
+
+.cell-type-help[aria-expanded="true"] {
+  background: var(--accent-soft);
+}
+
+.cell-type-help canvas {
+  display: block;
+  width: 48px;
+  height: 40px;
+}
+
+.cell-type-help span {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.cell-type-help-card {
+  position: fixed;
+  inset: auto;
+  z-index: 40;
+  width: min(290px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  margin: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  box-shadow: 0 6px 24px var(--shadow);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cell-type-help-card strong {
+  color: var(--accent);
+}
+
+.cell-type-help-card[popover] p {
+  margin: 6px 0 0;
+  color: var(--text);
+  line-height: 1.55;
+}

@@ -1,6 +1,6 @@
 import { Slider } from "./Slider";
 import {
-  GAMETE_GROUP_COUNT, PROGRAM_INPUTS, PROGRAM_TARGETS, SECRETIONS, SENSORS, TYPES, newProgram,
+  GAMETE_GROUP_COUNT, POPULATION_LIMIT, PROGRAM_INPUTS, PROGRAM_TARGETS, SECRETIONS, SENSORS, TYPES, newProgram,
   type Mode, type NumericModeKey, type Program,
 } from "../model";
 
@@ -33,6 +33,75 @@ type CellSettingsProps = {
   onChange: (changes: Partial<Mode>) => void;
 };
 
+type ModeSettingsProps = Pick<CellSettingsProps, "mode" | "onChange">;
+
+function ConnectionLimit({ mode, onChange }: ModeSettingsProps) {
+  const glue = mode.kind === 9;
+  const enabled = mode.maxConnections >= 0;
+  const label = glue
+    ? (mode.canDivide ? "Задать порог для приклеивания и деления" : "Ограничить приклеивание по числу связей")
+    : "Ограничивать деление по числу связей";
+  return <>
+    <label className="genome-check"><input type="checkbox" checked={enabled}
+      onChange={e => onChange({ maxConnections: e.target.checked ? 4 : -1 })} />{label}</label>
+    {enabled && <label className="genome-cell-type">Порог постоянных связей
+      <input type="number" min={0} max={POPULATION_LIMIT} step={1} value={mode.maxConnections}
+        onChange={e => {
+          const value = e.currentTarget.valueAsNumber;
+          if (Number.isInteger(value)) onChange({ maxConnections: Math.min(POPULATION_LIMIT, Math.max(0, value)) });
+        }} />
+    </label>}
+    {glue && <p>Глюоцит приклеивает соседей, пока у него меньше пяти связей. Заданный порог может уменьшить этот предел.</p>}
+    {enabled && mode.canDivide && <p>При достижении порога клетка перестаёт делиться. Существующие связи сохраняются.</p>}
+  </>;
+}
+
+export function DivisionSettings({ mode, onChange }: ModeSettingsProps) {
+  if (mode.kind === 16) return null;
+
+  const orientation = (label: string, key: "angle" | "childAngleA" | "childAngleB", help: string) =>
+    <Setting label={label} value={Math.round(mode[key] * 180 / Math.PI)} min={-180} max={180} step={1} unit="°" help={help}
+      onChange={value => onChange({ [key]: Math.max(-3.14, Math.min(3.14, value * Math.PI / 180)) })} />;
+
+  return <section className="genome-division">
+    <h3>Деление</h3>
+    <label className="genome-check"><input type="checkbox" checked={mode.canDivide}
+      onChange={e => onChange({ canDivide: e.target.checked })} />Разрешить деление</label>
+    {mode.canDivide && <fieldset>
+      <legend className="sr-only">Параметры деления</legend>
+      <Setting label="Масса для деления" value={mode.threshold} min={1} max={8} step={0.1} unit="нг"
+        onChange={threshold => onChange({ threshold })}
+        help="Деление возможно при достижении этой массы и возраста 0,5 с. Рост зависит от типа клетки, доступной пищи и света." />
+      <div className="mass-distribution"><label>
+        <span>Распределение массы<output>{Math.round(mode.ratio * 100)} : {Math.round((1 - mode.ratio) * 100)}</output></span>
+        <Slider label="Распределение массы" value={mode.ratio} min={0.2} max={0.8} step={0.01} fraction={mode.ratio}
+          ends={["A", "B"]} onChange={ratio => onChange({ ratio })} />
+      </label></div>
+      {orientation("Угол деления", "angle", "Поворачивает ось деления относительно направления родителя. У зеркально отражённой клетки угол отсчитывается в обратную сторону.")}
+      {mode.kind !== 9 && <ConnectionLimit mode={mode} onChange={onChange} />}
+      <label className="genome-check"><input type="checkbox" checked={mode.bindChildren}
+        onChange={e => onChange({ bindChildren: e.target.checked })} />Связать дочерние клетки</label>
+      <div className="genome-children">
+        {([
+          { name: "A", keep: "keepAdhesionA", mirror: "mirrorA", angle: "childAngleA" },
+          { name: "B", keep: "keepAdhesionB", mirror: "mirrorB", angle: "childAngleB" },
+        ] as const).map(({ name, keep, mirror, angle }) => <section key={name} aria-label={`Дочерняя клетка ${name}`}>
+          <strong>Дочерняя клетка {name}</strong>
+          <label className="genome-check"><input type="checkbox" checked={mode[keep]}
+            onChange={e => onChange({ [keep]: e.target.checked })} />Может унаследовать связи родителя</label>
+          <label className="genome-check"><input type="checkbox" checked={mode[mirror]}
+            onChange={e => onChange({ [mirror]: e.target.checked })} />Зеркально отразить</label>
+          {orientation(`Направление дочери ${name}`, angle, "Поворачивает дочь относительно оси деления в системе отсчёта родителя. Отражение дочери меняет сторону поворотов при её собственном делении.")}
+        </section>)}
+      </div>
+      <details><summary>Как работают связи</summary>
+        <p>Прежнюю связь может унаследовать дочь, которая остаётся в зоне контакта с соседом и у которой включено наследование. Сестра может перекрыть этот контакт. Если обе связанные дочери могут сохранить по одному контакту с прежними соседями, связи распределяются между ними.</p>
+        <p>Если связь между дочерьми выключена, они получают противоположные импульсы вдоль оси деления. Дочь, сохранившая связь с организмом, передаёт ему отдачу.</p>
+      </details>
+    </fieldset>}
+  </section>;
+}
+
 function Channel({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return <label className="genome-cell-type">Сигнальный канал
     <select value={value} onChange={e => onChange(Number(e.target.value))}>
@@ -56,7 +125,7 @@ function ModeReference({ label, value, genome, emptyLabel, onChange }: {
   </label>;
 }
 
-function SensorSettings({ mode, onChange }: Pick<CellSettingsProps, "mode" | "onChange">) {
+function SensorSettings({ mode, onChange }: ModeSettingsProps) {
   const targetColor = mode.targetRed < 0 ? 0xffffff
     : (Math.round(mode.targetRed * 255) << 16) | (Math.round(mode.targetGreen * 255) << 8) | Math.round(mode.targetBlue * 255);
   function setTargetColor(color: number) {
@@ -106,7 +175,7 @@ function availableTargets(kind: number): number[] {
   }
 }
 
-function ProgramEditor({ mode, onChange }: Pick<CellSettingsProps, "mode" | "onChange">) {
+function ProgramEditor({ mode, onChange }: ModeSettingsProps) {
   const targets = availableTargets(mode.kind);
   function update(index: number, changes: Partial<Program>) {
     onChange({ programs: mode.programs.map((program, at) => at === index ? { ...program, ...changes } : program) });
@@ -114,42 +183,47 @@ function ProgramEditor({ mode, onChange }: Pick<CellSettingsProps, "mode" | "onC
   return <section className="genome-programs">
     <h3>Программируемые параметры</h3>
     <p>Уравнения читают состояние клетки и задают выбранный параметр. Для одного выхода их результаты складываются.</p>
-    {mode.programs.map((program, index) => <fieldset className="genome-program" key={index}>
-      <legend>Уравнение {index + 1}</legend>
-      <label className="genome-cell-type">Изменяемый параметр
-        <select aria-label={`Уравнение ${index + 1}. Параметр`} value={program.target}
-          onChange={e => update(index, { target: Number(e.target.value) })}>
-          {PROGRAM_TARGETS.map((name, target) => <option key={target} value={target} disabled={!targets.includes(target)}>{name}</option>)}
-        </select>
-      </label>
-      {!targets.includes(program.target) && <p>Этот выход относится к другому типу клетки. Выберите параметр текущего типа.</p>}
-      <label className="genome-cell-type">Источник значения
-        <select aria-label={`Уравнение ${index + 1}. Источник`} value={program.input}
-          onChange={e => update(index, { input: Number(e.target.value) })}>
-          {PROGRAM_INPUTS.map((name, input) => <option key={input} value={input}>{name}</option>)}
-        </select>
-      </label>
-      <label className="genome-cell-type">Зависимость
-        <select aria-label={`Уравнение ${index + 1}. Зависимость`} value={program.kind}
-          onChange={e => update(index, { kind: Number(e.target.value) })}>
-          <option value={0}>Линейная</option><option value={1}>Пороговая</option>
-        </select>
-      </label>
-      <Setting label={`Уравнение ${index + 1}. Коэффициент`} value={program.scale} min={-1000} max={1000} step={0.1}
-        onChange={scale => update(index, { scale })} help="Умножается на входное значение." />
-      <Setting label={`Уравнение ${index + 1}. Смещение`} value={program.offset} min={-1000} max={1000} step={0.1}
-        onChange={offset => update(index, { offset })} help="Добавляется после умножения входа на коэффициент." />
-      {program.kind === 1 && <>
-        <Setting label={`Уравнение ${index + 1}. Порог`} value={program.threshold} min={-1000} max={1000} step={0.1}
-          onChange={threshold => update(index, { threshold })}
-          help="При входе не ниже порога применяется линейное выражение. При меньшем входе используется отдельное значение." />
-        <Setting label={`Уравнение ${index + 1}. Ниже порога`} value={program.below} min={-1000} max={1000} step={0.1}
-          onChange={below => update(index, { below })} help="Выходное значение при входе ниже порога." />
-      </>}
-      <button type="button" onClick={() => onChange({ programs: mode.programs.filter((_, at) => at !== index) })}>
-        Удалить уравнение {index + 1}
-      </button>
-    </fieldset>)}
+    {mode.programs.map((program, index) => {
+      const supported = targets.includes(program.target);
+      return <fieldset className="genome-program" key={index}>
+        <legend>Уравнение {index + 1}</legend>
+        <label className="genome-cell-type">Изменяемый параметр
+          <select aria-label={`Уравнение ${index + 1}. Параметр`} value={supported ? program.target : ""}
+            onChange={e => update(index, { target: Number(e.target.value) })}>
+            {!supported && <option value="" disabled>Выберите параметр</option>}
+            {targets.map(target => <option key={target} value={target}>{PROGRAM_TARGETS[target]}</option>)}
+          </select>
+        </label>
+        {supported ? <>
+          <label className="genome-cell-type">Источник значения
+            <select aria-label={`Уравнение ${index + 1}. Источник`} value={program.input}
+              onChange={e => update(index, { input: Number(e.target.value) })}>
+              {PROGRAM_INPUTS.map((name, input) => <option key={input} value={input}>{name}</option>)}
+            </select>
+          </label>
+          <label className="genome-cell-type">Зависимость
+            <select aria-label={`Уравнение ${index + 1}. Зависимость`} value={program.kind}
+              onChange={e => update(index, { kind: Number(e.target.value) })}>
+              <option value={0}>Линейная</option><option value={1}>Пороговая</option>
+            </select>
+          </label>
+          <Setting label={`Уравнение ${index + 1}. Коэффициент`} value={program.scale} min={-1000} max={1000} step={0.1}
+            onChange={scale => update(index, { scale })} help="Умножается на входное значение." />
+          <Setting label={`Уравнение ${index + 1}. Смещение`} value={program.offset} min={-1000} max={1000} step={0.1}
+            onChange={offset => update(index, { offset })} help="Добавляется после умножения входа на коэффициент." />
+          {program.kind === 1 && <>
+            <Setting label={`Уравнение ${index + 1}. Порог`} value={program.threshold} min={-1000} max={1000} step={0.1}
+              onChange={threshold => update(index, { threshold })}
+              help="При входе не ниже порога применяется линейное выражение. При меньшем входе используется отдельное значение." />
+            <Setting label={`Уравнение ${index + 1}. Ниже порога`} value={program.below} min={-1000} max={1000} step={0.1}
+              onChange={below => update(index, { below })} help="Выходное значение при входе ниже порога." />
+          </>}
+        </> : <p>Уравнение для параметра «{PROGRAM_TARGETS[program.target]}» приостановлено. Выберите доступный параметр, чтобы применить его к этому типу клетки.</p>}
+        <button type="button" onClick={() => onChange({ programs: mode.programs.filter((_, at) => at !== index) })}>
+          Удалить уравнение {index + 1}
+        </button>
+      </fieldset>;
+    })}
     <button type="button" disabled={mode.programs.length >= 8}
       onClick={() => onChange({ programs: [...mode.programs, { ...newProgram(), target: targets[0] }] })}>
       Добавить уравнение
@@ -170,6 +244,9 @@ export function CellSettings({ mode, genome, onChange }: CellSettingsProps) {
     </section>}
     {mode.kind === 8 && <section><h3>Плавучесть</h3>
       {setting("Плотность клетки", "density", -3.3, 3.3, 0.1, "Определяет всплытие и оседание при включённой гравитации.")}
+    </section>}
+    {mode.kind === 9 && <section><h3>Приклеивание</h3>
+      <ConnectionLimit mode={mode} onChange={onChange} />
     </section>}
     {[10, 11].includes(mode.kind) && <section><h3>Сенсор</h3><SensorSettings mode={mode} onChange={onChange} /></section>}
     {mode.kind === 12 && <section><h3>Мышца</h3>
