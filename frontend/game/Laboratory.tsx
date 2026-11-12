@@ -14,7 +14,6 @@ import { completeChallenge, TUTORIALS, completeTutorial, evaluateTutorialStep } 
 import { challengeBudget, levelGenome, starterGenome, type LevelManifest } from './levels';
 import { ObjectivePanel } from './ObjectivePanel';
 import { Library } from './Library';
-import { SimulationHeader } from './SimulationHeader';
 import { RendererBadge } from '../RendererBadge';
 import { saveEntry, type LibraryEntry, type GenomeData, type PlateData } from './storage';
 import { readSettings } from './Settings';
@@ -261,14 +260,7 @@ export function Laboratory({ session, onExit }: {
         return;
     } ask('Загрузить геном?', 'Он заменит текущий черновик редактора.', () => { setGenome(data.genome); setInitialMode(data.initialMode); setLibrary(false); setNotice('Геном загружен.'); }); }
     const toolLabels = tools;
-    return <div className="laboratory" data-controls={touchControls ? "touch" : "mouse"}>
-        <SimulationHeader title={title} onExit={leave} action={{
-            label: 'Сохранить эксперимент', disabled: !sim.ready || sim.resetting, run: () => {
-                sim.changeSpeed(0);
-                setSaveKind('plate');
-                setName(title === 'Новый эксперимент' ? '' : title);
-            },
-        }}/>
+    return <div className="laboratory" data-controls={touchControls ? "touch" : "mouse"}><header className="app-header"><button onClick={leave}>← Меню</button><h1>{title}</h1><button disabled={!sim.ready || sim.resetting} onClick={() => { sim.changeSpeed(0); setSaveKind('plate'); setName(title === 'Новый эксперимент' ? '' : title); }}>Сохранить эксперимент</button></header>
  <main className="lab-layout"><section className="microscope" aria-label="Микроскоп"><div className="canvas-actions"><div className="canvas-view-controls" role="group" aria-label="Масштаб поля"><button aria-label="Уменьшить масштаб" onClick={() => setZoomStep(v => v - 1)}>−</button><button aria-label="Увеличить масштаб" onClick={() => setZoomStep(v => v + 1)}>+</button><button onClick={() => setRecenter(v => v + 1)}>Всё поле</button></div><div className="canvas-action-meta"><RendererBadge backend={renderer}/><label><span className="sr-only">Показать слой</span><select value={layer} onChange={e => setLayer(e.target.value)}><option value="biome">Среда</option><option value="light">Свет</option><option value="food">Пища</option><option value="covered">Покрытая пища</option><option value="nitrates">Нитраты</option><option value="radiation">Радиация</option></select></label></div></div><div className="canvas-wrap" ref={canvasHost}><WorldView frame={sim.frame} tool={tool} layer={layer} selected={selected} backend={backend} onPoint={point} onView={setView} onBackend={setRenderer} onError={() => failure('Не удалось показать чашку. Попробуйте перезагрузить страницу.')} recenter={recenter} zoomStep={zoomStep} onBackendFailure={(failed) => { if (failed === 'webgpu') {
         setRenderer(null);
         setBackend('webgl');

@@ -9,7 +9,6 @@ import { GenomeEditor } from '../editor/GenomeEditor';
 import { Library } from './Library';
 import { Modal } from './Modal';
 import { RendererBadge } from '../RendererBadge';
-import { SimulationHeader } from './SimulationHeader';
 import { saveEntry, type GenomeData, type LibraryEntry } from './storage';
 import { useArena, type ArenaInspectResult } from './useArena';
 import './arena.css';
@@ -219,8 +218,11 @@ export function Arena({ onExit }: { onExit: () => void }) {
     }
 
     return <div className="laboratory arena-shell" data-controls={touchControls ? "touch" : "mouse"}>
-        <SimulationHeader title={room ? `${arenaMode ? 'Арена' : 'Песочница'} · ${room.name}` : 'Сетевая игра'} onExit={exit}
-            action={{ label: 'Комната', run: () => setLobbyOpen(true) }}/>
+        <header className="app-header">
+            <button onClick={exit}>← Меню</button>
+            <h1>{room ? `${arenaMode ? 'Арена' : 'Песочница'} · ${room.name}` : 'Сетевая игра'}</h1>
+            <button onClick={() => setLobbyOpen(true)}>Комната</button>
+        </header>
         <main className="lab-layout">
             <section className="microscope" aria-label="Общая сцена арены">
                 <div className="canvas-actions">
