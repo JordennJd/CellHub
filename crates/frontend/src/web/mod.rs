@@ -165,6 +165,13 @@ impl WorldRenderer {
         Ok(())
     }
 
+    /// Owner rings for arena cells: four floats per halo (x, y, radius, RGB).
+    pub fn set_halos(&mut self, halos: &[f32]) -> Result<(), JsValue> {
+        self.state.borrow_mut().set_halos(halos)?;
+        self.signal.request();
+        Ok(())
+    }
+
     pub fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
         self.state
             .borrow_mut()

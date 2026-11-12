@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { flatten, inflate, type Frame, type Mode } from '../model';
+import { chaosGenome, flatten, inflate, type Frame, type Mode } from '../model';
+import { chaosOrganismsBuffer } from '../organisms';
 import { MultiplayerClient, type NetPhase, type Welcome } from '../net/client';
-import type { RoomInfo } from '../net/protocol';
+import type { LeaderboardEntry, PlayerInfo, RoomInfo, RoomMode } from '../net/protocol';
 import type { SyncState } from '../net/prediction';
 
 export type ArenaInspectResult = { genome: Mode[]; mode: number };
@@ -29,6 +30,8 @@ export function useArena() {
     const [phase, setPhase] = useState<NetPhase>('disconnected');
     const [rooms, setRooms] = useState<RoomInfo[]>([]);
     const [room, setRoom] = useState<RoomInfo | null>(null);
+    const [player, setPlayer] = useState<PlayerInfo | null>(null);
+    const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
     const [host, setHost] = useState(false);
     const [frame, setFrame] = useState<Frame | null>(null);
     const [sync, setSync] = useState<SyncState | null>(null);
@@ -53,6 +56,8 @@ export function useArena() {
 
     function clearRoom() {
         setRoom(null);
+        setPlayer(null);
+        setLeaderboard([]);
         setHost(false);
         setFrame(null);
         setSync(null);
@@ -69,6 +74,8 @@ export function useArena() {
             onRooms: next => setRooms(next),
             onWelcome: (welcome: Welcome) => {
                 setRoom(welcome.room);
+                setPlayer(welcome.player);
+                setLeaderboard([]);
                 setHost(welcome.host);
                 setFrame(null);
                 setSync(null);
@@ -107,6 +114,7 @@ export function useArena() {
                 setResetVersion(value => value + 1);
             },
             onPlayerCount: players => setRoom(current => current ? { ...current, players } : current),
+            onLeaderboard: entries => setLeaderboard(entries),
             onDisconnected: () => {
                 rejectInspects(new Error('Соединение с сервером закрыто.'));
                 clearRoom();
@@ -132,9 +140,15 @@ export function useArena() {
         client.current?.connect(url);
     }
 
-    function createRoom(name: string, player: string) {
+    function createRoom(name: string, playerName: string, mode: RoomMode) {
         setError('');
-        client.current?.createRoom(name, player);
+        const chaos = mode === 'arena'
+            ? {
+                genome: Array.from(flatten(chaosGenome())),
+                organisms: Array.from(chaosOrganismsBuffer()),
+            }
+            : undefined;
+        client.current?.createRoom(name, playerName, mode, chaos);
     }
 
     function joinRoom(id: string, player: string) {
@@ -212,7 +226,7 @@ export function useArena() {
     }
 
     return {
-        phase, rooms, room, host, frame, sync, error, setError, notice, setNotice,
+        phase, rooms, room, player, leaderboard, host, frame, sync, error, setError, notice, setNotice,
         resetVersion, names,
         connect, createRoom, joinRoom, refreshRooms, leaveRoom, disconnect,
         spawn, edit, inspect, reset,

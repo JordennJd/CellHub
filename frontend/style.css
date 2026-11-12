@@ -851,6 +851,35 @@ progress {
   justify-content: space-between;
   margin: 20px 0 6px;
 }
+.online-mode {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.online-mode button {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 12px;
+  text-align: left;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.online-mode button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.online-mode b {
+  font-size: 13px;
+  font-weight: 600;
+}
+.online-mode small {
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--muted);
+}
 .online-section-head .quiet {
   padding: 4px 8px;
 }

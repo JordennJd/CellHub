@@ -2150,20 +2150,38 @@ fn chunk_snapshot_exports_cells_links_and_terrain() {
     s.bonds.insert((a, b));
 
     let first = s.chunk_snapshot(0, 0, 512.);
-    assert_eq!(first.cells.len(), 28);
+    assert_eq!(first.cells.len(), 29);
     assert_eq!(first.cells[0], a as f32);
     assert_eq!(first.cells[11], 1.);
     assert_eq!(first.links, vec![a, b]);
     assert_eq!(&first.cells[12..15], &[-1., 0., INITIAL_NITROGEN]);
     assert_eq!(&first.cells[15..23], &[0.; 8]);
-    assert_eq!(&first.cells[23..], &[0., 0., -1., 0., 0.]);
+    assert_eq!(&first.cells[23..29], &[0., 0., -1., 0., 0., 0.]);
     assert_eq!(first.terrain.len(), 8 * 8 * 6);
     assert_eq!(first.terrain[4], s.tiles[0].nitrates);
     assert_eq!(first.terrain[5], s.tiles[0].covered_food);
 
     let second = s.chunk_snapshot(1, 0, 512.);
-    assert_eq!(second.cells.len(), 28);
+    assert_eq!(second.cells.len(), 29);
     assert_eq!(second.cells[0], b as f32);
     assert_eq!(second.cells[11], 1.);
     assert!(second.links.is_empty());
+}
+
+#[test]
+fn arena_owner_scores_integrate_mass_with_type_weights() {
+    let mut s = Simulation::new(7);
+    s.set_track_owner_scores(true);
+    let id = s.spawn_owned(300., 300., 0, &modern_genes(1), 7).unwrap();
+    for (_, cell) in s.world.query_mut::<&mut Cell>() {
+        if cell.id == id {
+            cell.mass = 4.;
+        }
+    }
+    s.accumulate_owner_scores();
+    // Photocytes count at 0.25x over one 1/30 s fixed step.
+    assert!((s.owner_score(7) - 4. * 0.25 / 30.).abs() < 1e-6);
+    assert_eq!(s.owner_score(8), 0.);
+    s.set_track_owner_scores(false);
+    assert_eq!(s.owner_score(7), 0.);
 }

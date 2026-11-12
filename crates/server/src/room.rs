@@ -1,20 +1,31 @@
 //! One authoritative public room: a fixed-step simulation and its chunk stream.
 
 use cellhub_protocol::{
-    CHUNK_COUNT, CHUNK_SIZE, CHUNKS_PER_AXIS, Chunk, ClientMessage, RoomInfo, ServerMessage,
+    CHUNK_COUNT, CHUNK_SIZE, CHUNKS_PER_AXIS, ChaosPreset, Chunk, ClientMessage, LeaderboardEntry,
+    PLAYER_COLORS, PlayerInfo, RoomInfo, RoomMode, ServerMessage, player_color,
 };
 use cellhub_simulation::Simulation;
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{info, warn};
 
-pub type RoomRegistry = Arc<RwLock<HashMap<String, Arc<RoomHandle>>>>;
+pub type RoomRegistry = Arc<tokio::sync::RwLock<HashMap<String, Arc<RoomHandle>>>>;
 
+/// Network and authority cadence. The simulation advances one fixed 1/30 s
+/// step per tick, so biology, scores and wall time stay in sync.
 const TICK_RATE: u64 = 30;
+const LEADERBOARD_EVERY_TICKS: u32 = 30;
+const SPAWN_COOLDOWN: Duration = Duration::from_secs(2);
 const EMPTY_ROOM_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Debug)]
+pub struct RoomPlayer {
+    pub name: String,
+    pub color: u32,
+}
 
 #[derive(Clone)]
 pub enum RoomEvent {
@@ -39,9 +50,11 @@ pub struct RoomCommand {
 pub struct RoomHandle {
     pub id: String,
     pub name: String,
+    pub mode: RoomMode,
     pub host: u32,
     pub host_name: String,
     pub player_count: AtomicU32,
+    pub players: RwLock<HashMap<u32, RoomPlayer>>,
     pub tick: AtomicU32,
     pub population: AtomicU32,
     pub tx: mpsc::Sender<RoomCommand>,
@@ -63,7 +76,37 @@ impl RoomHandle {
             players: self.player_count.load(Ordering::Relaxed),
             tick: self.tick.load(Ordering::Relaxed),
             host: self.host_name.clone(),
+            mode: self.mode,
         }
+    }
+
+    /// Register a player and return the colour used for their cells. Colours
+    /// stay unique inside a room while the palette has free entries.
+    pub fn add_player(&self, player: &PlayerInfo) -> u32 {
+        let mut players = self.players.write().unwrap();
+        let used: HashSet<u32> = players.values().map(|entry| entry.color).collect();
+        let fallback = player_color(player.id);
+        let color = if player.color != 0 && !used.contains(&player.color) {
+            player.color
+        } else {
+            PLAYER_COLORS
+                .iter()
+                .copied()
+                .find(|candidate| !used.contains(candidate))
+                .unwrap_or(fallback)
+        };
+        players.insert(
+            player.id,
+            RoomPlayer {
+                name: player.name.clone(),
+                color,
+            },
+        );
+        color
+    }
+
+    pub fn remove_player(&self, player: u32) {
+        self.players.write().unwrap().remove(&player);
     }
 
     pub fn broadcast(&self, event: RoomEvent) {
@@ -77,6 +120,8 @@ pub fn spawn_room(
     registry: RoomRegistry,
     id: String,
     name: String,
+    mode: RoomMode,
+    chaos: Option<ChaosPreset>,
     host: u32,
     host_name: String,
     seed: u32,
@@ -86,9 +131,11 @@ pub fn spawn_room(
     let room = Arc::new(RoomHandle {
         id: id.clone(),
         name,
+        mode,
         host,
         host_name,
         player_count: AtomicU32::new(0),
+        players: RwLock::new(HashMap::new()),
         tick: AtomicU32::new(0),
         population: AtomicU32::new(0),
         tx,
@@ -103,7 +150,8 @@ pub fn spawn_room(
     let task_room = Arc::clone(&room);
     let task_registry = Arc::clone(&registry);
     tokio::spawn(async move {
-        if let Err(error) = tokio::task::spawn_blocking(move || run_room(task_room, rx, seed)).await
+        if let Err(error) =
+            tokio::task::spawn_blocking(move || run_room(task_room, rx, seed, chaos)).await
         {
             warn!(%error, "room worker failed");
         }
@@ -113,9 +161,30 @@ pub fn spawn_room(
     room
 }
 
-fn run_room(room: Arc<RoomHandle>, mut commands: mpsc::Receiver<RoomCommand>, seed: u32) {
+fn run_room(
+    room: Arc<RoomHandle>,
+    mut commands: mpsc::Receiver<RoomCommand>,
+    seed: u32,
+    chaos: Option<ChaosPreset>,
+) {
     let mut simulation = Simulation::new(seed);
+    if room.mode == RoomMode::Arena {
+        let started = match chaos {
+            Some(preset) => simulation.start_chaos_native(seed, &preset.genome, &preset.organisms),
+            None => {
+                simulation.start_chaos_defaults(seed);
+                Ok(())
+            }
+        };
+        if let Err(error) = started {
+            warn!(%error, "arena chaos preset rejected; using defaults");
+            simulation.start_chaos_defaults(seed);
+        }
+    }
+    simulation.set_track_owner_scores(room.mode == RoomMode::Arena);
     let mut cursor = 0usize;
+    let mut tick_count = 0u32;
+    let mut spawn_times: HashMap<u32, Instant> = HashMap::new();
     let mut empty_since = Some(Instant::now());
     let period = Duration::from_secs_f64(1. / TICK_RATE as f64);
     let mut deadline = Instant::now();
@@ -133,7 +202,13 @@ fn run_room(room: Arc<RoomHandle>, mut commands: mpsc::Receiver<RoomCommand>, se
             let Ok(command) = commands.try_recv() else {
                 break;
             };
-            apply_command(&room, &mut simulation, &mut cursor, command);
+            apply_command(
+                &room,
+                &mut simulation,
+                &mut cursor,
+                &mut spawn_times,
+                command,
+            );
         }
         let players = room.player_count.load(Ordering::Relaxed);
         if players == 0 {
@@ -180,6 +255,10 @@ fn run_room(room: Arc<RoomHandle>, mut commands: mpsc::Receiver<RoomCommand>, se
             Err(error) => warn!(%error, "cannot encode room chunk"),
         }
         cursor = (cursor + 1) % CHUNK_COUNT;
+        tick_count = tick_count.wrapping_add(1);
+        if room.mode == RoomMode::Arena && tick_count % LEADERBOARD_EVERY_TICKS == 0 {
+            broadcast_leaderboard(&room, &simulation);
+        }
         room.stream_us.store(
             stream_started.elapsed().as_micros() as u64,
             Ordering::Relaxed,
@@ -199,6 +278,7 @@ fn apply_command(
     room: &RoomHandle,
     simulation: &mut Simulation,
     cursor: &mut usize,
+    spawn_times: &mut HashMap<u32, Instant>,
     command: RoomCommand,
 ) {
     let seq = match &command.message {
@@ -212,7 +292,23 @@ fn apply_command(
         ClientMessage::Spawn {
             x, y, mode, genome, ..
         } => {
-            let result = simulation.spawn_checked(x, y, mode as usize, &genome);
+            if room.mode == RoomMode::Arena {
+                let now = Instant::now();
+                if let Some(previous) = spawn_times.get(&command.player)
+                    && now.duration_since(*previous) < SPAWN_COOLDOWN
+                {
+                    let _ = command.reply.send(RoomEvent::json(&ServerMessage::Ack {
+                        seq,
+                        cell_id: None,
+                        error: Some("Новую клетку можно поставить раз в 2 секунды.".to_owned()),
+                    }));
+                    return;
+                }
+            }
+            let result = simulation.spawn_owned(x, y, mode as usize, &genome, command.player);
+            if result.is_ok() && room.mode == RoomMode::Arena {
+                spawn_times.insert(command.player, Instant::now());
+            }
             let reply = match result {
                 Ok(cell_id) => ServerMessage::Ack {
                     seq,
@@ -272,6 +368,8 @@ fn apply_command(
                 return;
             }
             simulation.reset();
+            simulation.set_track_owner_scores(room.mode == RoomMode::Arena);
+            spawn_times.clear();
             *cursor = 0;
             room.population.store(0, Ordering::Relaxed);
             room.tick.store(0, Ordering::Relaxed);
@@ -284,4 +382,24 @@ fn apply_command(
         }
         _ => {}
     }
+}
+
+fn broadcast_leaderboard(room: &RoomHandle, simulation: &Simulation) {
+    let roster = room.players.read().unwrap();
+    let mut entries: Vec<_> = roster
+        .iter()
+        .map(|(&id, player)| LeaderboardEntry {
+            id,
+            name: player.name.clone(),
+            color: player.color,
+            score: simulation.owner_score(id),
+        })
+        .collect();
+    drop(roster);
+    entries.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    room.broadcast(RoomEvent::json(&ServerMessage::Leaderboard { entries }));
 }

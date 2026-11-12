@@ -77,7 +77,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
                     <ModeCard kind="challenge" title="Испытания" description="Уроки обучения и задачи с заданными условиями." onClick={() => setPage('challenges')}/>
                     <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
                     <ModeCard kind="chaos" title="Хаос" description="Биомы, день и ночь, мутации и самозарождение." onClick={() => onStart({ kind: 'chaos' })}/>
-                    <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками." onClick={() => onStart({ kind: 'arena' })}/>
+                    <ModeCard kind="arena" title="Многопользовательская игра" description="Совместные комнаты: песочница или арена на основе «Хаоса»." onClick={() => onStart({ kind: 'arena' })}/>
                 </div>
                 <div className="home-secondary-grid">
                     <section className="home-panel" aria-labelledby="home-open">

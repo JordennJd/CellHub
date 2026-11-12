@@ -1,7 +1,7 @@
 //! Shared lobby state: public room registry and identity counters.
 
 use crate::room::{RoomHandle, RoomRegistry, spawn_room};
-use cellhub_protocol::RoomInfo;
+use cellhub_protocol::{ChaosPreset, RoomInfo, RoomMode};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,6 +39,8 @@ impl AppState {
     pub async fn create_room(
         self: &Arc<Self>,
         raw_name: Option<&str>,
+        mode: RoomMode,
+        chaos: Option<ChaosPreset>,
         host_player: u32,
         host_name: &str,
     ) -> Result<Arc<RoomHandle>, String> {
@@ -54,13 +56,15 @@ impl AppState {
         };
         let name = match raw_name.map(str::trim).filter(|name| !name.is_empty()) {
             Some(name) => sanitize_name(name, 48),
-            None => format!("Публичная комната {id}"),
+            None => format!("{} {id}", mode.label()),
         };
         let seed = room_seed(&id);
         let room = spawn_room(
             Arc::clone(&self.rooms),
             id.clone(),
             name,
+            mode,
+            chaos,
             host_player,
             host_name.to_owned(),
             seed,

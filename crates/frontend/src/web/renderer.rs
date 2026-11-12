@@ -2,7 +2,10 @@
 
 use super::backend::Backend;
 use super::error::error;
-use super::gpu::{ATTRIBUTES, CELL_STRIDE, LINK_ATTRIBUTES, LINK_STRIDE, buffer, pipeline};
+use super::gpu::{
+    ATTRIBUTES, CELL_STRIDE, HALO_ATTRIBUTES, HALO_STRIDE, LINK_ATTRIBUTES, LINK_STRIDE, buffer,
+    pipeline,
+};
 use super::labels::{ATLAS_HEIGHT, ATLAS_WIDTH, rasterize_labels};
 use super::material;
 use crate::scene_data::{CELL_VALUES, pack_links};
@@ -24,6 +27,7 @@ pub(super) struct RendererState {
     config: wgpu::SurfaceConfiguration,
     terrain_pipeline: wgpu::RenderPipeline,
     cell_pipeline: wgpu::RenderPipeline,
+    halo_pipeline: wgpu::RenderPipeline,
     label_pipeline: wgpu::RenderPipeline,
     link_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
@@ -35,6 +39,9 @@ pub(super) struct RendererState {
     links: wgpu::Buffer,
     link_capacity: u64,
     link_count: u32,
+    halos: wgpu::Buffer,
+    halo_capacity: u64,
+    halo_count: u32,
     atlas: wgpu::Texture,
     material: wgpu::Texture,
     view: [f32; 16],
@@ -345,6 +352,15 @@ impl RendererState {
             "cell_fs",
             Some((CELL_STRIDE, &ATTRIBUTES)),
         );
+        let halo_pipeline = pipeline(
+            &device,
+            &layout,
+            &shader,
+            config.format,
+            "halo_vs",
+            "halo_fs",
+            Some((HALO_STRIDE, &HALO_ATTRIBUTES)),
+        );
         let label_pipeline = pipeline(
             &device,
             &layout,
@@ -377,6 +393,13 @@ impl RendererState {
             link_capacity,
             wgpu::BufferUsages::VERTEX,
         );
+        let halo_capacity = 1024 * HALO_STRIDE;
+        let halos = buffer(
+            &device,
+            "owner halos",
+            halo_capacity,
+            wgpu::BufferUsages::VERTEX,
+        );
         if let Some(e) = device.pop_error_scope().await {
             return Err(error(e));
         }
@@ -389,6 +412,7 @@ impl RendererState {
             config,
             terrain_pipeline,
             cell_pipeline,
+            halo_pipeline,
             label_pipeline,
             link_pipeline,
             bind_group,
@@ -400,6 +424,9 @@ impl RendererState {
             links,
             link_capacity,
             link_count: 0,
+            halos,
+            halo_capacity,
+            halo_count: 0,
             atlas,
             material,
             view,
@@ -508,6 +535,37 @@ impl RendererState {
         self.dirty = true;
         Ok(())
     }
+
+    /// Arena owner rings: four floats per halo (x, y, radius, packed RGB).
+    pub(super) fn set_halos(&mut self, halos: &[f32]) -> Result<(), JsValue> {
+        if self.destroyed {
+            return Err(error("Renderer destroyed"));
+        }
+        if !halos.len().is_multiple_of(4) || halos.iter().any(|v| !v.is_finite()) {
+            return Err(error("Invalid halo snapshot"));
+        }
+        let bytes: &[u8] = bytemuck::cast_slice(halos);
+        if bytes.len() as u64 > self.halo_capacity {
+            let capacity = (bytes.len() as u64).next_power_of_two();
+            if capacity > self.device.limits().max_buffer_size {
+                return Err(error("Halo buffer exceeds adapter limit"));
+            }
+            self.halos.destroy();
+            self.halos = buffer(
+                &self.device,
+                "owner halos",
+                capacity,
+                wgpu::BufferUsages::VERTEX,
+            );
+            self.halo_capacity = capacity;
+        }
+        if !bytes.is_empty() {
+            self.queue.write_buffer(&self.halos, 0, bytes);
+        }
+        self.halo_count = (halos.len() / 4) as u32;
+        self.dirty = true;
+        Ok(())
+    }
     pub(super) fn set_view(&mut self, x: f32, y: f32, zoom: f32, layer: u32, selected: i32) {
         if x.is_finite() && y.is_finite() && zoom.is_finite() && zoom > 0. {
             self.view[2..7].copy_from_slice(&[x, y, zoom, layer as f32, selected as f32]);
@@ -595,6 +653,11 @@ impl RendererState {
             pass.draw(0..6, 0..1);
             pass.set_pipeline(&self.label_pipeline);
             pass.draw(0..6, 0..4);
+            if self.halo_count > 0 {
+                pass.set_pipeline(&self.halo_pipeline);
+                pass.set_vertex_buffer(0, self.halos.slice(..));
+                pass.draw(0..6, 0..self.halo_count);
+            }
             if self.link_count > 0 {
                 pass.set_pipeline(&self.link_pipeline);
                 pass.set_vertex_buffer(0, self.links.slice(..));
@@ -617,6 +680,7 @@ impl RendererState {
             self.cells.destroy();
             self.terrain.destroy();
             self.links.destroy();
+            self.halos.destroy();
             self.uniform.destroy();
             self.atlas.destroy();
             self.material.destroy();

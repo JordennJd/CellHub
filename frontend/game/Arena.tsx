@@ -15,6 +15,7 @@ import { useArena, type ArenaInspectResult } from './useArena';
 import './arena.css';
 
 const PLAYER_KEY = 'cellhub.player';
+const packedColor = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 function defaultServerUrl() {
     const requested = new URLSearchParams(location.search).get('server');
@@ -69,8 +70,13 @@ export function Arena({ onExit }: { onExit: () => void }) {
     const [busy, setBusy] = useState(false);
     const selectedRef = useRef<number | null>(null);
     selectedRef.current = selected;
+    const spawnAt = useRef(0);
     const online = arena.phase === 'online';
     const room = arena.room;
+    const arenaMode = room?.mode === 'arena';
+    const playerColors = arenaMode
+        ? Object.fromEntries(arena.leaderboard.map(entry => [entry.id, entry.color]))
+        : undefined;
     const stats = arena.frame?.stats;
     const count = stats?.[1] ?? 0;
 
@@ -96,6 +102,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
     useEffect(() => {
         setSelected(null);
         setDiagnostic(null);
+        spawnAt.current = 0;
     }, [arena.resetVersion]);
 
     useEffect(() => {
@@ -130,6 +137,14 @@ export function Arena({ onExit }: { onExit: () => void }) {
         if (!online)
             return;
         if (action === 'place') {
+            if (arenaMode) {
+                const wait = 2000 - (Date.now() - spawnAt.current);
+                if (spawnAt.current && wait > 0) {
+                    arena.setNotice(`Следующую клетку можно поставить через ${(wait / 1000).toFixed(1)} с.`);
+                    return;
+                }
+                spawnAt.current = Date.now();
+            }
             arena.spawn(x, y, initialMode, genome);
             return;
         }
@@ -204,7 +219,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
     }
 
     return <div className="laboratory arena-shell" data-controls={touchControls ? "touch" : "mouse"}>
-        <SimulationHeader title={room ? `Арена · ${room.name}` : 'Арена'} onExit={exit}
+        <SimulationHeader title={room ? `${arenaMode ? 'Арена' : 'Песочница'} · ${room.name}` : 'Многопользовательская игра'} onExit={exit}
             action={{ label: 'Комната', run: () => setLobbyOpen(true) }}/>
         <main className="lab-layout">
             <section className="microscope" aria-label="Общая сцена арены">
@@ -228,6 +243,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                 </div>
                 <div className="canvas-wrap">
                     <WorldView frame={arena.frame} tool={tool} layer={layer} selected={selected}
+                        playerColors={playerColors}
                         backend={backend} onPoint={point} onView={setView} onBackend={setRenderer} recenter={recenter} zoomStep={zoomStep}
                         onError={() => arena.setError('Не удалось показать общую сцену. Попробуйте перезагрузить страницу.')}
                         onBackendFailure={failed => {
@@ -265,7 +281,9 @@ export function Arena({ onExit }: { onExit: () => void }) {
             </section>
             <aside className="lab-sidebar">
                 <nav className="tabs" aria-label="Панели арены">
-                    {[['genome', 'Геном'], ['observe', 'Наблюдение'], ['room', 'Комната']].map(([value, label]) =>
+                    {([['genome', 'Геном'], ['observe', 'Наблюдение']] as [string, string][])
+                        .concat((arenaMode ? [['rating', 'Рейтинг']] : []) as [string, string][])
+                        .concat([['room', 'Комната']]).map(([value, label]) =>
                         <button key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => setTab(value)}>{label}</button>)}
                 </nav>
                 <div className="sidebar-content">
@@ -294,18 +312,34 @@ export function Arena({ onExit }: { onExit: () => void }) {
                             <button onClick={applyGenome}>Применить геном редактора</button>
                         </> : <p>{selected === null ? 'Выберите клетку инструментом «Диагностика».' : 'Клетка разделилась или погибла. Выберите потомка.'}</p>}
                     </section>}
+                    {tab === 'rating' && arenaMode && <section className="panel-section">
+                        <h2>Таблица лидеров</h2>
+                        <p className="arena-note">Очки — интеграл по времени суммы биомассы ваших клеток. Фотоциты дают 0.25×, фагоциты 0.5×, вироциты и девороциты 1×, остальные клетки 0.75×.</p>
+                        {arena.leaderboard.length
+                            ? <ol className="arena-leaderboard">
+                                {arena.leaderboard.map((entry, index) =>
+                                    <li key={entry.id} className={entry.id === arena.player?.id ? 'self' : undefined}>
+                                        <span className="arena-rank">{index + 1}</span>
+                                        <span className="arena-chip" style={{ background: packedColor(entry.color), color: packedColor(entry.color) }} aria-hidden="true"/>
+                                        <span className="arena-player">{entry.name}{entry.id === arena.player?.id ? ' (вы)' : ''}</span>
+                                        <strong>{Math.round(entry.score).toLocaleString('ru-RU')}</strong>
+                                    </li>)}
+                            </ol>
+                            : <p role="status">Ждём первые очки: поставьте клетку.</p>}
+                    </section>}
                     {tab === 'room' && <section className="panel-section">
                         <h2>Комната</h2>
                         {room ? <>
                             <dl className="arena-room-metrics">
                                 <div><dt>Название</dt><dd>{room.name}</dd></div>
+                                <div><dt>Режим</dt><dd>{arenaMode ? 'Арена' : 'Песочница'}</dd></div>
                                 <div><dt>Код</dt><dd><code>{room.id}</code></dd></div>
                                 <div><dt>Создатель</dt><dd>{room.host}{arena.host ? ' (вы)' : ''}</dd></div>
                                 <div><dt>Игроков</dt><dd>{room.players}</dd></div>
                                 <div><dt>Тик сервера</dt><dd>{arena.sync?.lastTick ?? room.tick}</dd></div>
                                 <div><dt>Чанков получено</dt><dd>{arena.sync?.seen ?? 0} / {arena.sync?.total ?? 36}</dd></div>
                             </dl>
-                            <p className="arena-note">Мир 3072 × 3072 принадлежит серверу. Клиент получает по одному чанку за тик и предсказывает движение между обновлениями.</p>
+                            <p className="arena-note">Мир 3072 × 3072 принадлежит серверу. Клиент получает по одному чанку за тик и предсказывает движение между обновлениями.{arenaMode ? ' На арене новая клетка доступна раз в 2 секунды.' : ''}</p>
                             <div className="button-row">
                                 <button onClick={() => { arena.leaveRoom(); setLobbyOpen(true); }}>Выйти в список комнат</button>
                                 <button className="quiet" onClick={() => { arena.disconnect(); setLobbyOpen(true); }}>Отключиться</button>
@@ -323,7 +357,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
             room={room} host={arena.host} playerName={playerName} sync={arena.sync}
             onClose={() => online ? setLobbyOpen(false) : exit()}
             onConnect={url => arena.connect(url)}
-            onCreate={(name, player) => { rememberPlayer(player); arena.createRoom(name, player); }}
+            onCreate={(name, player, mode) => { rememberPlayer(player); arena.createRoom(name, player, mode); }}
             onJoin={(id, player) => { rememberPlayer(player); arena.joinRoom(id, player); }}
             onRefresh={arena.refreshRooms}
             onLeave={() => { arena.leaveRoom(); setLobbyOpen(true); }}

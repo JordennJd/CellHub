@@ -9,10 +9,34 @@ export type { BackendPreference } from "./backend";
 let moduleReady: Promise<unknown> | undefined;
 const emptyCells = new Float32Array();
 const emptyLinks = new Uint32Array();
+const emptyHalos = new Float32Array();
 const layerIndex = (layer: string) =>
   ({ biome: 0, light: 1, radiation: 2, food: 3, covered: 3, nitrates: 4 } as Record<string, number>)[
     layer
   ] ?? 0;
+
+/** Arena ownership is a sparse list of coloured rings drawn behind cells. */
+function buildHalos(
+  cells: Float32Array,
+  owners: Float32Array | undefined,
+  colors: Record<number, number> | undefined,
+) {
+  if (!owners || !colors) return emptyHalos;
+  const count = Math.min(cells.length / STRIDE, owners.length);
+  const halos = new Float32Array(count * 4);
+  let length = 0;
+  for (let row = 0; row < count; row++) {
+    const owner = owners[row];
+    const color = colors[owner];
+    if (!(owner > 0) || color === undefined) continue;
+    const offset = row * STRIDE;
+    halos[length++] = cells[offset + 1];
+    halos[length++] = cells[offset + 2];
+    halos[length++] = cells[offset + 3];
+    halos[length++] = color;
+  }
+  return length === halos.length ? halos : halos.slice(0, length);
+}
 
 type RustWorldViewProps = WorldViewProps & {
   backend: BackendPreference;
@@ -62,9 +86,16 @@ export function RustWorldView(props: RustWorldViewProps) {
     if (!instance) return;
     const layer = live.current.layer;
     if (!force && next === appliedFrame.current && layer === appliedProjectionLayer.current) return;
+    const applyGeometry = (cells: Float32Array, links: Uint32Array) => {
+      instance.set_geometry(cells, links);
+      instance.set_halos(buildHalos(cells, next?.owners, live.current.playerColors));
+    };
     try {
       if (!next) {
-        if (appliedFrame.current) instance.set_geometry(emptyCells, emptyLinks);
+        if (appliedFrame.current) {
+          instance.set_geometry(emptyCells, emptyLinks);
+          instance.set_halos(emptyHalos);
+        }
         appliedFrame.current = null;
         return;
       }
@@ -79,7 +110,7 @@ export function RustWorldView(props: RustWorldViewProps) {
         next.circular === previous.circular &&
         field === previousField
       ) {
-        instance.set_geometry(cells, next.links);
+        applyGeometry(cells, next.links);
       } else {
         const terrain = field ? next.terrain.slice() : next.terrain;
         if (field) {
@@ -88,6 +119,7 @@ export function RustWorldView(props: RustWorldViewProps) {
           }
         }
         instance.set_frame(cells, terrain, next.links, worldWidth, worldSize, next.circular ?? false);
+        instance.set_halos(buildHalos(cells, next.owners, live.current.playerColors));
       }
       appliedFrame.current = next;
       appliedProjectionLayer.current = layer;
@@ -115,6 +147,7 @@ export function RustWorldView(props: RustWorldViewProps) {
       if (!instance || frame.current !== next) return;
       try {
         instance.set_geometry(cells, next.links);
+        instance.set_halos(buildHalos(cells, next.owners, live.current.playerColors));
       } catch (e) {
         animator.update(next, performance.now(), false);
         live.current.onError(`Renderer: ${String(e)}`);

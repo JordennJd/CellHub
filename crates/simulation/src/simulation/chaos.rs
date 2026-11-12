@@ -335,6 +335,55 @@ impl Simulation {
 }
 
 impl Simulation {
+    /// Native entry point for the authoritative server: start a Chaos world
+    /// with the preset supplied by the creating client.
+    pub fn start_chaos_native(
+        &mut self,
+        seed: u32,
+        genes: &[f32],
+        organisms: &[f32],
+    ) -> Result<(), String> {
+        let pool = decode_checked(genes)?;
+        let catalog = decode_primordial(organisms)?;
+        self.chaos_catalog = catalog;
+        // The arena is a square 3072 x 3072 world, matching the frontend
+        // Chaos laboratory with the viewport at its default width.
+        self.start_chaos_in_bounds(seed, pool, CHAOS_SIZE, CHAOS_SIZE, true);
+        Ok(())
+    }
+
+    /// Fallback Chaos world for clients that do not send a preset. The
+    /// environment, immigration schedule and mandatory single cells match
+    /// Chaos; only the curated multicellular catalog is absent.
+    pub fn start_chaos_defaults(&mut self, seed: u32) {
+        let modes = (0..crate::cell_types::COUNT)
+            .map(|kind| Mode {
+                kind,
+                threshold: 2.6,
+                lifespan: 360.,
+                can_divide: matches!(
+                    kind,
+                    crate::cell_types::PHOTOCYTE | crate::cell_types::PHAGOCYTE
+                ),
+                speed: if kind == crate::cell_types::FLAGELLOCYTE {
+                    28.
+                } else {
+                    0.
+                },
+                keep_a: true,
+                ..Mode::default()
+            })
+            .collect();
+        self.chaos_catalog.clear();
+        self.start_chaos_in_bounds(
+            seed,
+            Genome::from_modes(modes),
+            CHAOS_SIZE,
+            CHAOS_SIZE,
+            true,
+        );
+    }
+
     pub(super) fn start_chaos_checked(&mut self, seed: u32, pool: Genome) {
         self.start_chaos_in_bounds(seed, pool, CHAOS_SIZE, CHAOS_SIZE, false);
     }
@@ -665,6 +714,32 @@ mod tests {
             sim.advance(n);
             ticks -= n;
         }
+    }
+
+    #[test]
+    fn native_chaos_preset_and_fallback_populate_the_world() {
+        let mut preset = Simulation::new(7);
+        preset
+            .start_chaos_native(7, &pool().values(), &[1., 0.])
+            .unwrap();
+        assert!(preset.world.len() > 0);
+        preset.set_track_owner_scores(true);
+        preset.reset();
+        assert!(preset.world.len() > 0, "reset keeps the chaos scenario");
+        assert_eq!(preset.owner_score(7), 0., "reset clears arena scores");
+        preset
+            .spawn_owned(100., 100., 0, &pool().values(), 7)
+            .unwrap();
+        preset.advance(1);
+        assert!(
+            preset.owner_score(7) > 0.,
+            "reset keeps owner score tracking"
+        );
+
+        let mut fallback = Simulation::new(11);
+        fallback.start_chaos_defaults(11);
+        assert!(fallback.world.len() > 0);
+        assert!(!fallback.chaos_info().is_empty());
     }
 
     #[test]

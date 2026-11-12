@@ -5,7 +5,7 @@ use crate::state::{AppState, sanitize_name};
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
-use cellhub_protocol::{ClientMessage, PROTOCOL_VERSION, PlayerInfo, ServerMessage};
+use cellhub_protocol::{ClientMessage, PROTOCOL_VERSION, PlayerInfo, ServerMessage, player_color};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -26,10 +26,12 @@ pub async fn ws_handler(
 
 struct PlayerSlot {
     room: Arc<RoomHandle>,
+    player: u32,
 }
 
 impl Drop for PlayerSlot {
     fn drop(&mut self) {
+        self.room.remove_player(self.player);
         let previous = self.room.player_count.fetch_sub(1, Ordering::AcqRel);
         if previous > 0 {
             self.room
@@ -51,6 +53,7 @@ async fn connection(mut socket: WebSocket, state: Arc<AppState>) {
     let mut player = PlayerInfo {
         id: player_id,
         name: format!("Игрок {player_id}"),
+        color: player_color(player_id),
     };
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RoomEvent>();
     let (dummy_tx, _) = tokio::sync::broadcast::channel::<RoomEvent>(1);
@@ -136,6 +139,8 @@ async fn connection(mut socket: WebSocket, state: Arc<AppState>) {
                     ClientMessage::Create {
                         name,
                         player: player_name,
+                        mode,
+                        chaos,
                     } => {
                         if joined.is_some() {
                             send_busy(&out_tx);
@@ -145,7 +150,7 @@ async fn connection(mut socket: WebSocket, state: Arc<AppState>) {
                             player.name = sanitize_name(&name, 32);
                         }
                         match state
-                            .create_room(name.as_deref(), player.id, &player.name)
+                            .create_room(name.as_deref(), mode, chaos, player.id, &player.name)
                             .await
                         {
                             Ok(room) => {
@@ -297,14 +302,23 @@ fn join_room(
     let receiver = room.events.subscribe();
     let players = current + 1;
     let host = player.id == room.host;
+    let color = room.add_player(player);
+    let mut joined = player.clone();
+    joined.color = color;
     let _ = out_tx.send(RoomEvent::json(&ServerMessage::Welcome {
         protocol: PROTOCOL_VERSION,
-        player: player.clone(),
+        player: joined,
         room: room.info(),
         host,
     }));
     room.broadcast(RoomEvent::json(&ServerMessage::PlayerCount { players }));
-    Ok((PlayerSlot { room }, receiver))
+    Ok((
+        PlayerSlot {
+            room,
+            player: player.id,
+        },
+        receiver,
+    ))
 }
 
 struct RateLimiter {

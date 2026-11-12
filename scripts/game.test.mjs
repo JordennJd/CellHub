@@ -16,7 +16,7 @@ for (const [source, target] of [["frontend/model.ts", "model.mjs"], ["frontend/g
 }
 after(() => rm(directory, { recursive: true, force: true }));
 const storage = await import(pathToFileURL(join(directory, "storage.mjs")));
-const { newMode, STRIDE } = await import(pathToFileURL(join(directory, "model.mjs")));
+const { flatten, newMode, STRIDE } = await import(pathToFileURL(join(directory, "model.mjs")));
 const { listCompleted, completeChallenge, TUTORIALS, evaluateTutorialStep, completeTutorial, listCompletedTutorials } = await import(pathToFileURL(join(directory, "challenges.mjs")));
 const data = new Map();
 const key = "cellhub.library.v1";

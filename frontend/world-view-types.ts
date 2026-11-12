@@ -6,6 +6,8 @@ export type WorldViewProps = {
   tool: string;
   layer: string;
   selected: number | null;
+  /** Arena owner id -> packed RGB. Cells with an owner get a coloured halo. */
+  playerColors?: Record<number, number>;
   onPoint: (x: number, y: number, id: number | null, action: "place" | "select") => void;
   onView: (v: ViewState) => void;
   onError: (message: string) => void;

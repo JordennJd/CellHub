@@ -44,6 +44,8 @@ pub(crate) struct Cell {
     pub(crate) injury: f32,
     pub(crate) telomeres: i32,
     pub(crate) anchored: bool,
+    /// Multiplayer player that owns this cell. Zero means environment/neutral.
+    pub(crate) owner: u32,
     pub(crate) class: u8,
 }
 
@@ -65,6 +67,7 @@ impl Default for Cell {
             injury: 0.,
             telomeres: -1,
             anchored: false,
+            owner: 0,
             class: CLASS_USER,
         }
     }

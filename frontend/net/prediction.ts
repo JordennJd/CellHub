@@ -46,6 +46,7 @@ type SceneCell = {
   color: number;
   mirrored: number;
   nitrogen: number;
+  owner: number;
   details: Float32Array;
   syncedAt: number;
 };
@@ -117,7 +118,8 @@ export class PredictionWorld {
           color: cells[i + 12],
           mirrored: cells[i + 13],
           nitrogen: cells[i + 14],
-          details: cells.slice(i + 15, i + CELL_STRIDE),
+          owner: cells[i + 28],
+          details: cells.slice(i + 15, i + 28),
           syncedAt: now,
         };
         this.cells.set(id, cell);
@@ -136,7 +138,8 @@ export class PredictionWorld {
         cell.color = cells[i + 12];
         cell.mirrored = cells[i + 13];
         cell.nitrogen = cells[i + 14];
-        cell.details.set(cells.subarray(i + 15, i + CELL_STRIDE));
+        cell.owner = cells[i + 28];
+        cell.details.set(cells.subarray(i + 15, i + 28));
         cell.syncedAt = now;
       }
       this.lastSeen.set(id, chunk.tick);
@@ -218,6 +221,7 @@ export class PredictionWorld {
     y: number,
     mode: number,
     genome: Float32Array,
+    owner = 0,
     now = performance.now(),
   ) {
     // `flatten` prepends a two-value ABI header before the mode rows.
@@ -247,6 +251,7 @@ export class PredictionWorld {
       color,
       mirrored: 0,
       nitrogen: 1,
+      owner,
       details: new Float32Array([0,0,0,0,0,0,0,0,0,0,-1,mode,0]),
       syncedAt: now,
     });
@@ -320,15 +325,18 @@ export class PredictionWorld {
   frame(): Frame {
     const count = this.cells.size + this.ghosts.size;
     const cells = new Float32Array(count * RENDER_STRIDE);
+    const owners = new Float32Array(count);
     const nitrogen = new Float32Array(count);
     const details = new Float32Array(count * CELL_DETAILS_STRIDE);
     let offset = 0;
     for (const cell of this.cells.values()) {
+      owners[offset / RENDER_STRIDE] = cell.owner;
       nitrogen[offset / RENDER_STRIDE] = cell.nitrogen;
       details.set(cell.details, offset / RENDER_STRIDE * CELL_DETAILS_STRIDE);
       offset = writeCell(cells, offset, cell);
     }
     for (const ghost of this.ghosts.values()) {
+      owners[offset / RENDER_STRIDE] = ghost.owner;
       nitrogen[offset / RENDER_STRIDE] = ghost.nitrogen;
       details.set(ghost.details, offset / RENDER_STRIDE * CELL_DETAILS_STRIDE);
       offset = writeCell(cells, offset, ghost);
@@ -340,6 +348,7 @@ export class PredictionWorld {
     return {
       type: "frame",
       cells,
+      owners,
       links: Uint32Array.from(links),
       terrain: this.terrain,
       terrainRevision: this.terrainRevision,

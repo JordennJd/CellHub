@@ -214,6 +214,7 @@ impl Simulation {
         self.resolve_contacts(paths, STEP);
         self.specialized_contacts(STEP);
         self.update_level_status();
+        self.accumulate_owner_scores();
         self.record_chaos_history();
     }
 }

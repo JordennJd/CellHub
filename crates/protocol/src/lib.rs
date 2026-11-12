@@ -6,16 +6,57 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const WORLD_SIZE: f32 = 3072.;
 pub const CHUNK_SIZE: f32 = 512.;
 pub const CHUNKS_PER_AXIS: u32 = 6;
 pub const CHUNK_COUNT: usize = (CHUNKS_PER_AXIS * CHUNKS_PER_AXIS) as usize;
 pub const TERRAIN_GRID: usize = 48;
 pub const TERRAIN_TILES_PER_CHUNK: usize = TERRAIN_GRID / CHUNKS_PER_AXIS as usize;
-pub const CELL_STRIDE: usize = 28;
+/// Cell row: `[..28 classic fields.., owner]`.
+pub const CELL_STRIDE: usize = 29;
 pub const TERRAIN_STRIDE: usize = 6;
 pub const BIN_CHUNK: u8 = 2;
+
+/// Bright, well-separated player colours used for arena halos and scoreboards.
+pub const PLAYER_COLORS: [u32; 12] = [
+    0x71d4ff, 0xffd166, 0xef7d9b, 0x9ee37d, 0xc79bff, 0xff9f6b, 0x6be0c2, 0xf2a6e0, 0xa8c0ff,
+    0xffe08a, 0x8fe3b0, 0xff8f8f,
+];
+
+/// Deterministic colour for a player id. The server sends the same value with
+/// the welcome and leaderboard messages, so clients never have to guess.
+pub fn player_color(player: u32) -> u32 {
+    PLAYER_COLORS[(player as usize).wrapping_sub(1) % PLAYER_COLORS.len()]
+}
+
+/// Multiplayer room scenario. Arena adds player ownership, halos, a time
+/// integral leaderboard and a spawn cooldown on top of the Chaos scenario.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomMode {
+    #[default]
+    Sandbox,
+    Arena,
+}
+
+impl RoomMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sandbox => "Песочница",
+            Self::Arena => "Арена",
+        }
+    }
+}
+
+/// One leaderboard row: the integral of all owned cell scores over time.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaderboardEntry {
+    pub id: u32,
+    pub name: String,
+    pub color: u32,
+    pub score: f64,
+}
 
 pub fn chunk_of(x: f32, y: f32) -> (u8, u8) {
     let cx = (x / CHUNK_SIZE).clamp(0., (CHUNKS_PER_AXIS - 1) as f32) as u8;
@@ -31,12 +72,24 @@ pub struct RoomInfo {
     pub players: u32,
     pub tick: u32,
     pub host: String,
+    #[serde(default)]
+    pub mode: RoomMode,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlayerInfo {
     pub id: u32,
     pub name: String,
+    #[serde(default)]
+    pub color: u32,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ChaosPreset {
+    /// Flat genome ABI for the editor pool that single cells inherit.
+    pub genome: Vec<f32>,
+    /// Versioned curated multicellular catalog.
+    pub organisms: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +99,12 @@ pub enum ClientMessage {
     Create {
         name: Option<String>,
         player: Option<String>,
+        #[serde(default)]
+        mode: RoomMode,
+        /// Arena rooms start from the Chaos scenario. The creating client sends
+        /// its default chaos preset so the server shares the frontend catalog.
+        #[serde(default)]
+        chaos: Option<ChaosPreset>,
     },
     Join {
         room: String,
@@ -114,6 +173,9 @@ pub enum ServerMessage {
     },
     PlayerCount {
         players: u32,
+    },
+    Leaderboard {
+        entries: Vec<LeaderboardEntry>,
     },
     WorldReset {
         tick: u32,

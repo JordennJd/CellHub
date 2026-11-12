@@ -1,16 +1,24 @@
 //! Wire constants and binary chunk decoding for the optional server mode.
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 export const CHUNK_SIZE = 512;
 export const CHUNKS_PER_AXIS = 6;
 export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
 export const TERRAIN_SIZE = 48;
 export const TERRAIN_TILES_PER_CHUNK = TERRAIN_SIZE / CHUNKS_PER_AXIS;
-export const CELL_STRIDE = 28;
+export const CELL_STRIDE = 29;
 export const TERRAIN_STRIDE = 6;
 /** Client frame layout matches the renderer and the local model: 12 floats. */
 export const RENDER_STRIDE = 12;
 const BIN_CHUNK = 2;
+
+export type RoomMode = "sandbox" | "arena";
+
+/** Chaos scenario sent by the room creator so arena inherits the Chaos world. */
+export type ChaosPreset = {
+  genome: number[];
+  organisms: number[];
+};
 
 export type RoomInfo = {
   id: string;
@@ -19,9 +27,17 @@ export type RoomInfo = {
   players: number;
   tick: number;
   host: string;
+  mode: RoomMode;
 };
 
-export type PlayerInfo = { id: number; name: string };
+export type PlayerInfo = { id: number; name: string; color: number };
+
+export type LeaderboardEntry = {
+  id: number;
+  name: string;
+  color: number;
+  score: number;
+};
 
 export type ServerControl =
   | { type: "rooms"; rooms: RoomInfo[] }
@@ -43,6 +59,7 @@ export type ServerControl =
   | { type: "error"; message: string; seq?: number }
   | { type: "notice"; message: string }
   | { type: "player_count"; players: number }
+  | { type: "leaderboard"; entries: LeaderboardEntry[] }
   | { type: "world_reset"; tick: number }
   | { type: "pong"; t: number }
   | { type: "room_closed"; reason: string };

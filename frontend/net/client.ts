@@ -6,7 +6,10 @@ import { PredictionWorld, type SyncState } from "./prediction";
 import {
   PROTOCOL_VERSION,
   decodeChunk,
+  type ChaosPreset,
+  type LeaderboardEntry,
   type RoomInfo,
+  type RoomMode,
   type ServerControl,
 } from "./protocol";
 
@@ -24,6 +27,7 @@ export type NetCallbacks = {
   onNotice: (message: string) => void;
   onWorldReset: () => void;
   onPlayerCount: (players: number) => void;
+  onLeaderboard: (entries: LeaderboardEntry[]) => void;
   onDisconnected: () => void;
 };
 
@@ -37,6 +41,7 @@ export class MultiplayerClient {
   private lastPing = 0;
   private intentionalClose = false;
   private phase: NetPhase = "disconnected";
+  private playerId = 0;
   private readonly callbacks: NetCallbacks;
 
   constructor(callbacks: NetCallbacks) {
@@ -82,8 +87,8 @@ export class MultiplayerClient {
     };
   }
 
-  createRoom(name: string, player: string) {
-    this.send({ type: "create", name, player });
+  createRoom(name: string, player: string, mode: RoomMode, chaos?: ChaosPreset) {
+    this.send({ type: "create", name, player, mode, chaos });
   }
 
   joinRoom(room: string, player: string) {
@@ -105,7 +110,7 @@ export class MultiplayerClient {
     switch (command.type) {
       case "spawn": {
         const seq = this.nextSequence();
-        this.world?.predictSpawn(seq, command.x, command.y, command.mode, command.genome);
+        this.world?.predictSpawn(seq, command.x, command.y, command.mode, command.genome, this.playerId);
         if (
           !this.send({
             type: "spawn",
@@ -181,6 +186,7 @@ export class MultiplayerClient {
           return;
         }
         this.world = new PredictionWorld();
+        this.playerId = message.player?.id ?? 0;
         this.lastFrame = performance.now();
         this.callbacks.onWelcome(message);
         this.setPhase("online");
@@ -200,6 +206,9 @@ export class MultiplayerClient {
         break;
       case "player_count":
         this.callbacks.onPlayerCount(message.players);
+        break;
+      case "leaderboard":
+        this.callbacks.onLeaderboard(message.entries);
         break;
       case "world_reset":
         this.world?.applyReset();

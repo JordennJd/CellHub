@@ -159,6 +159,37 @@ struct CellOut {
     if out.a<0.001 {discard;}return out;
 }
 
+struct HaloOut {
+    @builtin(position) pos:vec4f,
+    @location(0) local:vec2f,
+    @location(1) @interpolate(flat) radius:f32,
+    @location(2) @interpolate(flat) color:f32,
+    @location(3) world:vec2f,
+}
+@vertex fn halo_vs(@builtin(vertex_index) v:u32,@location(0) a:vec4f)->HaloOut {
+    // x, y, radius, packed RGB.
+    let radius=max(a.z,0.001);
+    let extent=radius*1.45+5./camera.zoom;
+    var o:HaloOut;
+    o.local=corner(v)*extent;
+    o.world=a.xy+o.local;
+    o.pos=project(o.world);
+    o.radius=radius;
+    o.color=a.w;
+    return o;
+}
+@fragment fn halo_fs(o:HaloOut)->@location(0) vec4f {
+    let color=rgb(u32(o.color));
+    let d=length(o.local);
+    let width=max(1.5/camera.zoom,0.6);
+    // A crisp owner ring plus a soft bloom so colonies read at any zoom.
+    let ring=coverage(abs(d-o.radius-width)-width);
+    let bloom=max(1.-smoothstep(o.radius+width,o.radius+8./camera.zoom,d),0.)*0.22;
+    let alpha=max(ring*0.9,bloom)*coverage(dish_distance(o.world));
+    if alpha<0.002 {discard;}
+    return vec4f(color*alpha,alpha);
+}
+
 struct LinkOut {
     @builtin(position) pos:vec4f,
     @location(0) local:vec2f,

@@ -35,7 +35,7 @@ const addressReady = new Promise((resolve, reject) => {
   server.once("exit", (code) => reject(new Error(`server exited early (${code}):\n${output}`)));
 });
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const CELL_STRIDE = 28;
+const CELL_STRIDE = 29;
 const TERRAIN_STRIDE = 6;
 const waitFor = async (predicate, label, timeout = 10_000) => {
   const started = Date.now();
@@ -142,6 +142,7 @@ class Client {
 let first;
 let second;
 let third;
+let arena;
 try {
   const host = await addressReady;
   const url = `ws://${host}/ws`;
@@ -154,8 +155,9 @@ try {
     () => first.messages.find((m) => m.type === "welcome"),
     "welcome",
   );
-  assert.equal(welcome.protocol, 4);
+  assert.equal(welcome.protocol, 5);
   assert.equal(welcome.host, true);
+  assert.equal(welcome.room.mode, "sandbox");
   const room = welcome.room.id;
 
   const genome = Array.from({ length: 1 }, () => [
@@ -214,6 +216,7 @@ try {
   assert.equal(otherRow[4], 7, "the previous main Lipocyte ID migrates to the current ID");
   assert.equal(otherRow[12], 0xff0000, "the selected color is serialized separately from speed");
   assert(otherRow[14] > 0 && otherRow[14] <= 1, "the cell reserve is included in the chunk");
+  assert.equal(otherRow[28], welcome2.player.id, "cells carry their owner player id");
 
   const before = second.messages.filter((m) => m.type === "world_reset").length;
   const resetAck = await first.command({ type: "reset" }, 2);
@@ -243,14 +246,60 @@ try {
     "existing cells do not leak into a new room",
   );
 
+  // Arena rooms add ownership, a leaderboard and a two-second spawn cooldown.
+  arena = new Client(url);
+  await arena.connect();
+  arena.send({
+    type: "create",
+    name: "Арена теста",
+    player: "Арена",
+    mode: "arena",
+    chaos: { genome, organisms: [1, 0] },
+  });
+  const welcomeArena = await waitFor(
+    () => arena.messages.find((m) => m.type === "welcome"),
+    "arena welcome",
+  );
+  assert.equal(welcomeArena.room.mode, "arena");
+  await waitFor(() => arena.chunks.some((chunk) => chunk.population > 0),
+    "arena inherits a populated chaos world", 10_000);
+  const arenaSpawn = await arena.command(
+    { type: "spawn", x: 400, y: 400, mode: 0, genome },
+    1,
+  );
+  assert(arenaSpawn.cell_id > 0, "arena spawn returns a cell id");
+  const leaderboard = await waitFor(
+    () => arena.messages.find((m) => m.type === "leaderboard" &&
+      m.entries.some((entry) => entry.id === welcomeArena.player.id)),
+    "arena leaderboard",
+    10_000,
+  );
+  const ownEntry = leaderboard.entries.find((entry) => entry.id === welcomeArena.player.id);
+  assert.equal(ownEntry.name, "Арена");
+  assert.equal(ownEntry.color, welcomeArena.player.color);
+  assert(ownEntry.score >= 0, "leaderboard carries the time-integrated score");
+  const blocked = await arena.command(
+    { type: "spawn", x: 500, y: 400, mode: 0, genome },
+    2,
+  );
+  assert.match(blocked.error, /раз в 2 секунды/, "arena spawns are rate limited per player");
+  await waitFor(() => arena.chunks.some((chunk) => cellRow(chunk, arenaSpawn.cell_id)),
+    "arena cell is streamed", 10_000);
+  const arenaRow = cellRow(
+    arena.chunks.find((chunk) => cellRow(chunk, arenaSpawn.cell_id)),
+    arenaSpawn.cell_id,
+  );
+  assert.equal(arenaRow[28], welcomeArena.player.id, "arena chunks expose the owner id");
+
   assert.equal(first.errors.length, 0);
   console.log(
-    "PASS: public rooms, isolated new scenario, 36-chunk cycle, authoritative spawn, join and host reset",
+    "PASS: public rooms, isolated new scenario, 36-chunk cycle, authoritative spawn, arena ownership/leaderboard/cooldown, join and host reset",
   );
 } finally {
   first?.close();
   second?.close();
   third?.close();
+  arena?.close();
   server.kill("SIGTERM");
   await delay(150);
 }

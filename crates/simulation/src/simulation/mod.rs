@@ -19,7 +19,7 @@ mod metabolism;
 #[cfg(test)]
 mod tests;
 
-use crate::cell_types::FLAGELLOCYTE;
+use crate::cell_types::{DEVOROCYTE, FLAGELLOCYTE, PHAGOCYTE, PHOTOCYTE, VIROCYTE};
 use crate::components::{Cell, LIMIT, Position, SNAPSHOT_STRIDE, radius};
 use crate::genome::{Genome, decode_checked};
 use crate::terrain::{GRID, Tile, map};
@@ -64,6 +64,9 @@ pub struct Simulation {
     chaos: Option<chaos::Chaos>,
     /// Frontend-curated organisms, kept across resets but not serialized.
     chaos_catalog: Vec<chaos::Primordial>,
+    /// Arena mode accumulates the time integral of each owner's cell scores.
+    track_owner_scores: bool,
+    owner_scores: HashMap<u32, f64>,
 }
 
 #[wasm_bindgen]
@@ -92,10 +95,14 @@ impl Simulation {
             population_limit: LIMIT,
             chaos: None,
             chaos_catalog: Vec::new(),
+            track_owner_scores: false,
+            owner_scores: HashMap::new(),
         }
     }
 
     pub fn reset(&mut self) {
+        self.owner_scores.clear();
+        let track_owner_scores = self.track_owner_scores;
         if let Some(chaos) = &self.chaos {
             let pool = chaos.pool.clone();
             let initial_pool = chaos.initial_pool.clone();
@@ -115,6 +122,7 @@ impl Simulation {
             chaos.rate = rate;
             chaos.viable = viable;
             chaos.next_spawn = 1800 / rate;
+            self.track_owner_scores = track_owner_scores;
             return;
         }
         if let Some(runtime) = &self.level {
@@ -127,6 +135,7 @@ impl Simulation {
         let boundary = self.boundary;
         let track_divisions = self.division_events.is_some();
         *self = Self::new(self.seed);
+        self.track_owner_scores = track_owner_scores;
         self.boundary = boundary;
         if let Boundary::Rectangle { width, height } = boundary {
             self.set_rectangular_dish(width, height)
@@ -473,8 +482,21 @@ impl Simulation {
         mode: usize,
         values: &[f32],
     ) -> Result<u32, String> {
+        self.spawn_owned(x, y, mode, values, 0)
+    }
+
+    /// Spawn a cell owned by a multiplayer player. Ownership is inherited by
+    /// daughters and drives arena halos and leaderboard scores.
+    pub fn spawn_owned(
+        &mut self,
+        x: f32,
+        y: f32,
+        mode: usize,
+        values: &[f32],
+        owner: u32,
+    ) -> Result<u32, String> {
         let genome = decode_checked(values)?;
-        self.spawn_genome_checked(x, y, mode, genome)
+        self.spawn_genome_owned(x, y, mode, genome, owner)
     }
 
     pub(super) fn spawn_genome_checked(
@@ -483,6 +505,17 @@ impl Simulation {
         y: f32,
         mode: usize,
         genome: Genome,
+    ) -> Result<u32, String> {
+        self.spawn_genome_owned(x, y, mode, genome, 0)
+    }
+
+    fn spawn_genome_owned(
+        &mut self,
+        x: f32,
+        y: f32,
+        mode: usize,
+        genome: Genome,
+        owner: u32,
     ) -> Result<u32, String> {
         if !x.is_finite() || !y.is_finite() {
             return Err("Invalid spawn".into());
@@ -500,15 +533,56 @@ impl Simulation {
         self.next_id += 1;
         let angle = self.random() * std::f32::consts::TAU;
         let (x, y, _) = self.boundary.constrain(x, y, 1., 10.);
-        let entity = self
-            .world
-            .spawn((Position { x, y, angle }, Cell::new(id, mode), genome));
+        let mut cell = Cell::new(id, mode);
+        cell.owner = owner;
+        let entity = self.world.spawn((Position { x, y, angle }, cell, genome));
         self.entities.push((id, entity));
         self.births += 1;
         if let Some(runtime) = &mut self.level {
             runtime.inserted += 1;
         }
         Ok(id)
+    }
+
+    /// Enable arena score accumulation. Off by default so local sandbox runs
+    /// pay nothing for multiplayer bookkeeping.
+    pub fn set_track_owner_scores(&mut self, enabled: bool) {
+        self.track_owner_scores = enabled;
+        if !enabled {
+            self.owner_scores.clear();
+        }
+    }
+
+    /// Time integral of one player's cell scores, in score-seconds.
+    pub fn owner_score(&self, owner: u32) -> f64 {
+        self.owner_scores.get(&owner).copied().unwrap_or(0.)
+    }
+
+    /// Arena score rate of one cell: biomass scaled by its type weight.
+    /// Photocytes generate slowly, predators and viruses count fully.
+    fn score_weight(kind: u8) -> f64 {
+        match kind {
+            PHOTOCYTE => 0.25,
+            PHAGOCYTE => 0.5,
+            VIROCYTE | DEVOROCYTE => 1.,
+            _ => 0.75,
+        }
+    }
+
+    /// Integrate the current score of every owned cell over one fixed step.
+    pub(super) fn accumulate_owner_scores(&mut self) {
+        if !self.track_owner_scores {
+            return;
+        }
+        let dt = step::STEP as f64;
+        for (_, (cell, genome)) in self.world.query::<(&Cell, &Genome)>().iter() {
+            if cell.owner == 0 || !cell.mass.is_finite() {
+                continue;
+            }
+            let weight = Self::score_weight(genome.mode(cell.mode).kind);
+            *self.owner_scores.entry(cell.owner).or_insert(0.) +=
+                cell.mass.max(0.) as f64 * weight * dt;
+        }
     }
 
     pub fn edit_checked(&mut self, id: u32, mode: usize, values: &[f32]) -> Result<(), String> {
@@ -535,8 +609,8 @@ impl Simulation {
 
     /// Native-only region export used by the authoritative server.
     ///
-    /// Cells are emitted with stride 28, including the effective world speed
-    /// used directly for client-side prediction. Each bond is emitted once, in
+    /// Cells are emitted with stride 29, including the effective world speed
+    /// used directly for client-side prediction and the owning player ID. Each bond is emitted once, in
     /// the chunk of its lower ID, so a client can replace chunk-local links
     /// without duplicates.
     pub fn chunk_snapshot(&self, chunk_x: u32, chunk_y: u32, chunk_size: f32) -> ChunkSnapshot {
@@ -570,7 +644,7 @@ impl Simulation {
                 }
             }
         }
-        let mut cells = Vec::with_capacity(visible.len() * 28);
+        let mut cells = Vec::with_capacity(visible.len() * 29);
         for (position, cell, genome) in visible {
             let mode = genome.mode(cell.mode);
             let degree = degrees.get(&cell.id).copied().unwrap_or(0);
@@ -614,6 +688,7 @@ impl Simulation {
                 cell.telomeres as f32,
                 cell.mode as f32,
                 cell.anchored as u8 as f32,
+                cell.owner as f32,
             ]);
         }
         let tiles_per_chunk = (chunk_size / 64.) as usize;

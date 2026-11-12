@@ -2,10 +2,13 @@
 
 pub(super) const CELL_STRIDE: u64 = 48;
 pub(super) const LINK_STRIDE: u64 = 24;
+pub(super) const HALO_STRIDE: u64 = 16;
 pub(super) const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 pub(super) const LINK_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x2];
+pub(super) const HALO_ATTRIBUTES: [wgpu::VertexAttribute; 1] =
+    wgpu::vertex_attr_array![0 => Float32x4];
 
 pub(super) fn buffer(
     device: &wgpu::Device,

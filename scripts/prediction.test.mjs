@@ -53,7 +53,7 @@ test("network bond prediction keeps either anchored endpoint fixed and skips two
   }
 });
 
-test("v4 decoder handles dense/sparse rows and rejects malformed masks and lengths", async () => {
+test("v5 decoder handles dense/sparse rows and rejects malformed masks and lengths", async () => {
   const { decodeChunk } = await import(pathToFileURL(join(directory, "protocol.mjs")));
   for (const sparse of [false, true]) {
     const values = new Float32Array(CELL_STRIDE);
@@ -125,7 +125,7 @@ test("slow client frames leave idle time and closing during a frame cancels sche
     close() {}
   });
   const callbacks = Object.fromEntries(["onPhase", "onRooms", "onWelcome", "onInspect", "onError",
-    "onNotice", "onWorldReset", "onPlayerCount", "onDisconnected"].map(key => [key, () => {}]));
+    "onNotice", "onWorldReset", "onPlayerCount", "onLeaderboard", "onDisconnected"].map(key => [key, () => {}]));
   const client = new MultiplayerClient({ ...callbacks, onFrame() {
     now += 50;
     if (closeDuringFrame) client.close();
@@ -133,7 +133,7 @@ test("slow client frames leave idle time and closing during a frame cancels sche
   try {
     client.connect("ws://local-test/ws");
     socket.onopen();
-    socket.onmessage({ data: JSON.stringify({ type: "welcome", protocol: 4 }) });
+    socket.onmessage({ data: JSON.stringify({ type: "welcome", protocol: 5 }) });
     const runNext = () => {
       const [id, timer] = timers.entries().next().value;
       timers.delete(id); now += timer.delay; timer.fn();

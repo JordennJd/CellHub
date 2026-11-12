@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { NetPhase } from "./net/client";
-import type { RoomInfo } from "./net/protocol";
+import type { RoomInfo, RoomMode } from "./net/protocol";
 import type { SyncState } from "./net/prediction";
 
 type Props = {
@@ -14,16 +14,22 @@ type Props = {
   sync: SyncState | null;
   onClose: () => void;
   onConnect: (url: string) => void;
-  onCreate: (name: string, player: string) => void;
+  onCreate: (name: string, player: string, mode: RoomMode) => void;
   onJoin: (room: string, player: string) => void;
   onRefresh: () => void;
   onLeave: () => void;
   onDisconnect: () => void;
 };
 
+const MODE_LABELS: Record<RoomMode, string> = {
+  sandbox: "Песочница",
+  arena: "Арена",
+};
+
 export function OnlinePanel(props: Props) {
   const [url, setUrl] = useState(props.serverUrl);
   const [name, setName] = useState("Моя колония");
+  const [mode, setMode] = useState<RoomMode>("arena");
   const [player, setPlayer] = useState(props.playerName);
   if (!props.open) return null;
   const online = props.phase === "online";
@@ -80,7 +86,7 @@ export function OnlinePanel(props: Props) {
           <div className="online-room">
             <div className="online-room-head">
               <div>
-                <span className="eyebrow">ПУБЛИЧНАЯ КОМНАТА</span>
+                <span className="eyebrow">{props.room.mode === "arena" ? "АРЕНА" : "ПЕСОЧНИЦА"}</span>
                 <h3>{props.room.name}</h3>
               </div>
               <span className="online-code">{props.room.id}</span>
@@ -144,7 +150,7 @@ export function OnlinePanel(props: Props) {
                   <span>
                     <b>{room.name}</b>
                     <small>
-                      {room.id} · создатель {room.host}
+                      {MODE_LABELS[room.mode]} · {room.id} · создатель {room.host}
                     </small>
                   </span>
                   <span>
@@ -164,15 +170,34 @@ export function OnlinePanel(props: Props) {
                   onChange={(event) => setName(event.target.value)}
                 />
               </label>
+              <div className="online-mode" role="radiogroup" aria-label="Режим комнаты">
+                {(["sandbox", "arena"] as const).map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    role="radio"
+                    aria-checked={mode === value}
+                    className={mode === value ? "active" : undefined}
+                    onClick={() => setMode(value)}
+                  >
+                    <b>{MODE_LABELS[value]}</b>
+                    <small>
+                      {value === "sandbox"
+                        ? "Свободная совместная среда без рейтинга."
+                        : "Мир «Хаоса» с биомами и самозарождением, цветные владения, очки и таблица лидеров."}
+                    </small>
+                  </button>
+                ))}
+              </div>
               <p className="online-note">
-                Создание комнаты начнёт новый сценарий на сервере. Текущая
-                локальная сцена останется в браузере, а общий мир начнётся с
-                чистого листа.
+                {mode === "arena"
+                  ? "Арена наследует мир «Хаоса»: биомы, смену суток, радиацию и самозарождение, а также начисляет очки за биомассу и разрешает ставить новую клетку раз в 2 секунды."
+                  : "Песочница начинает общий мир без очков и ограничений на постановку клеток."}
               </p>
               <button
                 className="online-primary"
                 disabled={!name.trim()}
-                onClick={() => props.onCreate(name.trim(), player)}
+                onClick={() => props.onCreate(name.trim(), player, mode)}
               >
                 Создать и войти
               </button>

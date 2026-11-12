@@ -79,6 +79,54 @@
   line-height: 1.5;
 }
 
+.arena-leaderboard {
+  display: grid;
+  gap: 0;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.arena-leaderboard li {
+  display: grid;
+  grid-template-columns: 24px 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.arena-leaderboard li.self {
+  background: var(--accent-soft);
+  border-radius: 5px;
+}
+
+.arena-rank {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.arena-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 7px currentColor;
+}
+
+.arena-player {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arena-leaderboard strong {
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .arena-shell .transport {
   min-height: 64px;
 }

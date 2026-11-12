@@ -501,6 +501,8 @@ export type Frame = {
   terrainRevision?: number;
   stats: Float32Array;
   nitrogen?: Float32Array;
+  /** Owner player id per cell row, aligned with `cells`. */
+  owners?: Float32Array;
   nitrates?: Float32Array;
   details?: Float32Array;
   coveredFood?: Float32Array;

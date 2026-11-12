@@ -253,6 +253,7 @@ impl Simulation {
             let genome = hybrid(a, b);
             let mut cell = Cell::new(id, a.mode().offspring_mode);
             cell.class = crate::components::CLASS_HYBRID;
+            cell.owner = a.cell.owner;
             cell.mass = (a.cell.mass + b.cell.mass).min(1_000_000.);
             cell.recoil = std::array::from_fn(|axis| {
                 (a.cell.recoil[axis] + b.cell.recoil[axis])
