@@ -5,7 +5,7 @@
 //! genome bank. Omitted mode fields receive the same defaults as `newMode` in
 //! `frontend/model.ts`; child references default to the mode's own index.
 
-use crate::components::LIMIT;
+use crate::components::{CLASS_USER, LIMIT};
 use crate::genome::{Genome, Mode, Program};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -196,6 +196,13 @@ impl Level {
             {
                 return Err(format!("Некорректная начальная клетка {index}"));
             }
+            // The initial scene must not preseed free player cells: they would
+            // satisfy user-cell objectives without spending the placement budget.
+            if cell.class == CLASS_USER {
+                return Err(format!(
+                    "Начальная клетка {index} не может быть клеткой игрока"
+                ));
+            }
         }
         for &[a, b] in &self.initial.links {
             if a >= self.initial.cells.len() || b >= self.initial.cells.len() || a == b {
@@ -226,7 +233,14 @@ impl Level {
                 }
             }
         }
-        if self.solution_status.as_deref() == Some("verified") {
+        // A non-empty demo is always a player-facing solution, so it must obey
+        // the same rules even if an old manifest forgot its status. Tutorials
+        // are the only exception to the `verified` marker; their tracks still
+        // go through the same budget/mass/tool checks.
+        if !self.demo.is_empty() {
+            if !self.tutorial && self.solution_status.as_deref() != Some("verified") {
+                return Err("Автоматическое решение должно иметь статус verified".into());
+            }
             let genomes = self
                 .genomes
                 .iter()
@@ -786,5 +800,76 @@ impl Default for TestOptions {
             max_seconds: None,
             seed: Some(0xce11_ab),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::CLASS_LEVEL;
+
+    fn level_with_demo(demo: Vec<DemoAction>) -> Level {
+        Level {
+            id: "schema".into(),
+            budget: 1,
+            genomes: vec![LevelGenome {
+                modes: vec![LevelMode::default()],
+                ..Default::default()
+            }],
+            demo,
+            ..Default::default()
+        }
+    }
+
+    fn spawn() -> DemoAction {
+        DemoAction {
+            op: "spawn".into(),
+            genome: Some(0),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn demo_without_verified_status_is_rejected() {
+        let mut level = level_with_demo(vec![spawn()]);
+        assert!(level.validate().is_err());
+        level.solution_status = Some("verified".into());
+        assert!(level.validate().is_ok());
+    }
+
+    #[test]
+    fn unverified_demo_cannot_escape_the_placement_budget() {
+        let mut level = level_with_demo(vec![spawn()]);
+        level.solution_status = Some("unavailable".into());
+        level.solution_issue = Some("причина".into());
+        assert!(level.validate().is_err());
+    }
+
+    #[test]
+    fn tutorial_demo_still_obeys_the_placement_budget() {
+        let mut level = level_with_demo(vec![spawn()]);
+        level.tutorial = true;
+        assert!(level.validate().is_ok());
+        level.budget = 0;
+        assert!(level.validate().is_err());
+    }
+
+    #[test]
+    fn initial_scene_cannot_preseed_player_cells() {
+        let mut level = Level {
+            id: "schema".into(),
+            genomes: vec![LevelGenome {
+                modes: vec![LevelMode::default()],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        level.initial.cells.push(InitialCell {
+            class: CLASS_USER,
+            ..Default::default()
+        });
+        assert!(level.validate().is_err());
+        level.initial.cells[0].class = CLASS_LEVEL;
+        assert!(level.validate().is_ok());
     }
 }

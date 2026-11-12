@@ -161,6 +161,7 @@ mod tests {
             id: "rules".into(),
             budget: 1,
             allowed_kinds: vec![0],
+            solution_status: Some("verified".into()),
             genomes: vec![LevelGenome {
                 modes: vec![LevelMode::default()],
                 ..Default::default()
@@ -257,17 +258,23 @@ mod tests {
             let mut l = level();
             l.demo = actions;
             let mut sim = Simulation::new(5);
-            sim.install_level(l).unwrap();
-            assert!(sim.start_demo().is_err());
-            assert!(!sim.level.as_ref().unwrap().demo);
+            // Invalid tracks may be rejected when the level is loaded or when
+            // the demo starts; either way they must never mutate the world.
+            if sim.install_level(l).is_ok() {
+                assert!(sim.start_demo().is_err());
+            }
+            assert!(sim.level.as_ref().is_none_or(|runtime| !runtime.demo));
             assert_eq!(sim.world.len(), 0);
         }
         let mut l = level();
         l.genomes[0].modes[0].kind = 3;
         l.demo = vec![spawn];
         let mut sim = Simulation::new(5);
-        sim.install_level(l).unwrap();
-        assert!(sim.start_demo().is_err());
+        if sim.install_level(l).is_ok() {
+            assert!(sim.start_demo().is_err());
+        }
+        assert!(sim.level.as_ref().is_none_or(|runtime| !runtime.demo));
+        assert_eq!(sim.world.len(), 0);
     }
 
     #[test]

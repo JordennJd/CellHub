@@ -57,7 +57,7 @@ export function ObjectivePanel({ level, status, inserted, completed, help, onHel
         {completed && !status?.demo && <div className="success" role="status"><h3>Испытание пройдено</h3>{progressSaved ? <p>Результат сохранён. Можно продолжить наблюдение или вернуться к списку испытаний.</p> : retryProgress}</div>}
         <div className="button-row">
             <button aria-expanded={help === 'hint'} onClick={() => onHelp(help === 'hint' ? null : 'hint')} disabled={level.hints.length === 0}>Подсказка</button>
-            <button aria-expanded={help === 'spoiler'} onClick={() => onHelp(help === 'spoiler' ? null : 'spoiler')} disabled={!level.solution && level.demo.length === 0}>Решение</button>
+            <button aria-expanded={help === 'spoiler'} onClick={() => onHelp(help === 'spoiler' ? null : 'spoiler')} disabled={level.solutionStatus !== 'verified'}>Решение</button>
         </div>
         {help === 'hint' && level.hints.length > 0 && <div className="help-box">{level.hints.map((hint, i) => <p key={i}>{hint}</p>)}</div>}
         {help === 'spoiler' && <p className="help-box">{level.solution || 'Включите демонстрацию — игра сама покажет прохождение.'}</p>}
