@@ -75,7 +75,7 @@
   .genome-mode-actions button, .genome-tools button, .slot-options button, .division-graph-rows button { min-height: 40px; }
 }
 
-.organism-carousel { flex:1 1 100%; min-width:0; max-width:100%; padding:16px; margin-bottom:18px; border:1px solid var(--border); border-radius:14px; background:var(--panel-subtle); }
+.organism-carousel { min-width:0; max-width:100%; padding:16px; border:1px solid var(--border); border-radius:14px; background:var(--panel-subtle); }
 .organism-carousel-heading,.organism-carousel-navigation { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .organism-carousel-heading { margin-bottom:12px; }
 .organism-carousel-heading h3 { margin:0; font-size:16px; }
