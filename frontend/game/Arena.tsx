@@ -48,8 +48,11 @@ function failure(error: unknown) {
 
 export function Arena({ onExit }: { onExit: () => void }) {
     const touchControls = useTouchControls();
-    const arena = useArena();
     const [serverUrl] = useState(defaultServerUrl);
+    // Entering the network mode is the intent to connect: the lobby opens on the
+    // room list instead of asking for an extra click. The player name stays
+    // editable until a room is joined or created.
+    const arena = useArena({ autoConnect: serverUrl });
     const [playerName] = useState(storedPlayer);
     const [lobbyOpen, setLobbyOpen] = useState(true);
     const [genome, setGenome] = useState<Mode[]>(() => demoOrganisms()[0]?.genome() ?? defaultGenome());

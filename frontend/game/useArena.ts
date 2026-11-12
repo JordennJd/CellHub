@@ -23,11 +23,11 @@ const REQUEST_TIMEOUT = 15000;
  * resets are never applied locally; the client only predicts cell positions
  * between server chunks.
  */
-export function useArena() {
+export function useArena({ autoConnect }: { autoConnect?: string } = {}) {
     const client = useRef<MultiplayerClient | null>(null);
-    const phaseRef = useRef<NetPhase>('disconnected');
+    const phaseRef = useRef<NetPhase>(autoConnect ? 'connecting' : 'disconnected');
     const pendingInspects = useRef(new Map<number, PendingInspect>());
-    const [phase, setPhase] = useState<NetPhase>('disconnected');
+    const [phase, setPhase] = useState<NetPhase>(autoConnect ? 'connecting' : 'disconnected');
     const [rooms, setRooms] = useState<RoomInfo[]>([]);
     const [room, setRoom] = useState<RoomInfo | null>(null);
     const [player, setPlayer] = useState<PlayerInfo | null>(null);
@@ -121,6 +121,8 @@ export function useArena() {
             },
         });
         client.current = connection;
+        if (autoConnect)
+            connection.connect(autoConnect);
         return () => {
             rejectInspects(new Error('Арена закрыта.'));
             connection.close();

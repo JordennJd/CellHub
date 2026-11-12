@@ -33,6 +33,8 @@ export function OnlinePanel(props: Props) {
   const [player, setPlayer] = useState(props.playerName);
   if (!props.open) return null;
   const online = props.phase === "online";
+  const connecting = props.phase === "connecting";
+  const disconnected = props.phase === "disconnected";
   return (
     <div className="online-backdrop" role="presentation" onMouseDown={props.onClose}>
       <section
@@ -56,15 +58,6 @@ export function OnlinePanel(props: Props) {
           обновляет её 10 раз в секунду. Полная карта приходит каждые 0,6 секунды.
         </p>
         <label className="online-field">
-          Адрес WebSocket
-          <input
-            value={url}
-            disabled={props.phase === "connecting" || online}
-            onChange={(event) => setUrl(event.target.value)}
-            spellCheck={false}
-          />
-        </label>
-        <label className="online-field">
           Ваше имя
           <input
             value={player}
@@ -73,14 +66,123 @@ export function OnlinePanel(props: Props) {
             onChange={(event) => setPlayer(event.target.value)}
           />
         </label>
+        {connecting && (
+          <p className="online-status" role="status">
+            Подключаемся к серверу…
+          </p>
+        )}
+        {disconnected && (
+          <>
+            <p className="online-empty">
+              Соединение закрыто. Проверьте адрес сервера и попробуйте снова.
+            </p>
+            <button
+              className="online-primary"
+              disabled={!url.trim()}
+              onClick={() => props.onConnect(url.trim())}
+            >
+              Подключиться снова
+            </button>
+          </>
+        )}
+        {props.phase === "lobby" && (
+          <>
+            <div className="online-section-head">
+              <span className="eyebrow">ПУБЛИЧНЫЕ КОМНАТЫ</span>
+              <button className="quiet" onClick={props.onRefresh}>
+                Обновить
+              </button>
+            </div>
+            <div className="online-rooms">
+              {props.rooms.length === 0 && (
+                <p className="online-empty">
+                  Пока ни одной комнаты. Создайте первую — сервер сразу запустит
+                  в ней симуляцию.
+                </p>
+              )}
+              {props.rooms.map((room) => (
+                <button
+                  className="online-room-row"
+                  key={room.id}
+                  onClick={() => props.onJoin(room.id, player)}
+                >
+                  <span>
+                    <b>{room.name}</b>
+                    <small>
+                      {MODE_LABELS[room.mode]} · {room.id} · создатель {room.host}
+                    </small>
+                  </span>
+                  <span>
+                    <b>{room.population.toLocaleString("ru-RU")}</b>
+                    <small>{room.players} игроков</small>
+                  </span>
+                  <i>Войти ↗</i>
+                </button>
+              ))}
+            </div>
+            <div className="online-create">
+              <div className="online-create-head">
+                <span className="eyebrow">СВОЯ КОМНАТА</span>
+              </div>
+              <label className="online-field">
+                Название
+                <input
+                  value={name}
+                  maxLength={48}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <div className="online-create-row">
+                <div className="online-mode" role="radiogroup" aria-label="Режим комнаты">
+                  {(["sandbox", "arena"] as const).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={mode === value}
+                      className={mode === value ? "active" : undefined}
+                      onClick={() => setMode(value)}
+                    >
+                      <b>{MODE_LABELS[value]}</b>
+                      <small>
+                        {value === "sandbox"
+                          ? "Без очков и рейтинга."
+                          : "Мир «Хаоса», очки и лидеры."}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  className="online-create-submit"
+                  disabled={!name.trim()}
+                  onClick={() => props.onCreate(name.trim(), player, mode)}
+                >
+                  Создать
+                </button>
+              </div>
+              <p className="online-note">
+                {mode === "arena"
+                  ? "Арена наследует мир «Хаоса»: биомы, смену суток, радиацию и самозарождение, а также начисляет очки за биомассу и разрешает ставить новую клетку раз в 2 секунды."
+                  : "Песочница начинает общий мир без очков и ограничений на постановку клеток."}
+              </p>
+            </div>
+          </>
+        )}
         {!online && (
-          <button
-            className="online-primary"
-            disabled={props.phase === "connecting" || !url.trim()}
-            onClick={() => props.onConnect(url.trim())}
-          >
-            {props.phase === "connecting" ? "Подключение…" : "Подключиться к серверу"}
-          </button>
+          <details className="online-server">
+            <summary>
+              Сервер: <code>{url}</code>
+            </summary>
+            <label className="online-field">
+              Адрес WebSocket
+              <input
+                value={url}
+                disabled={connecting}
+                onChange={(event) => setUrl(event.target.value)}
+                spellCheck={false}
+              />
+            </label>
+          </details>
         )}
         {online && props.room && (
           <div className="online-room">
@@ -125,89 +227,6 @@ export function OnlinePanel(props: Props) {
               </button>
             </div>
           </div>
-        )}
-        {!online && props.phase !== "disconnected" && (
-          <>
-            <div className="online-section-head">
-              <span className="eyebrow">ПУБЛИЧНЫЕ КОМНАТЫ</span>
-              <button className="quiet" onClick={props.onRefresh}>
-                Обновить
-              </button>
-            </div>
-            <div className="online-rooms">
-              {props.rooms.length === 0 && (
-                <p className="online-empty">
-                  Пока ни одной комнаты. Создайте первую — сервер сразу запустит
-                  в ней симуляцию.
-                </p>
-              )}
-              {props.rooms.map((room) => (
-                <button
-                  className="online-room-row"
-                  key={room.id}
-                  onClick={() => props.onJoin(room.id, player)}
-                >
-                  <span>
-                    <b>{room.name}</b>
-                    <small>
-                      {MODE_LABELS[room.mode]} · {room.id} · создатель {room.host}
-                    </small>
-                  </span>
-                  <span>
-                    <b>{room.population.toLocaleString("ru-RU")}</b>
-                    <small>{room.players} игроков</small>
-                  </span>
-                  <i>Войти ↗</i>
-                </button>
-              ))}
-            </div>
-            <div className="online-create">
-              <label className="online-field">
-                Новая публичная комната
-                <input
-                  value={name}
-                  maxLength={48}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
-              <div className="online-mode" role="radiogroup" aria-label="Режим комнаты">
-                {(["sandbox", "arena"] as const).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    role="radio"
-                    aria-checked={mode === value}
-                    className={mode === value ? "active" : undefined}
-                    onClick={() => setMode(value)}
-                  >
-                    <b>{MODE_LABELS[value]}</b>
-                    <small>
-                      {value === "sandbox"
-                        ? "Свободная совместная среда без рейтинга."
-                        : "Мир «Хаоса» с биомами и самозарождением, цветные владения, очки и таблица лидеров."}
-                    </small>
-                  </button>
-                ))}
-              </div>
-              <p className="online-note">
-                {mode === "arena"
-                  ? "Арена наследует мир «Хаоса»: биомы, смену суток, радиацию и самозарождение, а также начисляет очки за биомассу и разрешает ставить новую клетку раз в 2 секунды."
-                  : "Песочница начинает общий мир без очков и ограничений на постановку клеток."}
-              </p>
-              <button
-                className="online-primary"
-                disabled={!name.trim()}
-                onClick={() => props.onCreate(name.trim(), player, mode)}
-              >
-                Создать и войти
-              </button>
-            </div>
-          </>
-        )}
-        {props.phase === "disconnected" && (
-          <p className="online-empty">
-            Соединение закрыто. Укажите адрес сервера и подключитесь снова.
-          </p>
         )}
       </section>
     </div>
