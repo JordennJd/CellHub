@@ -16,6 +16,15 @@ impl Simulation {
     }
 
     pub(super) fn remove_cell(&mut self, id: u32) -> Result<(), String> {
+        self.check_level_tool("remove")?;
+        if self.level.as_ref().is_some_and(|runtime| {
+            runtime
+                .level
+                .remove_max
+                .is_some_and(|max| runtime.removed >= max)
+        }) {
+            return Err("Исчерпан лимит удалений".into());
+        }
         let entity = self.find_cell(id)?;
         let event = self
             .world
@@ -32,6 +41,9 @@ impl Simulation {
         self.entities.retain(|&(cell_id, _)| cell_id != id);
         self.bonds.retain(|&(a, b)| a != id && b != id);
         self.deaths += 1;
+        if let Some(runtime) = &mut self.level {
+            runtime.removed += 1;
+        }
         if let Some(event) = event {
             self.emit_level_event(event);
         }
@@ -39,6 +51,7 @@ impl Simulation {
     }
 
     pub(super) fn boost_cell(&mut self, id: u32) -> Result<(), String> {
+        self.check_level_tool("add")?;
         let entity = self.find_cell(id)?;
         let event = {
             let (cell, position) = self
@@ -61,6 +74,7 @@ impl Simulation {
     }
 
     pub(super) fn reposition_cell(&mut self, id: u32, x: f32, y: f32) -> Result<(), String> {
+        self.check_level_tool("move")?;
         if !x.is_finite() || !y.is_finite() {
             return Err("Некорректная позиция клетки".into());
         }

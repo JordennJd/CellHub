@@ -11,7 +11,7 @@ import { GenomeEditor } from '../editor/GenomeEditor';
 import { useSimulation } from './useSimulation';
 import { EnvironmentPanel } from './EnvironmentPanel';
 import { completeChallenge, TUTORIALS, completeTutorial, evaluateTutorialStep } from './challenges';
-import { challengeBudget, starterGenome, type LevelManifest } from './levels';
+import { challengeBudget, levelGenome, starterGenome, type LevelManifest } from './levels';
 import { ObjectivePanel } from './ObjectivePanel';
 import { Library } from './Library';
 import { SimulationHeader } from './SimulationHeader';
@@ -177,6 +177,11 @@ export function Laboratory({ session, onExit }: {
             return;
         }
         const restart = !sim.levelStatus || sim.levelStatus.state !== 'running' || sim.levelStatus.elapsed > 0 || sim.inserted > 0;
+        const opening = level.demo.find(action => action.op === 'spawn' && action.genome !== undefined);
+        if (opening?.genome !== undefined) {
+            setGenome(levelGenome(level, opening.genome));
+            setInitialMode(opening.mode ?? 0);
+        }
         demoPlayed.current = true;
         victory.current = false;
         setCompleted(false);

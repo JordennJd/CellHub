@@ -27,7 +27,9 @@ fn env_number(name: &str) -> Option<f64> {
 
 fn main() {
     let id = std::env::args().nth(1).unwrap_or_else(|| "1".to_owned());
-    let path = levels_dir().join(format!("{id}.json"));
+    let path = std::env::var_os("LEVEL_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| levels_dir().join(format!("{id}.json")));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         eprintln!("не удалось прочитать {}: {e}", path.display());
         std::process::exit(2);
@@ -62,9 +64,16 @@ fn main() {
         }
         let status: Value =
             serde_json::from_str(&simulation.level_status_json()).expect("invalid status");
+        if let Some(error) = status["demoError"].as_str() {
+            eprintln!("{id}: DEMO ERROR: {error}");
+            std::process::exit(1);
+        }
         match status["state"].as_str().unwrap_or("") {
             "won" => {
-                println!("{id}: WON at {elapsed:.0}s");
+                println!(
+                    "{id}: WON at {elapsed:.0}s actions={} inserted={} removed={}",
+                    status["demoCursor"], status["inserted"], status["removed"]
+                );
                 return;
             }
             "lost" => {

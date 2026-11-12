@@ -91,7 +91,9 @@ export function useSimulation() {
                     transition.current.previousFrame = data;
                 else {
                     setFrame(data);
-                    setLevelStatus(parseLevelStatus(data.level));
+                    const status = parseLevelStatus(data.level);
+                    setLevelStatus(status);
+                    if (status) { successfulSpawns.current = status.inserted; setInserted(status.inserted); }
                 }
             }
             if (data.type === 'spawned') {
@@ -126,7 +128,8 @@ export function useSimulation() {
             if (data.type === 'error') {
                 console.warn('CellHub command failed', data.command, data.message);
                 const messages: Record<string, string> = { restore: 'Не удалось загрузить эксперимент: файл повреждён или несовместим.', spawn: 'Не удалось поместить клетку. Проверьте геном и доступное место в чашке.', inspect: 'Клетка уже исчезла. Выберите другую.', move: 'Не удалось перенести клетку. Выберите её заново.', edit: 'Не удалось изменить клетку. Выберите её заново.', boost: 'Не удалось подпитать клетку. Выберите её заново.', export: 'Не удалось сохранить эксперимент. Попробуйте ещё раз.' };
-                const reason = new Error(messages[data.command] ?? 'Действие недоступно. Попробуйте ещё раз.');
+                const ruleError = typeof data.message === 'string' && /лимит|недоступ|допускается|решени/i.test(data.message);
+                const reason = new Error(ruleError ? data.message.replace(/^(Error:\s*)+/, '') : messages[data.command] ?? 'Действие недоступно. Попробуйте ещё раз.');
                 setError(reason.message);
                 if (data.command === 'spawn') {
                     if (transition.current)

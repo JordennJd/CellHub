@@ -1,4 +1,4 @@
-//! Campaign regression: every authored demo must really complete its level.
+//! Campaign regression: every offered solution must obey player rules and win.
 //!
 //! The files in `/levels` are the product, not test fixtures. This test is the
 //! contract that keeps the data honest: it loads each manifest through the same
@@ -176,6 +176,9 @@ fn check_level(id: &str, path: &Path, wall: Duration) -> Result<String, String> 
         .load_level_text(&text)
         .map_err(|error| format!("{id}: {error}"))?;
     simulation
+        .validate_demo_track()
+        .map_err(|error| format!("{id}: {error}"))?;
+    simulation
         .start_demo_track()
         .map_err(|error| format!("{id}: {error}"))?;
     let started = Instant::now();
@@ -184,6 +187,17 @@ fn check_level(id: &str, path: &Path, wall: Duration) -> Result<String, String> 
         simulation.advance(30);
         elapsed += 1;
         let status = status(&simulation);
+        if status["demoError"].is_string() {
+            return Err(format!("{id}: {}", status["demoError"]));
+        }
+        if status["inserted"].as_u64().unwrap_or(0) > level["budget"].as_u64().unwrap_or(0) {
+            return Err(format!("{id}: placement budget exceeded"));
+        }
+        if let Some(max) = level["removeMax"].as_u64() {
+            if status["removed"].as_u64().unwrap_or(0) > max {
+                return Err(format!("{id}: removal budget exceeded"));
+            }
+        }
         match status["state"].as_str().unwrap_or("") {
             "won" => {
                 return Ok(format!(
@@ -219,7 +233,7 @@ fn check_level(id: &str, path: &Path, wall: Duration) -> Result<String, String> 
 }
 
 #[test]
-fn every_demo_completes_its_level() {
+fn every_available_solution_obeys_player_rules_and_completes_its_level() {
     let filter = std::env::var("LEVEL_FILTER").ok();
     let wall = Duration::from_secs_f64(env_number("LEVEL_WALL_SECONDS").unwrap_or(30.).max(1.));
     let fail_fast = env_flag("LEVEL_FAIL_FAST");
@@ -246,6 +260,22 @@ fn every_demo_completes_its_level() {
             if level["tutorial"].as_bool().unwrap_or(false) {
                 return None;
             }
+            if level["solutionStatus"] == "unavailable" {
+                assert!(
+                    level["demo"].as_array().is_some_and(Vec::is_empty),
+                    "unavailable solution must not carry a cheating track"
+                );
+                assert!(
+                    level["solutionIssue"]
+                        .as_str()
+                        .is_some_and(|s| !s.trim().is_empty())
+                );
+                return None;
+            }
+            assert_eq!(
+                level["solutionStatus"], "verified",
+                "every campaign solution must declare its status"
+            );
             Some((level["id"].as_str().unwrap_or("?").to_owned(), path))
         })
         .collect::<Vec<_>>();
@@ -317,5 +347,37 @@ fn every_demo_completes_its_level() {
     );
     if verbose {
         eprintln!("all {checked} level demos passed");
+    }
+}
+
+#[test]
+fn all_level_tracks_obey_the_original_intervention_rules() {
+    for entry in std::fs::read_dir(levels_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|ext| ext != "json")
+            || path.file_name().unwrap() == "index.json"
+        {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let mut sim = Simulation::new(1);
+        sim.load_level_text(&text).unwrap();
+        sim.validate_demo_track()
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    }
+}
+
+#[test]
+fn confirmed_solutions_cannot_silently_disappear() {
+    for id in [
+        "1", "2", "4", "3", "3.2", "3.3", "3.4", "3.5", "5", "5.5", "6", "7", "8", "9.7", "13",
+        "14", "14.5", "16", "17.5", "18.5", "22.5", "25", "26.5", "26.6", "26.8", "26.9", "30",
+        "31", "31.5", "32.6", "33.3",
+    ] {
+        let level = load(&levels_dir().join(format!("{id}.json")));
+        assert_eq!(
+            level["solutionStatus"], "verified",
+            "{id}: a verified solution was removed"
+        );
     }
 }

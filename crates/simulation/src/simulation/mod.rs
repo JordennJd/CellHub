@@ -473,10 +473,23 @@ impl Simulation {
         mode: usize,
         values: &[f32],
     ) -> Result<u32, String> {
-        if !x.is_finite() || !y.is_finite() {
-            return Err("Invalid spawn".to_owned());
-        }
         let genome = decode_checked(values)?;
+        self.spawn_genome_checked(x, y, mode, genome)
+    }
+
+    pub(super) fn spawn_genome_checked(
+        &mut self,
+        x: f32,
+        y: f32,
+        mode: usize,
+        genome: Genome,
+    ) -> Result<u32, String> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err("Invalid spawn".into());
+        }
+        if let Some(runtime) = &self.level {
+            runtime.check_spawn(&genome)?;
+        }
         if mode >= genome.len() {
             return Err("Invalid spawn archetype".to_owned());
         }
@@ -492,10 +505,16 @@ impl Simulation {
             .spawn((Position { x, y, angle }, Cell::new(id, mode), genome));
         self.entities.push((id, entity));
         self.births += 1;
+        if let Some(runtime) = &mut self.level {
+            runtime.inserted += 1;
+        }
         Ok(id)
     }
 
     pub fn edit_checked(&mut self, id: u32, mode: usize, values: &[f32]) -> Result<(), String> {
+        if self.level.is_some() {
+            return Err("Изменение живых клеток недоступно в испытании".into());
+        }
         let genome = decode_checked(values)?;
         if mode >= genome.len() {
             return Err("Invalid mode".to_owned());

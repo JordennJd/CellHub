@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+from level_solutions import apply_solution
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -154,145 +155,12 @@ def convert_genome(genome: list[dict], index: int) -> dict:
     }
 
 
-def demo_mode(index: int, **changes) -> dict:
-    mode = {
-        "name": f"Демо M{index + 1}",
-        "kind": 0,
-        "threshold": 1.35,
-        "angle": 0.0,
-        "speed": 0.0,
-        "lifespan": 1000.0,
-        "canDivide": True,
-        "bindChildren": False,
-        "red": 0.45,
-        "green": 1.0,
-        "blue": 0.45,
-    }
-    mode.update(changes)
-    return mode
-
-
-def demo_genomes() -> list[dict]:
-    """Reusable demo archetypes. Their indices are appended after originals."""
-    return [
-        {"version": 5, "modes": [demo_mode(0, kind=0, threshold=1.2)]},
-        {"version": 5, "modes": [demo_mode(0, kind=1, threshold=1.2, red=1.0, green=0.8, blue=0.4, speed=1.0)]},
-        {"version": 5, "modes": [demo_mode(0, kind=5, threshold=1.4, red=0.9, green=0.3, blue=0.6)]},
-        {"version": 5, "modes": [demo_mode(0, kind=3, threshold=1.4, red=0.7, green=0.3, blue=1.0)]},
-        {
-            "version": 5,
-            "modes": [
-                demo_mode(0, kind=16, threshold=1.0, canDivide=False, offspringMode=1, compatibleMode=-1),
-                demo_mode(1, kind=0, threshold=1.6, red=0.4, green=0.9, blue=0.9),
-            ],
-        },
-        {"version": 5, "modes": [demo_mode(0, kind=7, threshold=1.25, red=0.9, green=0.9, blue=0.3)]},
-        {"version": 5, "modes": [demo_mode(0, kind=4, threshold=1.5, red=0.8, green=0.8, blue=0.8)]},
-    ]
-
-
-DEMO_PHOTO = 0
-DEMO_PHAGO = 1
-DEMO_DEVORO = 2
-DEMO_VIRUS = 3
-DEMO_GAMETE = 4
-
-
-def build_demo(challenge: dict, substrate: dict, genome_count: int, radius: float) -> list[dict]:
-    """Conservative baseline track.
-
-    The campaign-wide test is the source of truth. This generator covers the
-    obvious cases (grow a light/food population, boost existing level cells,
-    remove a doomed colony) and leaves level-specific demonstrations to the
-    authored manifests. Every generated action is visible in the JSON.
-    """
-    conditions = challenge["conditions"]
-    # Original manifests name the placement tool `cell`; demos speak the UI
-    # vocabulary (`place`, `select`, ...), so normalize before branching.
-    tools = {TOOL_NAMES.get(name, name) for name in challenge["tools"]}
-    cells = substrate["cells"]
-    demos: list[dict] = []
-
-    def spawn(at: float, x: float, y: float, genome: int, mode: int = 0, mass: float | None = None):
-        action = {"at": at, "op": "spawn", "x": round(x, 5), "y": round(y, 5),
-                  "genome": genome_count + genome, "mode": mode}
-        if mass is not None:
-            action["mass"] = mass
-        demos.append(action)
-
-    def boost(at: float, cell_id: int):
-        demos.append({"at": at, "op": "boost", "id": cell_id})
-
-    def remove(at: float, cell_id: int):
-        demos.append({"at": at, "op": "remove", "id": cell_id})
-
-    level_max = any(key in conditions for key in (
-        "level-cells", "black-level-cells", "red-level-cells", "yellow-level-cells",
-        "infected-level-cells-max", "user-cells-max",
-    ))
-    user_target = int(conditions.get("user-cells", 0))
-    needs_user = user_target > 0 or any(key in conditions for key in ("total-cells-min", "hybrid-cells-min"))
-    requires_placement = "place" in tools
-    kills_level_cells = int(conditions.get("level-cells", 1)) == 0 and not needs_user
-
-    if "hybrid-cells-min" in conditions:
-        count = int(conditions["hybrid-cells-min"])
-        pairs = min(880, count * 2 + 20)
-        for index in range(pairs):
-            # A loose grid of two-cell gamete pairs. Collisions make the pair
-            # fuse immediately on the first ticks.
-            column = index % 22
-            row = index // 22
-            x = 0.10 + column * 0.036 + (0.008 if index % 2 else 0)
-            y = 0.10 + row * 0.038
-            if x < 0.92 and y < 0.92:
-                spawn(0.0, x, y, DEMO_GAMETE, 0, 1.2)
-    elif kills_level_cells and "remove" in tools:
-        # The only allowed outcome is an empty level population.
-        for index, _ in enumerate(cells):
-            remove(0.0, index + 1)
-    elif needs_user and requires_placement:
-        light = float(substrate["environment"].get("light", 0))
-        food = float(substrate["environment"].get("food", 0))
-        light_range = float(substrate["environment"].get("light_range", 0))
-        genome = DEMO_PHOTO if light >= 0.12 else DEMO_PHAGO
-        seeds = 4 if light >= 0.12 else 3
-        for index in range(seeds):
-            x = 0.28 + (index % 3) * 0.22
-            if light >= 0.12:
-                # Light falls off from the top. Keep seeds inside the bright band.
-                y = max(0.04, min(0.30, light_range * 0.35)) if light_range > 0 else 0.24
-                y += (index // 3) * 0.06
-            else:
-                y = 0.22 + (index // 3) * 0.20
-            spawn(0.0, x, y, genome, 0, 1.4)
-    elif level_max and "level-cells" in conditions and int(conditions["level-cells"]) == 0 and not needs_user:
-        if "remove" in tools:
-            for index, _ in enumerate(cells):
-                remove(0.2, index + 1)
-    elif "level-cells-min" in conditions:
-        # Encourage existing substrate colonies to divide. Boost early cells
-        # repeatedly; class 0 is inherited by every daughter.
-        for index, _ in enumerate(cells[:48]):
-            for step in range(3):
-                boost(0.5 + step * 3.0, index + 1)
-    elif "red-level-cells-min" in conditions or "yellow-level-cells-min" in conditions:
-        for index, _ in enumerate(cells[:48]):
-            for step in range(3):
-                boost(0.5 + step * 3.0, index + 1)
-    elif "infected-level-cells" in conditions:
-        for index in range(4):
-            spawn(0.0, 0.35 + index * 0.10, 0.35 + (index % 2) * 0.12, DEMO_VIRUS, 0, 1.2)
-    return demos
-
-
 def build_level(entry: dict, data: dict) -> dict:
     challenge = data["challenge"]
     substrate = data["substrate"]
     environment = substrate["environment"]
     radius = float(environment.get("substrate_radius", 1.0)) or 1.0
     genomes = [convert_genome(genome, index) for index, genome in enumerate(substrate["genomes"])]
-    demos = demo_genomes()
     cells = []
     for cell in substrate["cells"]:
         x = round(clamp(float(cell["pos"][0]) / radius * 0.5 + 0.5, 0.0, 1.0), 6)
@@ -339,7 +207,7 @@ def build_level(entry: dict, data: dict) -> dict:
         if name.lower().replace("-", "") in {entry.lower() for entry in KIND}
     }
     only_point = True
-    return {
+    level = {
         "schema": 1,
         "id": challenge["id"],
         "order": challenge["order"],
@@ -378,19 +246,21 @@ def build_level(entry: dict, data: dict) -> dict:
             "capacity": environment.get("food", 0.0),
         },
         "conditions": conditions,
-        "genomes": genomes + demos,
+        "genomes": genomes,
         "initial": {
             "cells": cells,
             "links": [list(pair) for pair in sorted(links)],
             "food": food,
         },
-        "demo": build_demo(challenge, substrate, len(genomes), radius),
+        "demo": [],
         "test": {
             "maxSeconds": None,
             "seed": 0xCE11AB,
             **({"winTimeOriginal": win_time_original} if win_time_original and float(win_time_original) > MAX_WIN_TIME else {}),
         },
     }
+
+    return apply_solution(level)
 
 
 def main() -> None:

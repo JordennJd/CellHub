@@ -87,6 +87,8 @@ pub struct Level {
     pub difficulty: u8,
     pub hints: Vec<String>,
     pub solution: String,
+    pub solution_status: Option<String>,
+    pub solution_issue: Option<String>,
     pub tools: Vec<String>,
     pub budget: u32,
     pub remove_max: Option<u32>,
@@ -117,6 +119,8 @@ impl Default for Level {
             difficulty: 0,
             hints: Vec::new(),
             solution: String::new(),
+            solution_status: None,
+            solution_issue: None,
             tools: vec!["place".into(), "select".into()],
             budget: 1,
             remove_max: None,
@@ -152,6 +156,20 @@ impl Level {
         }
         if self.id.trim().is_empty() || self.id.len() > 80 {
             return Err("Уровень должен иметь короткий id".into());
+        }
+        match self.solution_status.as_deref() {
+            None | Some("verified") => {}
+            Some("unavailable") => {
+                if !self.demo.is_empty()
+                    || self
+                        .solution_issue
+                        .as_deref()
+                        .is_none_or(|issue| issue.trim().is_empty())
+                {
+                    return Err("Неподтверждённое решение должно содержать причину и не иметь автоматических действий".into());
+                }
+            }
+            _ => return Err("Неизвестный статус решения".into()),
         }
         if self.genomes.len() > 1000 {
             return Err("Слишком много геномов в уровне".into());
@@ -207,6 +225,14 @@ impl Level {
                     return Err("Демонстрационная клетка вне чашки".into());
                 }
             }
+        }
+        if self.solution_status.as_deref() == Some("verified") {
+            let genomes = self
+                .genomes
+                .iter()
+                .map(LevelGenome::to_genome)
+                .collect::<Result<Vec<_>, _>>()?;
+            self.check_demo(&genomes)?;
         }
         Ok(())
     }

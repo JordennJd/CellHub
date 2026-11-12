@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Re-sync ``levels/*.json`` initial cells/food with the original substrates.
 
-``build_levels.py`` regenerates a whole manifest (and therefore replaces
-hand-authored demos).  This script only rebuilds ``initial`` from
+``build_levels.py`` regenerates a whole manifest, retaining solutions from
+``levels/solutions/index.json``.  This script only rebuilds ``initial`` from
 ``docs/original-game/challenges/data/<id>.json`` while keeping every other
 field of the existing manifest intact.
 

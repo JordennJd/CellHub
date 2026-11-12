@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, beforeEach, after } from "node:test";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -178,5 +178,56 @@ test("the first campaign manifest loads and its demo wins in the real WASM simul
     assert.equal(objective?.target, level.conditions["user-cells"]);
     assert.equal(objective?.met, true);
     assert(current.counts.user >= objective.target);
+  } finally { sim.free(); }
+});
+
+
+test("every offered campaign solution wins in real WASM without exceeding player limits", async () => {
+  const { default: init, Simulation } = await import("../frontend/wasm/simulation.js");
+  await init({ module_or_path: await readFile(new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url)) });
+  let checked = 0;
+  for (const name of await readdir(new URL("../levels/", import.meta.url))) {
+    if (!name.endsWith(".json") || name === "index.json") continue;
+    const text = await readFile(new URL(`../levels/${name}`, import.meta.url), "utf8");
+    const level = JSON.parse(text);
+    if (level.tutorial || level.solutionStatus !== "verified") continue;
+    const sim = new Simulation(level.test.seed);
+    try {
+      sim.load_level_json(text); sim.start_level_demo();
+      let current = JSON.parse(sim.level_status());
+      for (let second = 0; second < (level.test.maxSeconds ?? 600) && current.state === "running"; second++) {
+        sim.advance(30); current = JSON.parse(sim.level_status());
+        assert(!current.demoError, `${level.id}: ${current.demoError}`);
+        assert(current.inserted <= level.budget, `${level.id}: placement budget`);
+        if (level.removeMax !== null) assert(current.removed <= level.removeMax, `${level.id}: removal budget`);
+      }
+      assert.equal(current.state, "won", `${level.id}: ${JSON.stringify(current)}`);
+      checked++;
+    } finally { sim.free(); }
+  }
+  assert(checked >= 31, `Only ${checked} verified solutions were tested`);
+});
+
+test("WASM manual commands and demo playback share the campaign budget and tools", async () => {
+  const { default: init, Simulation } = await import("../frontend/wasm/simulation.js");
+  await init({ module_or_path: await readFile(new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url)) });
+  const level = JSON.parse(await readFile(new URL("../levels/1.json", import.meta.url), "utf8"));
+  level.budget = 1;
+  const sim = new Simulation(level.test.seed);
+  try {
+    sim.load_level_json(JSON.stringify(level)); sim.start_level_demo(); sim.advance(1);
+    assert.equal(JSON.parse(sim.level_status()).inserted, 1);
+    sim.stop_level_demo();
+    const genes = flatten([{ ...newMode(0), speed: 0 }]);
+    assert.throws(() => sim.spawn(1500, 1500, 0, genes));
+    const id = sim.snapshot()[0];
+    assert.throws(() => sim.boost(id));
+    assert.throws(() => sim.remove(id));
+    assert.throws(() => sim.move_cell(id, 1200, 1200));
+    assert.equal(JSON.parse(sim.level_status()).inserted, 1);
+    sim.load_level_json(JSON.stringify(level));
+    const invalid = flatten([{ ...newMode(0), childA: 1 }, { ...newMode(1), kind: 3 }]);
+    assert.throws(() => sim.spawn(1500, 1500, 0, invalid));
+    assert.equal(JSON.parse(sim.level_status()).inserted, 0);
   } finally { sim.free(); }
 });

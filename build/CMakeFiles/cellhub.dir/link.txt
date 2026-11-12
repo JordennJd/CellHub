@@ -1,0 +1,1 @@
+/Users/danilalatyrev/Desktop/Projects/CellHub/CellHub/.tools/emsdk/upstream/emscripten/em++ -O3 -DNDEBUG --shell-file=/Users/danilalatyrev/Desktop/Projects/CellHub/CellHub/web/shell.html -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -sENVIRONMENT=web @CMakeFiles/cellhub.dir/objects1.rsp -o index.html

@@ -1,0 +1,3 @@
+/Users/danilalatyrev/Desktop/Projects/CellHub/CellHub/build/CMakeFiles/cellhub.dir
+/Users/danilalatyrev/Desktop/Projects/CellHub/CellHub/build/CMakeFiles/edit_cache.dir
+/Users/danilalatyrev/Desktop/Projects/CellHub/CellHub/build/CMakeFiles/rebuild_cache.dir

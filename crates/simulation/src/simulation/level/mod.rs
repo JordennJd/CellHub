@@ -7,6 +7,7 @@
 pub(crate) mod schema;
 mod observe;
 mod demo;
+mod rules;
 
 pub(crate) use observe::LevelEvent;
 pub(crate) use schema::{ConditionKind, Level};
@@ -53,6 +54,9 @@ pub(crate) struct LevelRuntime {
     pub(crate) win_hold: f32,
     pub(crate) demo: bool,
     pub(crate) demo_cursor: usize,
+    pub(crate) inserted: u32,
+    pub(crate) removed: u32,
+    pub(crate) demo_error: Option<String>,
     /// Bounded transition log for diagnostics. Never read by objective code.
     pub(crate) events: VecDeque<LevelEvent>,
     /// Previous met/unmet flag per condition, in canonical order.
@@ -69,6 +73,9 @@ impl LevelRuntime {
             win_hold: 0.,
             demo: false,
             demo_cursor: 0,
+            inserted: 0,
+            removed: 0,
+            demo_error: None,
             events: VecDeque::new(),
             condition_flags,
         }
@@ -212,10 +219,18 @@ impl Simulation {
     }
 
     pub(crate) fn start_demo(&mut self) -> Result<(), String> {
-        let runtime = self
-            .level
-            .as_mut()
-            .ok_or_else(|| "Уровень не загружен".to_owned())?;
+        let runtime = self.level.as_ref().ok_or("Уровень не загружен")?;
+        if runtime.level.solution_status.as_deref() == Some("unavailable") {
+            return Err(runtime
+                .level
+                .solution_issue
+                .clone()
+                .unwrap_or_else(|| "Проверенное решение пока недоступно".into()));
+        }
+        runtime.level.check_demo(&runtime.genomes)?;
+        let level = runtime.level.clone();
+        self.install_level(level)?;
+        let runtime = self.level.as_mut().unwrap();
         runtime.demo = true;
         runtime.demo_cursor = 0;
         runtime.state = LevelState::Running;
@@ -367,6 +382,9 @@ impl Simulation {
             demo: runtime.demo,
             demo_actions: runtime.level.demo.len(),
             demo_cursor: runtime.demo_cursor,
+            inserted: runtime.inserted,
+            removed: runtime.removed,
+            demo_error: runtime.demo_error.clone(),
             tutorial: runtime.level.tutorial,
             counts: StatusCounts {
                 total: counts.total,
@@ -394,6 +412,9 @@ pub(crate) struct LevelStatus {
     pub(crate) demo: bool,
     pub(crate) demo_actions: usize,
     pub(crate) demo_cursor: usize,
+    pub(crate) inserted: u32,
+    pub(crate) removed: u32,
+    pub(crate) demo_error: Option<String>,
     pub(crate) tutorial: bool,
     pub(crate) counts: StatusCounts,
     pub(crate) conditions: Vec<ConditionStatus>,
@@ -410,6 +431,9 @@ impl Default for LevelStatus {
             demo: false,
             demo_actions: 0,
             demo_cursor: 0,
+            inserted: 0,
+            removed: 0,
+            demo_error: None,
             tutorial: false,
             counts: StatusCounts::default(),
             conditions: Vec::new(),
@@ -615,36 +639,6 @@ fn normalize_angle(value: f32) -> f32 {
 
 /// Shared by the loader and the demo runner. New player cells always receive
 /// class 1; only substrate cells may be class 0.
-fn spawn_player_cell(
-    simulation: &mut Simulation,
-    x: f32,
-    y: f32,
-    mode: usize,
-    genome: Genome,
-    mass: f32,
-    angle: Option<f32>,
-) -> u32 {
-    if simulation.world.len() as usize >= simulation.population_limit {
-        return 0;
-    }
-    let id = simulation.next_id;
-    simulation.next_id += 1;
-    let mut cell = Cell::new(id, mode);
-    cell.mass = mass.clamp(0.18, 1_000_000.);
-    cell.class = CLASS_USER;
-    let angle = angle.unwrap_or_else(|| {
-        // Deterministic spread without consuming the simulation RNG stream.
-        (id as f32 * 2.399_963_3) % std::f32::consts::TAU
-    });
-    let (x, y) = clamp_to_dish(x.clamp(0., 1.) * SIZE, y.clamp(0., 1.) * SIZE, cell.mass);
-    let entity = simulation
-        .world
-        .spawn((Position { x, y, angle }, cell, genome));
-    simulation.entities.push((id, entity));
-    simulation.births += 1;
-    id
-}
-
 /// Native-facing helpers used by `cargo test` and the `level_check` example.
 /// The wasm ABI wraps the same methods with `JsError`.
 impl Simulation {
@@ -654,6 +648,11 @@ impl Simulation {
 
     pub fn level_status_json(&self) -> String {
         self.level_status_snapshot().to_json()
+    }
+
+    pub fn validate_demo_track(&self) -> Result<(), String> {
+        let runtime = self.level.as_ref().ok_or("Уровень не загружен")?;
+        runtime.level.check_demo(&runtime.genomes)
     }
 
     pub fn start_demo_track(&mut self) -> Result<(), String> {

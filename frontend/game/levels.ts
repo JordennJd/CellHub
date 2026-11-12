@@ -23,6 +23,8 @@ export type LevelManifest = {
     difficulty: number;
     hints: string[];
     solution: string;
+    solutionStatus?: "verified" | "unavailable";
+    solutionIssue?: string;
     tools: string[];
     budget: number;
     removeMax: number | null;
@@ -54,6 +56,9 @@ export type LevelStatus = {
     demo: boolean;
     demoActions: number;
     demoCursor: number;
+    inserted: number;
+    removed: number;
+    demoError?: string | null;
     tutorial: boolean;
     counts: {
         total: number;
@@ -131,9 +136,7 @@ export function starterGenome(level: LevelManifest): { genome: Mode[]; initialMo
 }
 
 export function challengeBudget(level: LevelManifest): number {
-    if (level.budget > 0)
-        return level.budget;
-    return level.tools.includes("add") ? Number.POSITIVE_INFINITY : 0;
+    return level.tools.includes("place") ? level.budget : 0;
 }
 
 export const CONDITION_LABELS: Record<string, { label: string; unit?: string; max?: boolean }> = {

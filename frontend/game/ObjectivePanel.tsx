@@ -1,4 +1,5 @@
 import { CONDITION_LABELS, challengeBudget, type LevelManifest, type LevelStatus } from './levels';
+import { TYPES } from '../model';
 import type { Tutorial } from './challenges';
 
 type Props = {
@@ -41,13 +42,17 @@ export function ObjectivePanel({ level, status, inserted, completed, help, onHel
                 </div>;
             })}
             {status && <div><dt>Время</dt><dd>{status.elapsed.toFixed(1)} с{status.winTime > 0 ? ` из ${status.winTime.toFixed(0)} с` : ''}</dd></div>}
-            {level.tools.includes('place') && <div><dt>Вставлено клеток</dt><dd>{inserted} / {budgetText(challengeBudget(level))}</dd></div>}
+            {Object.entries(level.maxCellsOfType).map(([kind, max]) => <div key={kind}><dt>Слотов «{TYPES.find(type => type.latin.toLowerCase() === kind.toLowerCase().replaceAll('-', ''))?.name ?? kind}» в геноме</dt><dd>не более {max}</dd></div>)}
+            {level.tools.includes('remove') && <div><dt>Удалено клеток</dt><dd>{status?.removed ?? 0} / {level.removeMax ?? '∞'}</dd></div>}
+            {level.tools.includes('place') && <div><dt>Вставлено клеток</dt><dd>{status?.inserted ?? inserted} / {budgetText(challengeBudget(level))}</dd></div>}
         </dl>
-        {level.demo.length > 0 && <div className="button-row">
+        {level.solutionStatus === "verified" && <div className="button-row">
             <button onClick={onDemo} disabled={completed} aria-pressed={!!status?.demo}>
                 {status?.demo ? 'Остановить демонстрацию' : 'Показать решение'}
             </button>
         </div>}
+        {level.solutionStatus === "unavailable" && <p className="help-box" role="status">{level.solutionIssue || "Проверенное решение пока недоступно."}</p>}
+        {status?.demoError && <p className="help-box error" role="alert">Демонстрация остановлена: {status.demoError}</p>}
         {status?.demo && <p className="help-box" role="status">Идёт автоматическая демонстрация решения: {status.demoCursor} из {status.demoActions} действий.</p>}
         {completed && !status?.demo && <div className="success" role="status"><h3>Испытание пройдено</h3>{progressSaved ? <p>Результат сохранён. Можно продолжить наблюдение или вернуться к списку испытаний.</p> : retryProgress}</div>}
         <div className="button-row">
