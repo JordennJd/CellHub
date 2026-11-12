@@ -2,8 +2,10 @@
 
 /// Side length of the square world.
 pub const SIZE: f32 = 3072.;
-/// Hard population cap.
-pub const LIMIT: usize = 20_000;
+/// Soft population limit. The world may grow past it, but every tick the
+/// oldest cells are culled back toward it. Level substrates keep their own
+/// authored `max_cells` as a hard cap.
+pub const LIMIT: usize = 7_000;
 /// Fixed simulation cadence shared by biology, campaign timers and networking.
 /// Every rate expressed per second is multiplied by [`STEP`] exactly once per
 /// tick, so lowering the cadence speeds each tick up instead of slowing time.

@@ -7,10 +7,10 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let args: Vec<_> = std::env::args().collect();
-    let population: usize = args.get(1).map(|s| s.parse().unwrap()).unwrap_or(10_000);
+    let population: usize = args.get(1).map(|s| s.parse().unwrap()).unwrap_or(7_000);
     let ticks: usize = args.get(2).map(|s| s.parse().unwrap()).unwrap_or(120);
     let layout = args.get(3).map(String::as_str).unwrap_or("grid");
-    assert!((1..=20_000).contains(&population) && ticks > 0);
+    assert!((1..=7_000).contains(&population) && ticks > 0);
     let mut simulation = Simulation::new(73421);
     // Legacy ABI, eight photocyte modes, with motion, radiation and division.
     let genes = [0., 2.4, 0., 0., 0.5, 12., 0.8, 240.].repeat(8);

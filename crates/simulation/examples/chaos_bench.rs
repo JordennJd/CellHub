@@ -7,10 +7,10 @@
 //! ```
 //!
 //! `growth` starts with one dividing photocyte and follows the bloom all the
-//! way to the 20 000-cell cap, so the tick distribution is reported for the
-//! population the simulation actually reaches. `scale` and `steady` fill a
+//! way to the 7 000-cell soft limit, so the tick distribution is reported for
+//! the population the simulation actually reaches. `scale` and `steady` fill a
 //! chaos dish with non-dividing photocytes to isolate the per-tick cost, which
-//! is useful when the ecology plateaus before the hard cap.
+//! is useful when the ecology plateaus before the soft limit.
 //!
 //! Rayon parallelises contact discovery and independent islands on native
 //! targets. Set `RAYON_NUM_THREADS=1` for the serial baseline.
@@ -19,7 +19,7 @@ use cellhub_simulation::Simulation;
 use std::hint::black_box;
 use std::time::Instant;
 
-const LIMIT: usize = 20_000;
+const LIMIT: usize = 7_000;
 const TICK_MS: f64 = 1000. / 10.;
 const SEED: u32 = 73_421;
 
@@ -111,7 +111,7 @@ fn growth(ticks: usize, seed: u32, width: Option<f32>) {
         .expect("spawn photocyte");
     let mut samples: Vec<(usize, f64)> = Vec::with_capacity(ticks);
     let mut milestones = [None; 5];
-    let thresholds = [1_000, 5_000, 10_000, 15_000, 20_000];
+    let thresholds = [1_000, 2_000, 4_000, 6_000, 7_000];
     let mut first_slow = [None; 3];
     let slow_thresholds = [TICK_MS, TICK_MS / 2., TICK_MS / 4.];
     let mut capped = false;
@@ -162,7 +162,7 @@ fn growth(ticks: usize, seed: u32, width: Option<f32>) {
     for (index, threshold) in thresholds.iter().enumerate() {
         match milestones[index] {
             Some((tick, seconds)) => {
-                let bin = bin_samples(&samples, *threshold, threshold + 2_000);
+                let bin = bin_samples(&samples, *threshold, threshold + 500);
                 println!(
                     "reached {threshold:>6} at tick {tick:>6} ({seconds:.1} s) p50 {:.2} ms p95 {:.2} ms",
                     percentile(&bin, 0.5),
@@ -180,12 +180,12 @@ fn growth(ticks: usize, seed: u32, width: Option<f32>) {
             None => println!("no tick over {limit:.1} ms"),
         }
     }
-    for start in (0..LIMIT).step_by(2_000) {
-        let bin = bin_samples(&samples, start, start + 2_000);
+    for start in (0..LIMIT).step_by(1_000) {
+        let bin = bin_samples(&samples, start, start + 1_000);
         if !bin.is_empty() {
             println!(
                 "pop {start:>5}-{:>5}: samples {:>4} p50 {:>7.2} ms p95 {:>7.2} ms p99 {:>7.2} ms",
-                start + 2_000,
+                start + 1_000,
                 bin.len(),
                 percentile(&bin, 0.5),
                 percentile(&bin, 0.95),
@@ -201,9 +201,9 @@ fn growth(ticks: usize, seed: u32, width: Option<f32>) {
         percentile(&cap_samples, 0.95),
         cap_samples.last().copied().unwrap_or(0.),
     );
-    let tail = bin_samples(&samples, LIMIT.saturating_sub(2_000), LIMIT);
+    let tail = bin_samples(&samples, LIMIT.saturating_sub(1_000), LIMIT);
     println!(
-        "tail 18000-20000: samples {} p50 {:.2} ms p95 {:.2} ms max {:.2} ms",
+        "tail 6000-7000: samples {} p50 {:.2} ms p95 {:.2} ms max {:.2} ms",
         tail.len(),
         percentile(&tail, 0.5),
         percentile(&tail, 0.95),

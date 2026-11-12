@@ -1,14 +1,16 @@
 //! Client-side predictive scene.
 //!
-//! The server owns biology, genomes and the tick counter. This layer only
-//! predicts the shared scene between authoritative chunks: cells coast along
-//! their last known heading, adhesion constraints are solved locally, and every
-//! chunk update overwrites the affected cells unconditionally.
+//! The server owns biology, genomes, spawning and the tick counter. The client
+//! never invents server-side cells, divisions or other spawns: it only predicts
+//! how already known cells move between authoritative chunks. Adhesion
+//! constraints are solved locally, and every chunk update overwrites the
+//! affected cells unconditionally.
 //!
-//! Local spawns are shown immediately as temporary negative-ID ghosts. When
-//! the server accepts a spawn, the ghost disappears as soon as the real cell
-//! arrives in a chunk (or as soon as the acknowledgement arrives, if the cell
-//! is already known).
+//! The one exception is an explicit placement command from the local player:
+//! it is shown immediately as a temporary negative-ID ghost, provided the
+//! server-side placement cooldown allows the command. When the server accepts
+//! the spawn, the ghost disappears as soon as the real cell arrives in a chunk
+//! (or as soon as the acknowledgement arrives, if the cell is already known).
 
 import { CELL_DETAILS_STRIDE, MODE_STRIDE, type Frame } from "../model";
 import {

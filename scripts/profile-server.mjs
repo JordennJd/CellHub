@@ -4,10 +4,10 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const players = Number(process.env.PLAYERS ?? 40);
-const population = Number(process.env.CELLS ?? 10_000);
+const population = Number(process.env.CELLS ?? 7_000);
 const seconds = Number(process.env.SECONDS ?? 10);
 const layout = process.env.LAYOUT ?? "grid";
-assert(players > 0 && players <= 40 && population > 0 && population <= 20_000 && seconds > 0);
+assert(players > 0 && players <= 40 && population > 0 && population <= 7_000 && seconds > 0);
 assert(["grid", "colony", "piles"].includes(layout), `Unknown layout: ${layout}`);
 const server = spawn(process.env.SERVER_BIN ?? fileURLToPath(new URL("../target/release/cellhub-server", import.meta.url)),
   ["--bind", "127.0.0.1:0", "--max-players", String(players)],

@@ -53,6 +53,38 @@ test("network bond prediction keeps either anchored endpoint fixed and skips two
   }
 });
 
+test("local placement ghost appears immediately and yields to the authoritative cell", () => {
+  const cells = new Float32Array(2 * CELL_STRIDE);
+  cells.set([1, 100, 100, 10, 0, 1], 0);
+  cells.set([2, 160, 100, 10, 0, 1], CELL_STRIDE);
+  const world = new PredictionWorld();
+  world.applyChunk({
+    tick: 1, population: 2, births: 0, deaths: 0, infections: 0,
+    chunkX: 0, chunkY: 0, cells, links: new Uint32Array([1, 2]),
+    terrain: new Float32Array(),
+  }, 1000);
+  const genome = new Float32Array(2 + 102);
+  genome[2] = 0; // Photocyte.
+  genome[7] = 0.5; // Mode speed.
+  genome[18] = -1; // Default archetype colour.
+  world.predictSpawn(7, 50, 60, 0, genome, 3, 1100);
+  const idsOf = frame => Array.from(frame.cells)
+    .filter((_, index) => index % RENDER_STRIDE === 0);
+  assert(idsOf(world.frame()).includes(-1), "the pending spawn is visible before its ack");
+  world.applyAck(7, 9);
+  const next = new Float32Array(3 * CELL_STRIDE);
+  next.set(cells);
+  next.set([9, 50, 60, 10, 0, 1], 2 * CELL_STRIDE);
+  world.applyChunk({
+    tick: 2, population: 3, births: 1, deaths: 0, infections: 0,
+    chunkX: 0, chunkY: 0, cells: next,
+    links: new Uint32Array([1, 2]), terrain: new Float32Array(),
+  }, 1200);
+  const ids = idsOf(world.frame());
+  assert(!ids.includes(-1), "the ghost is gone once the real cell arrives");
+  assert(ids.includes(9));
+});
+
 test("v5 decoder handles dense/sparse rows and rejects malformed masks and lengths", async () => {
   const { decodeChunk } = await import(pathToFileURL(join(directory, "protocol.mjs")));
   for (const sparse of [false, true]) {

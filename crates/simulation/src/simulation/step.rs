@@ -9,12 +9,17 @@ use crate::genome::Genome;
 use std::collections::{BTreeMap, HashSet};
 
 const DIVISION_SEPARATION_SPEED: f32 = 100.;
+/// Up to this fraction of the population is culled per tick while the soft
+/// limit is only slightly exceeded. Above twice the limit the whole excess is
+/// retired, so a bloom cannot outrun the pressure.
+const POPULATION_CULL_DIVISOR: usize = 10;
 
 impl Simulation {
     pub(super) fn step(&mut self) {
         self.dispatch_level_demo();
         self.tick += 1;
         self.update_chaos();
+        self.cull_overpopulation();
         self.update_signals_and_secretions(STEP);
         let degrees = self.bond_degrees();
         self.exchange_bond_energy(STEP as f64 * 1.5, &degrees);
@@ -41,10 +46,9 @@ impl Simulation {
                 dead.push(e);
                 continue;
             }
-            if let Some(m) = item
-                .division
-                .filter(|_| population + children.len() / 2 < self.population_limit)
-            {
+            if let Some(m) = item.division.filter(|_| {
+                self.level.is_none() || population + children.len() / 2 < self.population_limit
+            }) {
                 let (p, c, g) = self
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(e)
@@ -215,5 +219,66 @@ impl Simulation {
         self.update_level_status();
         self.accumulate_owner_scores();
         self.record_chaos_history();
+    }
+
+    /// Soft population pressure. Sandbox, Chaos and multiplayer worlds accept
+    /// growth past `population_limit`, but the oldest cells start dying at a
+    /// rate that brings large overflows back within a few ticks. Campaign
+    /// substrates keep their authored hard cap and are never culled here.
+    fn cull_overpopulation(&mut self) {
+        if self.level.is_some() {
+            return;
+        }
+        let population = self.world.len() as usize;
+        let excess = population.saturating_sub(self.population_limit);
+        if excess == 0 {
+            return;
+        }
+        let budget = if population > 2 * self.population_limit {
+            excess
+        } else {
+            excess.min((population / POPULATION_CULL_DIVISOR).max(1))
+        };
+        let mut oldest: Vec<_> = self
+            .world
+            .query::<(&Cell, &Position)>()
+            .iter()
+            .map(|(entity, (cell, position))| (cell.age, cell.id, entity, *position))
+            .collect();
+        let compare = |a: &(f32, u32, _, Position), b: &(f32, u32, _, Position)| {
+            b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1))
+        };
+        if budget < oldest.len() {
+            oldest.select_nth_unstable_by(budget - 1, compare);
+            oldest.truncate(budget);
+        }
+        oldest.sort_unstable_by(compare);
+        let mut killed = HashSet::with_capacity(budget);
+        for (_, id, entity, position) in oldest.into_iter().take(budget) {
+            let event = self
+                .world
+                .query_one_mut::<(&Cell, &Genome)>(entity)
+                .ok()
+                .map(|(cell, genome)| {
+                    LevelEvent::new(self.tick, "death")
+                        .with_cell(cell)
+                        .with_position(&position)
+                        .with_color(genome, cell.mode)
+                        .with_detail("population pressure")
+                });
+            if self.world.despawn(entity).is_ok() {
+                killed.insert(id);
+                if let Some(event) = event {
+                    self.emit_level_event(event);
+                }
+            }
+        }
+        if killed.is_empty() {
+            return;
+        }
+        self.entities.retain(|&(id, _)| !killed.contains(&id));
+        self.bonds
+            .retain(|&(a, b)| !killed.contains(&a) && !killed.contains(&b));
+        self.deaths += killed.len() as u32;
     }
 }

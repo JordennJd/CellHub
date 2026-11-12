@@ -2,7 +2,7 @@ use super::Simulation;
 
 use crate::cell_types::{COUNT as KIND_COUNT, NITROCYTE as NITROCYTE_KIND};
 use crate::components::{
-    Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE, STEP, radius,
+    Cell, INITIAL_NITROGEN, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE, STEP, radius,
 };
 use crate::genome::{Genome, MODE_STRIDE, Mode, decode_checked};
 use crate::terrain::tile_index;
@@ -2052,23 +2052,28 @@ fn edit_is_isolated_and_boundary_motion_is_finite() {
     }
 }
 #[test]
-fn division_respects_population_limit() {
-    let mut s = Simulation::new(8);
-    let mut g = genes();
-    g[1] = 1.;
-    g[5] = 0.;
-    for i in 0..LIMIT - 1 {
-        s.spawn(
-            20. + (i % 80) as f32 * 37.,
-            20. + (i / 80) as f32 * 37.,
-            0,
-            &g,
-        )
-        .unwrap();
-    }
-    mature_all(&mut s);
+fn soft_population_limit_accepts_spawns_and_culls_oldest() {
+    let mut s = quiet_world();
+    s.settings.aging = false;
+    s.population_limit = 2;
+    let mut g = modern_genes(1);
+    g[8] = 0.; // Non-dividing, so only population pressure removes cells.
+    let old = s.spawn(100., 100., 0, &g).unwrap();
+    s.world.get::<&mut Cell>(entity(&s, old)).unwrap().age = 100.;
+    let young = s.spawn(200., 100., 0, &g).unwrap();
+    let extra = s.spawn(300., 100., 0, &g).unwrap();
+    // The soft limit does not reject placement above it.
+    assert_eq!(s.world.len(), 3);
     s.advance(1);
-    assert_eq!(s.world.len() as usize, LIMIT);
+    assert_eq!(s.world.len(), 2);
+    let ids: Vec<_> = s
+        .snapshot()
+        .chunks_exact(SNAPSHOT_STRIDE)
+        .map(|row| row[0] as u32)
+        .collect();
+    assert!(!ids.contains(&old), "the oldest cell dies first");
+    assert!(ids.contains(&young) && ids.contains(&extra));
+    assert_eq!(s.stats()[3], 1.);
 }
 #[test]
 fn chunk_snapshot_uses_programmed_speed_s8_connections_anchor_and_viscosity() {

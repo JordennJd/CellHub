@@ -25,7 +25,9 @@ impl Simulation {
         degrees: &BTreeMap<u32, usize>,
     ) -> MetabolismScratch {
         let population = entities.len();
-        let can_grow = population < self.population_limit;
+        // Campaign levels defer division at their authored cap. Everywhere else
+        // the limit is soft: growth continues and the oldest cells are culled.
+        let can_grow = self.level.is_none() || population < self.population_limit;
         let settings = self.settings;
         let boundary = self.boundary;
         let chaos = self.chaos.is_some();

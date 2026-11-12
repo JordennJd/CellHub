@@ -10,7 +10,7 @@ fn main() {
     let count = std::env::args()
         .nth(1)
         .and_then(|v| v.parse().ok())
-        .unwrap_or(20_000usize);
+        .unwrap_or(7_000usize);
     let ticks = std::env::args()
         .nth(2)
         .and_then(|v| v.parse().ok())

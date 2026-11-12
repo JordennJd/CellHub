@@ -13,13 +13,20 @@ pub(crate) fn pack_links(cells: &[f32], links: &[u32]) -> Result<Vec<f32>, &'sta
     }
     let mut positions = HashMap::with_capacity(cells.len() / CELL_VALUES);
     for cell in cells.chunks_exact(CELL_VALUES) {
-        let id = cell[0] as u32;
-        if id == 0
-            || id as f32 != cell[0]
-            || !cell[1].is_finite()
-            || !cell[2].is_finite()
-            || positions.insert(id, (cell[1], cell[2])).is_some()
-        {
+        let raw = cell[0];
+        if !cell[1].is_finite() || !cell[2].is_finite() {
+            return Err("Invalid cell ID or position in bond snapshot");
+        }
+        // Negative IDs are pending local spawns ("ghosts"). They are part of
+        // the scene before the server confirms them, but they never own bonds.
+        if raw < 0. {
+            if raw.fract() != 0. {
+                return Err("Invalid cell ID or position in bond snapshot");
+            }
+            continue;
+        }
+        let id = raw as u32;
+        if id == 0 || id as f32 != raw || positions.insert(id, (cell[1], cell[2])).is_some() {
             return Err("Invalid cell ID or position in bond snapshot");
         }
     }
@@ -55,6 +62,20 @@ mod tests {
     fn accepts_empty_world_and_removal_of_last_bond() {
         assert!(pack_links(&[], &[]).unwrap().is_empty());
         assert!(pack_links(&cells(), &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn ignores_unlinked_pending_spawn_ghosts() {
+        let mut c = cells();
+        c.extend([-1., 100., 100., 10., 0., 1., 0., 0., 0., 0., -1., 0.]);
+        assert_eq!(
+            pack_links(&c, &[2, 9]).unwrap(),
+            vec![10., 20., 40., 50., 2., 9.]
+        );
+        assert!(pack_links(&c, &[u32::MAX, 9]).is_err());
+        let ghost = c.len() - CELL_VALUES;
+        c[ghost] = -1.5;
+        assert!(pack_links(&c, &[2, 9]).is_err());
     }
     #[test]
     fn rejects_dangling_self_and_incomplete_bonds() {

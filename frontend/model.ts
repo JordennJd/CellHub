@@ -2,7 +2,8 @@ export const WORLD = 3072;
 export const CHAOS_WORLD = 3072;
 /// Fixed simulation cadence. Every worker and presentation timestamp uses it.
 export const TICK_RATE = 10;
-export const POPULATION_LIMIT = 20_000;
+/** Soft limit. Above it the simulation retires the oldest cells quickly. */
+export const POPULATION_LIMIT = 7_000;
 export const MAX_MODES = 1000;
 export const STRIDE = 12;
 export const DIVISION_STRIDE = 8;

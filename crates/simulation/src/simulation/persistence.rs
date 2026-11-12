@@ -318,7 +318,7 @@ impl Simulation {
                 }
                 previous = sample[0];
                 for n in &mut sample[1..] {
-                    *n = input.float(0., LIMIT as f32)?;
+                    *n = input.float(0., 4. * LIMIT as f32)?;
                 }
                 if sample[2..].iter().sum::<f32>() != sample[1] {
                     return Err("Invalid population sample".into());
@@ -427,7 +427,9 @@ impl Simulation {
                 return Err("Запас нитратов превышает ёмкость среды".into());
             }
         }
-        let genome_limit = if version >= 10 { 2 * LIMIT } else { LIMIT } as u32;
+        // Checkpoints may briefly contain the soft limit plus one tick of
+        // births, so the validation ceiling is deliberately above it.
+        let genome_limit = 4 * LIMIT as u32;
         let mut genomes = Vec::new();
         if version >= 5 {
             let count = input.integer(genome_limit)?;
@@ -435,7 +437,7 @@ impl Simulation {
                 genomes.push(read_genome(&mut input, version, false)?);
             }
         }
-        let count = input.integer(LIMIT as u32)?;
+        let count = input.integer(4 * LIMIT as u32)?;
         let mut ids = BTreeSet::new();
         for _ in 0..count {
             let id = input.integer(u32::MAX)?;

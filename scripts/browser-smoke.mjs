@@ -92,7 +92,7 @@ try{
  await until('window.__cellhubFrame?.details?.[7]===-0.75');
  console.log('PASS: real editor S8 output, cell inspector and exact experiment reload');
  // Engine stress is isolated from the UI; no undocumented ?count entry route.
- await evaluate(`(async()=>{const m=await import('/frontend/wasm/simulation.js');await m.default();const s=new m.Simulation(42);try{const g=new Float32Array([0,8,0,0,.5,0,0,1000,1,0,0,0]);for(let i=0;i<20000;i++)s.spawn(20+(i%142)*21,20+Math.floor(i/142)*21,0,g);s.advance(1);if(s.snapshot().length!==240000||!Array.from(s.snapshot()).every(Number.isFinite))throw Error('Invalid 20000-cell fixture');}finally{s.free();}})()`);
+ await evaluate(`(async()=>{const m=await import('/frontend/wasm/simulation.js');await m.default();const s=new m.Simulation(42);try{const g=new Float32Array([0,8,0,0,.5,0,0,1000,1,0,0,0]);for(let i=0;i<7000;i++)s.spawn(20+(i%142)*21,20+Math.floor(i/142)*21,0,g);s.advance(1);if(s.snapshot().length!==84000||!Array.from(s.snapshot()).every(Number.isFinite))throw Error('Invalid 7000-cell fixture');}finally{s.free();}})()`);
  await click('← Меню');await confirm();
  await verifyTouchControls({call,evaluate,until,delay,screenshot,url,openSandbox,click});
  if(await evaluate("!!document.createElement('canvas').getContext('webgl2')")){

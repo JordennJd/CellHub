@@ -526,7 +526,10 @@ impl Simulation {
         if mode >= genome.len() {
             return Err("Invalid spawn archetype".to_owned());
         }
-        if self.world.len() as usize >= self.population_limit {
+        // Campaign substrates keep their authored hard cap. Sandbox, Chaos and
+        // multiplayer worlds use the soft limit instead: a spawn is accepted and
+        // the oldest cells are culled on the following tick.
+        if self.level.is_some() && self.world.len() as usize >= self.population_limit {
             return Err(format!("Population limit: {}", self.population_limit));
         }
         let id = self.next_id;
