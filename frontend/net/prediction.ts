@@ -26,7 +26,10 @@ import {
 
 const WORLD = 3072;
 const SIZE_MARGIN = 12;
-const PREDICTION_HORIZON_MS = 1600;
+// The server streams one chunk per 10 Hz tick, so a given chunk returns about
+// every 3.6 s. The horizon must outlive one full cycle, otherwise cells freeze
+// between authoritative updates; stale cells still stop once retired by a chunk.
+const PREDICTION_HORIZON_MS = 4000;
 const SOLVER_PASSES = 12;
 const CONSTRAINT_BUDGET = 12_000;
 

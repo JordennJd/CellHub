@@ -2,7 +2,7 @@
 //!
 //! The files in `/levels` are the product, not test fixtures. This test is the
 //! contract that keeps the data honest: it loads each manifest through the same
-//! JSON path the browser uses, plays the demo track at 30 Hz and fails on a
+//! JSON path the browser uses, plays the demo track at 10 Hz and fails on a
 //! timeout or loss. Scripted tutorials are skipped because their original
 //! lessons have no ordinary win condition.
 //!
@@ -184,7 +184,7 @@ fn check_level(id: &str, path: &Path, wall: Duration) -> Result<String, String> 
     let started = Instant::now();
     let mut elapsed = 0u32;
     loop {
-        simulation.advance(30);
+        simulation.advance(10);
         elapsed += 1;
         let status = status(&simulation);
         if status["demoError"].is_string() {

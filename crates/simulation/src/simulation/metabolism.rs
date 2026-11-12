@@ -3,11 +3,11 @@ use super::Simulation;
 use super::interactions::ContactMotion;
 use super::program::{SPEED_TARGET, controlled_value};
 use super::specialized::{buoyant_drift, corpse_food, differentiate};
-use super::step::STEP;
 use crate::cell_types::GAMETE;
 use crate::cell_types::{
     BUOYOCYTE, COUNT, FLAGELLOCYTE, KERATINOCYTE, LIPOCYTE, PHAGOCYTE, PHOTOCYTE,
 };
+use crate::components::STEP;
 use crate::components::{Cell, MIN_DIVISION_AGE, NITROGEN_DEATH, NITROGEN_DIVISION, Position};
 use crate::genome::Genome;
 
@@ -15,6 +15,8 @@ use std::collections::BTreeMap;
 
 const MIN_CELL_MASS: f32 = 0.18;
 const MOMENTUM_DRAG: f32 = 4.;
+/// Maximum random heading change per second for an unlinked cell.
+pub(super) const RANDOM_TURN_RATE: f32 = 10.5;
 
 impl Simulation {
     pub(super) fn metabolize(
@@ -144,7 +146,9 @@ impl Simulation {
                 // Passive members have drag, but no independent random locomotion.
                 let linked = degree != 0;
                 if !linked {
-                    p.angle += (noise - 0.5) * 0.35;
+                    // Random locomotion is a rate: keep the same turn per second
+                    // when the fixed cadence changes.
+                    p.angle += (noise - 0.5) * RANDOM_TURN_RATE * STEP;
                 }
                 let speed = if m.kind == FLAGELLOCYTE {
                     programmed_speed

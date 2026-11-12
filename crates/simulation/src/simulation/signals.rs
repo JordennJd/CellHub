@@ -450,7 +450,7 @@ mod tests {
         sim.bonds
             .extend([(source, middle), (middle, lipid), (lipid, end)]);
         for _ in 0..100 {
-            sim.update_signals_and_secretions(1. / 30.);
+            sim.update_signals_and_secretions(crate::components::STEP);
         }
         assert_eq!(state(&sim, source).signals[7], -2.);
         assert!(state(&sim, middle).signals[7] < -0.5);
@@ -459,7 +459,7 @@ mod tests {
         let entity = sim.entities[0].1;
         sim.world.get::<&mut Cell>(entity).unwrap().toxin = 1.;
         for _ in 0..100 {
-            sim.update_signals_and_secretions(1. / 30.);
+            sim.update_signals_and_secretions(crate::components::STEP);
         }
         assert!(state(&sim, lipid).toxin > 0.);
         assert!(state(&sim, end).toxin > 0.);
@@ -480,16 +480,16 @@ mod tests {
             .get::<&mut Position>(sim.entities[0].1)
             .unwrap()
             .angle = 0.;
-        sim.update_signals_and_secretions(1. / 30.);
+        sim.update_signals_and_secretions(crate::components::STEP);
         assert!(state(&sim, sensor).signals[0] > 0.5);
         sim.world.get::<&mut Position>(sim.entities[1].1).unwrap().y = 470.;
-        sim.update_signals_and_secretions(1. / 30.);
+        sim.update_signals_and_secretions(crate::components::STEP);
         assert!(state(&sim, sensor).signals[0] < -0.5);
         sim.world
             .get::<&mut Cell>(sim.entities[0].1)
             .unwrap()
             .mirrored = true;
-        sim.update_signals_and_secretions(1. / 30.);
+        sim.update_signals_and_secretions(crate::components::STEP);
         assert!(state(&sim, sensor).signals[0] > 0.5);
         let entity = sim
             .entities
@@ -498,7 +498,7 @@ mod tests {
             .unwrap()
             .1;
         sim.world.get::<&mut Genome>(entity).unwrap().modes_mut()[0].color = [0., 0., 1.];
-        sim.update_signals_and_secretions(1. / 30.);
+        sim.update_signals_and_secretions(crate::components::STEP);
         assert_eq!(state(&sim, sensor).signals[0], 0.);
     }
 
@@ -522,11 +522,11 @@ mod tests {
                     .angle = 0.;
                 spawn(&mut sim, PHOTOCYTE, 500., 485., |_| {});
                 spawn(&mut sim, target_kind, 500., 550., |_| {});
-                sim.update_signals_and_secretions(1. / 30.);
+                sim.update_signals_and_secretions(crate::components::STEP);
                 assert_eq!(state(&sim, id).signals, [0.; SIGNAL_CHANNELS]);
 
                 spawn(&mut sim, target_kind, 500., 520., |_| {});
-                sim.update_signals_and_secretions(1. / 30.);
+                sim.update_signals_and_secretions(crate::components::STEP);
                 let signals = state(&sim, id).signals;
                 assert_eq!(signals[..7], [0.; 7]);
                 assert_eq!(signals[7], 0.5);
@@ -546,20 +546,20 @@ mod tests {
             let id = spawn(&mut sim, 11, 1500., 1500., |m| {
                 m.sensor = sensor;
             });
-            sim.update_signals_and_secretions(1. / 30.);
+            sim.update_signals_and_secretions(crate::components::STEP);
             let baseline = state(&sim, id).signals[0];
             spawn(&mut sim, 14, 1520., 1500., |m| {
                 m.secretion = secretion;
                 m.secretion_rate = 1.;
             });
-            sim.update_signals_and_secretions(1. / 30.);
+            sim.update_signals_and_secretions(crate::components::STEP);
             let one = state(&sim, id).signals[0] - baseline;
             assert!(one > 0.7);
             spawn(&mut sim, 14, 1480., 1500., |m| {
                 m.secretion = secretion;
                 m.secretion_rate = 1.;
             });
-            sim.update_signals_and_secretions(1. / 30.);
+            sim.update_signals_and_secretions(crate::components::STEP);
             let two = state(&sim, id).signals[0] - baseline;
             assert!((two - 2. * one).abs() < 0.0001);
         }
@@ -608,7 +608,7 @@ mod tests {
         let b = spawn(&mut sim, 0, 510., 505., |_| {});
         let far = spawn(&mut sim, 0, 540., 500., |_| {});
         sim.bonds.extend([(a, b), (b, far)]);
-        sim.update_signals_and_secretions(1. / 30.);
+        sim.update_signals_and_secretions(crate::components::STEP);
         assert!(!sim.bonds.contains(&(a, b)));
         assert!(sim.bonds.contains(&(b, far)));
     }
@@ -641,7 +641,7 @@ mod tests {
                 };
             }
         });
-        neural.update_signals_and_secretions(1. / 30.);
+        neural.update_signals_and_secretions(crate::components::STEP);
         for (channel, value) in state(&neural, neuron).signals.into_iter().enumerate() {
             assert_eq!(value, channel as f32 * 0.2 - 0.7);
         }
@@ -661,7 +661,7 @@ mod tests {
                 },
             );
         }
-        contact.update_signals_and_secretions(1. / 30.);
+        contact.update_signals_and_secretions(crate::components::STEP);
         assert!(
             state(&contact, target)
                 .signals

@@ -89,7 +89,7 @@ async fn room_metrics(
             })
         })
         .collect();
-    axum::Json(serde_json::json!({ "tickBudgetUs": 33333, "rooms": values }))
+    axum::Json(serde_json::json!({ "tickRate": 10, "tickBudgetUs": 100000, "rooms": values }))
 }
 
 struct Config {

@@ -2,7 +2,7 @@
 
 use super::Simulation;
 use super::boundary::Boundary;
-use crate::components::{Cell, LIMIT, Position, radius};
+use crate::components::{Cell, LIMIT, Position, STEP, TICK_RATE, radius};
 use crate::genome::{Genome, MAX_MODES, MODE_STRIDE, Mode, decode_checked};
 #[cfg(test)]
 use crate::terrain::{CHAOS_GRID, index};
@@ -11,6 +11,13 @@ use wasm_bindgen::prelude::*;
 
 pub(super) const HISTORY_LIMIT: usize = 300;
 pub(super) const EVENT_LIMIT: usize = 80;
+
+/// Full day/night cycle: 60 seconds of simulated time.
+pub(super) const DAY_TICKS: u32 = 60 * TICK_RATE;
+/// A curated multicellular organism arrives once every 15 seconds.
+pub(super) const ORGANISM_INTERVAL: u32 = 15 * TICK_RATE;
+/// First spontaneous arrival happens after six seconds.
+pub(super) const FIRST_SPAWN_TICKS: u32 = 6 * TICK_RATE;
 
 /// A curated multicellular organism supplied by the frontend catalog.
 #[derive(Clone)]
@@ -50,7 +57,7 @@ impl Chaos {
             enabled: true,
             rate: 10,
             viable: true,
-            next_spawn: 180,
+            next_spawn: FIRST_SPAWN_TICKS,
             spawned: 0,
             organisms_spawned: 0,
             history: Vec::new(),
@@ -68,7 +75,7 @@ impl Chaos {
 
 /// Continuous daylight: noon at t=0, minimum 40% at t=30, next noon at t=60.
 pub(super) fn daylight(tick: u32) -> f32 {
-    0.7 + 0.3 * libm::cosf((tick % 1800) as f32 / 1800. * std::f32::consts::TAU)
+    0.7 + 0.3 * libm::cosf((tick % DAY_TICKS) as f32 / DAY_TICKS as f32 * std::f32::consts::TAU)
 }
 
 /// Analytic seeded orbits keep clouds independent of biology and spawn RNG.
@@ -187,7 +194,7 @@ fn clouds_rect(seed: u32, tick: u32, width: f32, height: f32) -> [[f32; 6]; 3] {
         let phase = random(&mut rng) * std::f32::consts::TAU;
         let period = 100. + random(&mut rng) * 100.;
         let radius = 650. + random(&mut rng) * 350.;
-        let a = phase + tick as f32 / 30. / period * std::f32::consts::TAU;
+        let a = phase + tick as f32 / TICK_RATE as f32 / period * std::f32::consts::TAU;
         let orbit = 1000. + i as f32 * 300.;
         let omega = std::f32::consts::TAU / period;
         [
@@ -267,7 +274,7 @@ impl Simulation {
         }
         if let Some(chaos) = &mut self.chaos {
             if chaos.enabled != enabled || chaos.rate != rate {
-                chaos.next_spawn = self.tick + 1800 / rate;
+                chaos.next_spawn = self.tick + DAY_TICKS / rate;
             }
             chaos.enabled = enabled;
             chaos.rate = rate;
@@ -299,8 +306,8 @@ impl Simulation {
             chaos.enabled as u8 as f64,
             chaos.rate as f64,
             chaos.viable as u8 as f64,
-            chaos.next_spawn.saturating_sub(self.tick) as f64 / 30.,
-            (450 - self.tick % 450) as f64 / 30.,
+            chaos.next_spawn.saturating_sub(self.tick) as f64 / TICK_RATE as f64,
+            (ORGANISM_INTERVAL - self.tick % ORGANISM_INTERVAL) as f64 / TICK_RATE as f64,
             chaos.spawned as f64,
             chaos.organisms_spawned as f64,
             chaos.organisms.len() as f64,
@@ -454,18 +461,18 @@ impl Simulation {
             return;
         }
         self.refresh_chaos_fields();
-        if self.tick % 1800 == 450 {
+        if self.tick % DAY_TICKS == DAY_TICKS / 4 {
             self.chaos.as_mut().unwrap().event(self.tick, 2, 0);
         }
-        if self.tick % 1800 == 1350 {
+        if self.tick % DAY_TICKS == DAY_TICKS * 3 / 4 {
             self.chaos.as_mut().unwrap().event(self.tick, 1, 0);
         }
         let chaos = self.chaos.as_mut().unwrap();
         let due = self.tick >= chaos.next_spawn;
         if due {
-            chaos.next_spawn = self.tick + 1800 / chaos.rate;
+            chaos.next_spawn = self.tick + DAY_TICKS / chaos.rate;
         }
-        let organism = self.tick % 450 == 0;
+        let organism = self.tick % ORGANISM_INTERVAL == 0;
         if chaos.enabled && (due || organism) {
             self.chaos_arrival(organism, true);
         }
@@ -582,11 +589,11 @@ impl Simulation {
         let Some(chaos) = &mut self.chaos else {
             return;
         };
-        if self.tick % 30 != 0 {
+        if self.tick % TICK_RATE != 0 {
             return;
         }
         let mut sample = [0.; 20];
-        sample[0] = self.tick as f32 / 30.;
+        sample[0] = self.tick as f32 * STEP;
         sample[1] = self.world.len() as f32;
         for (_, (cell, genome)) in self.world.query::<(&Cell, &Genome)>().iter() {
             sample[2 + genome.mode(cell.mode).kind as usize] += 1.;
@@ -840,26 +847,26 @@ mod tests {
         sim.advance(1);
         let row = sim.snapshot();
         assert_eq!(row[0], id as f32);
-        assert!((row[5] - (1. + 0.18 / 30. * 1.6 - 0.025 / 30.)).abs() < 1e-6);
+        assert!((row[5] - (1. + 0.18 * STEP * 1.6 - 0.025 * STEP)).abs() < 1e-6);
         assert!(
-            (sim.tiles[tile].food - (0.5 + 0.018 / 30. * regeneration - 0.18 / 30.)).abs() < 1e-6
+            (sim.tiles[tile].food - (0.5 + 0.018 * STEP * regeneration - 0.18 * STEP)).abs() < 1e-6
         );
     }
 
     #[test]
     fn daylight_is_smooth_mild_and_clouds_are_independent_of_spawn_randomness() {
         assert!((daylight(0) - 1.).abs() < 1e-6);
-        assert!((daylight(900) - 0.4).abs() < 1e-6);
-        assert_eq!(daylight(0), daylight(1800));
-        for tick in 1..1800 {
-            assert!((daylight(tick) - daylight(tick - 1)).abs() < 0.002);
+        assert!((daylight(DAY_TICKS / 2) - 0.4).abs() < 1e-6);
+        assert_eq!(daylight(0), daylight(DAY_TICKS));
+        for tick in 1..DAY_TICKS {
+            assert!((daylight(tick) - daylight(tick - 1)).abs() < 0.004);
         }
         let mut a = world(5);
         let mut b = world(5);
         b.configure_chaos(false, 10, true).unwrap();
         let before = clouds(a.seed, 0);
-        advance(&mut a, 181);
-        advance(&mut b, 181);
+        advance(&mut a, FIRST_SPAWN_TICKS + 1);
+        advance(&mut b, FIRST_SPAWN_TICKS + 1);
         assert_ne!(before, clouds(a.seed, a.tick));
         assert_eq!(
             a.tiles
@@ -876,33 +883,34 @@ mod tests {
     #[test]
     fn immigration_starts_at_six_seconds_and_fifteenth_second_spawns_organism() {
         let mut sim = world(9);
-        advance(&mut sim, 179);
+        advance(&mut sim, FIRST_SPAWN_TICKS - 1);
         assert_eq!(sim.chaos.as_ref().unwrap().spawned, 0);
         sim.advance(1);
         assert_eq!(sim.chaos.as_ref().unwrap().spawned, 1);
-        advance(&mut sim, 270);
+        advance(&mut sim, ORGANISM_INTERVAL - FIRST_SPAWN_TICKS - 1);
+        let before = sim.next_id;
+        sim.advance(1);
         let chaos = sim.chaos.as_ref().unwrap();
         assert_eq!(chaos.organisms_spawned, 1);
         assert_eq!(chaos.spawned, 5);
         let event = chaos.events.last().unwrap();
-        assert_eq!(event[0], 450);
+        assert_eq!(event[0], ORGANISM_INTERVAL);
         assert_eq!(event[1], 4);
         assert_eq!(event[2], 3);
-        let ids: Vec<_> = sim
-            .entities
-            .iter()
-            .map(|&(id, _)| id)
-            .filter(|&id| id >= sim.next_id - event[2])
-            .collect();
+        let ids: Vec<_> = (before..before + event[2]).collect();
         assert_eq!(ids.len(), event[2] as usize);
         for pair in ids.windows(2) {
-            assert!(sim.bonds.contains(&(pair[0], pair[1])));
+            assert!(
+                sim.bonds.contains(&(pair[0], pair[1])),
+                "ids {ids:?} bonds {:?}",
+                sim.bonds
+            );
         }
         assert_eq!(sim.cell_mode(ids[0] as u32), 0);
         assert_eq!(sim.cell_mode(ids[2] as u32), 2);
         sim.configure_chaos(false, 10, true).unwrap();
         let spawned = sim.chaos.as_ref().unwrap().spawned;
-        advance(&mut sim, 901);
+        advance(&mut sim, DAY_TICKS / 2);
         assert_eq!(sim.chaos.as_ref().unwrap().spawned, spawned);
     }
 
@@ -1122,7 +1130,7 @@ mod tests {
         assert_eq!(sim.chaos.as_ref().unwrap().spawned, 0);
         sim.sterilize();
         for second in 1..400 {
-            sim.tick = second * 30;
+            sim.tick = second * TICK_RATE;
             sim.record_chaos_history();
         }
         assert_eq!(sim.chaos.as_ref().unwrap().history.len(), HISTORY_LIMIT);

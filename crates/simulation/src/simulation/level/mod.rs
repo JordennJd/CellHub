@@ -17,16 +17,12 @@ use super::boundary::Boundary;
 use super::environment::Environment;
 use crate::components::{
     CLASS_HYBRID, CLASS_INFECTED, CLASS_LEVEL, CLASS_USER, Cell, INITIAL_NITROGEN, LIMIT, Position,
-    SIZE, radius,
+    SIZE, STEP, radius,
 };
 use crate::genome::Genome;
 use crate::terrain::{GRID, Tile, map, nitrate_capacity};
 use serde::Serialize;
 use std::collections::{BTreeSet, VecDeque};
-
-/// Seconds per simulation tick. Kept local so demo timestamps and objective
-/// timers cannot drift from the step loop.
-pub(crate) const STEP: f32 = 1. / 30.;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LevelState {

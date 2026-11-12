@@ -20,7 +20,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 const LIMIT: usize = 20_000;
-const TICK_MS: f64 = 1000. / 30.;
+const TICK_MS: f64 = 1000. / 10.;
 const SEED: u32 = 73_421;
 
 fn main() {

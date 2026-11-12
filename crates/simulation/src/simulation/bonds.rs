@@ -5,7 +5,7 @@ use super::boundary::Boundary;
 use super::interactions::{Components, for_each_island};
 use super::program::{BENDING_TARGET, CONTRACTION_TARGET, LIFT_TARGET, controlled_value};
 use crate::cell_types::{BUOYOCYTE, MYOCYTE, is_motile};
-use crate::components::{Cell, MAX_RECOIL_MOMENTUM, Position, radius};
+use crate::components::{Cell, MAX_RECOIL_MOMENTUM, Position, STEP, radius};
 use crate::genome::Genome;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet};
@@ -347,7 +347,7 @@ impl Simulation {
                 if !cell.anchored && muscle[2] != 0. {
                     (p.x, p.y, _) =
                         self.boundary
-                            .constrain(p.x, p.y - muscle[2] * (8. / 30.), cell.mass, 12.);
+                            .constrain(p.x, p.y - muscle[2] * (8. * STEP), cell.mass, 12.);
                 }
                 BondBody {
                     entity,

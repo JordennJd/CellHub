@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { flatten, STRIDE, TYPES, type Command, type Frame, type Mode } from "../model";
+import { TICK_RATE, flatten, STRIDE, TYPES, type Command, type Frame, type Mode } from "../model";
 import { DivisionAnimator, divisionMotionEnabled, playDivisionAnimation } from "../division-animation";
 
 import { drawCell, cellExtents } from "./cell-drawing";
@@ -62,7 +62,7 @@ export function GenomePreview({ genome, initialMode }: { genome: Mode[]; initial
     }
     const timer = window.setTimeout(() => {
       const command: Command = {
-        type: "preview", genome: flatten(genome), mode: initialMode, steps: age * 30, requestId: request.id,
+        type: "preview", genome: flatten(genome), mode: initialMode, steps: age * TICK_RATE, requestId: request.id,
       };
       worker.current?.postMessage(command);
     }, 160);

@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
 import init, { Simulation } from "./wasm/simulation.js";
 import { chaosOrganismsBuffer } from "./organisms";
-import type { Command, WorldCommand } from "./model";
+import { TICK_RATE, type Command, type WorldCommand } from "./model";
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let sim: Simulation;
 let speed = 0;
@@ -301,17 +301,17 @@ try {
     needFrame = commands() || needFrame;
     debt += Math.min((now - last) / 1000, 0.25) * speed;
     last = now;
-    const steps = Math.min(120, Math.floor(debt * 30));
+    const steps = Math.min(40, Math.floor(debt * TICK_RATE));
     if (steps) {
       advance(steps);
-      debt -= steps / 30;
+      debt -= steps / TICK_RATE;
       needFrame = true;
     }
     if (needFrame) {
       frame();
       needFrame = false;
     }
-  }, 1000 / 30);
+  }, 1000 / TICK_RATE);
 } catch (e) {
   ctx.postMessage({ type: "error", message: `WASM: ${String(e)}` });
 }

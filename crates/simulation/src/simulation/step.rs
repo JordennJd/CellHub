@@ -4,11 +4,10 @@ use super::Simulation;
 use super::bonds::{ADHESION_GAP, BondDivision};
 use super::interactions::ContactMotion;
 use super::level::LevelEvent;
-use crate::components::{Cell, LIMIT, MAX_RECOIL_MOMENTUM, Position, radius};
+use crate::components::{Cell, LIMIT, MAX_RECOIL_MOMENTUM, Position, STEP, radius};
 use crate::genome::Genome;
 use std::collections::{BTreeMap, HashSet};
 
-pub(super) const STEP: f32 = 1. / 30.;
 const DIVISION_SEPARATION_SPEED: f32 = 100.;
 
 impl Simulation {

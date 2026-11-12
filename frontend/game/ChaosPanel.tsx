@@ -1,6 +1,6 @@
 import { Slider } from "../editor/Slider";
 import { useEffect, useRef, useState } from 'react';
-import { TYPES, type Frame } from '../model';
+import { TICK_RATE, TYPES, type Frame } from '../model';
 import type { ViewState } from '../world-view-types';
 import './chaos.css';
 
@@ -22,7 +22,7 @@ type ChaosData = NonNullable<Frame['chaos']>;
 export function ChaosStatus({ frame }: { frame: Frame | null }) {
     const info = frame?.chaos?.info;
     if (!info) return null;
-    const phase = ((frame?.stats[0] ?? 0) / 30) % 60;
+    const phase = ((frame?.stats[0] ?? 0) / TICK_RATE) % 60;
     const label = phase < 15 ? 'День → закат' : phase < 30 ? 'Закат → ночь' : phase < 45 ? 'Ночь → рассвет' : 'Рассвет → день';
     return <div className="chaos-status" role="status" aria-live="off">
         <span>{label} · свет {Math.round(info[1] * 100)}%</span>
@@ -87,7 +87,7 @@ export function ChaosObservation({ data }: { data: ChaosData }) {
             </svg>
         </figure>
         <details><summary>Состав по типам</summary><ul className="chaos-type-list">{TYPES.map((type, i) => <li key={type.latin}><i style={{ background: `#${type.color.toString(16).padStart(6, '0')}` }}/>{type.name}<strong>{last?.[i + 2] ?? 0}</strong></li>)}</ul></details>
-        <h3>Журнал мира</h3><ol className="chaos-journal">{events.map((event, i) => <li key={`${event[0]}-${i}`}><time>{(event[0] / 30).toFixed(1)} с</time><span>{describe(event[1], event[2])}</span></li>)}</ol>
+        <h3>Журнал мира</h3><ol className="chaos-journal">{events.map((event, i) => <li key={`${event[0]}-${i}`}><time>{(event[0] / TICK_RATE).toFixed(1)} с</time><span>{describe(event[1], event[2])}</span></li>)}</ol>
     </section>;
 }
 

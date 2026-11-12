@@ -14,10 +14,10 @@ use tracing::{info, warn};
 
 pub type RoomRegistry = Arc<tokio::sync::RwLock<HashMap<String, Arc<RoomHandle>>>>;
 
-/// Network and authority cadence. The simulation advances one fixed 1/30 s
+/// Network and authority cadence. The simulation advances one fixed 1/10 s
 /// step per tick, so biology, scores and wall time stay in sync.
-const TICK_RATE: u64 = 30;
-const LEADERBOARD_EVERY_TICKS: u32 = 30;
+const TICK_RATE: u64 = 10;
+const LEADERBOARD_EVERY_TICKS: u32 = TICK_RATE as u32;
 const SPAWN_COOLDOWN: Duration = Duration::from_secs(2);
 const EMPTY_ROOM_TTL: Duration = Duration::from_secs(30);
 

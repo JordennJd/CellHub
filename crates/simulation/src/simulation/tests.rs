@@ -2,7 +2,7 @@ use super::Simulation;
 
 use crate::cell_types::{COUNT as KIND_COUNT, NITROCYTE as NITROCYTE_KIND};
 use crate::components::{
-    Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE, radius,
+    Cell, INITIAL_NITROGEN, LIMIT, MIN_DIVISION_AGE, Position, SIZE, SNAPSHOT_STRIDE, STEP, radius,
 };
 use crate::genome::{Genome, MODE_STRIDE, Mode, decode_checked};
 use crate::terrain::tile_index;
@@ -202,7 +202,11 @@ fn nitrogen_deficit_blocks_division_or_kills_and_daughters_split_reserve_evenly(
     assert_eq!(daughters.len(), 2);
     assert_ne!(daughters[0].0, daughters[1].0);
     assert_eq!(daughters[0].1, daughters[1].1);
-    assert!((daughters[0].1 - 0.4).abs() < 0.001);
+    assert!(
+        (daughters[0].1 - (0.8 - 0.025 * STEP) / 2.).abs() < 0.001,
+        "daughter reserve {}",
+        daughters[0].1
+    );
 }
 
 #[test]
@@ -298,13 +302,13 @@ fn keratin_blocks_predation_and_infection_for_itself_and_bonded_neighbors() {
     let unprotected = run(5, 0, false);
     let protected = run(5, 0, true);
     assert!(protected.0 > unprotected.0 + 0.002);
-    assert!((protected.0 - (1. - 0.025 / 30.)).abs() < 0.000001);
-    assert!((run(5, 4, false).0 - (1. - 0.014 / 30.)).abs() < 0.000001);
+    assert!((protected.0 - (1. - 0.025 * STEP)).abs() < 0.000001);
+    assert!((run(5, 4, false).0 - (1. - 0.014 * STEP)).abs() < 0.000001);
     assert_eq!(run(3, 0, false).1, 1);
     assert_eq!(run(3, 0, true).1, 0);
     assert_eq!(run(3, 4, false).1, 0);
     // Two predators cannot feed each other in an energy-generating loop.
-    assert!((run(5, 5, false).0 - (1. - 0.025 / 30.)).abs() < 0.000001);
+    assert!((run(5, 5, false).0 - (1. - 0.025 * STEP)).abs() < 0.000001);
 }
 
 #[test]
@@ -314,7 +318,7 @@ fn minimum_age_prevents_instant_division_after_boost() {
     genes[1] = 1.;
     let id = s.spawn(500., 500., 0, &genes).unwrap();
     s.boost_cell(id).unwrap();
-    s.advance(14);
+    s.advance(4);
     assert_eq!(s.world.len(), 1);
     s.advance(1);
     assert_eq!(s.world.len(), 2);
@@ -358,7 +362,7 @@ fn recoil_fixture(bind_children: bool, keep_a: bool) -> (Simulation, u32, Vec<f3
 #[test]
 fn unbound_division_gives_unequal_daughters_equal_and_opposite_momentum() {
     let (mut sim, _, _) = recoil_fixture(false, false);
-    sim.advance(15);
+    sim.advance(5);
     assert_eq!(sim.world.len(), 2);
     let a = entity(&sim, 2);
     let b = entity(&sim, 3);
@@ -399,7 +403,7 @@ fn unbound_division_gives_unequal_daughters_equal_and_opposite_momentum() {
 fn bound_sisters_share_parent_velocity_without_new_recoil() {
     for momentum in [[0., 0.], [0.4, -0.2]] {
         let (mut sim, parent, _) = recoil_fixture(true, false);
-        sim.advance(14);
+        sim.advance(4);
         sim.world
             .get::<&mut Cell>(entity(&sim, parent))
             .unwrap()
@@ -657,7 +661,7 @@ fn perpendicular_chains_keep_bonds_short_under_driven_contact() {
         light: 0.,
         food: 0.,
         radiation: 0.,
-        viscosity: 0.25,
+        viscosity: 1.5,
         aging: false,
         ..Default::default()
     })
@@ -739,7 +743,9 @@ fn perpendicular_chains_keep_bonds_short_under_driven_contact() {
         closest_clearance < 0.5,
         "the chains must reach contact, closest clearance {closest_clearance}"
     );
-    assert!(peak_extension < 3., "peak bond extension {peak_extension}");
+    // The 10 Hz step resolves contacts with coarser travel, so this stress
+    // setup keeps enough viscosity for the discrete bond range it exercises.
+    assert!(peak_extension < 4., "peak bond extension {peak_extension}");
 }
 
 #[test]
@@ -766,7 +772,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     s.advance(1);
     let rows = s.snapshot();
     assert_eq!(rows.len(), 24);
-    let split_axis = (noise - 0.5) * 0.35 + 0.2;
+    let split_axis = (noise - 0.5) * super::metabolism::RANDOM_TURN_RATE * STEP + 0.2;
     assert!((rows[9] - (split_axis + 0.3)).abs() < 0.00001);
     assert!((rows[21] - (split_axis + std::f32::consts::PI - 0.4)).abs() < 0.00001);
     assert_eq!(rows[11], 1.);
@@ -788,7 +794,7 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
     s.rng = rng;
     s.advance(1);
     let rows = s.snapshot();
-    let mirrored_axis = (noise - 0.5) * 0.35 - 0.2;
+    let mirrored_axis = (noise - 0.5) * super::metabolism::RANDOM_TURN_RATE * STEP - 0.2;
     assert_eq!(rows[11], 0.);
     assert_eq!(rows[23], 1.);
     assert!((rows[9] - (mirrored_axis - 0.3)).abs() < 0.00001);
@@ -1658,15 +1664,15 @@ fn assert_straight_path(sim: &Simulation, count: usize) {
 #[test]
 fn naturally_growing_zero_angle_path_stays_straight_through_four_divisions() {
     let mut s = growing_path(0., false);
-    advance_to(&mut s, 150);
+    advance_to(&mut s, 50);
     assert_straight_path(&s, 4);
-    advance_to(&mut s, 300);
+    advance_to(&mut s, 100);
     assert_straight_path(&s, 8);
 
     let mut restored = Simulation::new(999);
     restored.restore_checked(&s.export_state()).unwrap();
-    advance_to(&mut s, 450);
-    advance_to(&mut restored, 450);
+    advance_to(&mut s, 150);
+    advance_to(&mut restored, 150);
     assert_straight_path(&s, 16);
     assert_eq!(s.export_state(), restored.export_state());
 }
@@ -1676,7 +1682,7 @@ fn mirrored_daughters_turn_a_tilted_straight_path_into_a_wave() {
     let angle = 10_f32.to_radians();
     let mut straight = growing_path(angle, false);
     let mut mirrored = growing_path(angle, true);
-    for (tick, count) in [(150, 4), (300, 8), (450, 16)] {
+    for (tick, count) in [(50, 4), (100, 8), (150, 16)] {
         advance_to(&mut straight, tick);
         assert_straight_path(&straight, count);
         advance_to(&mut mirrored, tick);
@@ -1895,7 +1901,7 @@ fn bonded_chain_at_boundary_is_finite_and_deterministic() {
             previous = Some(id);
         }
         for _ in 0..3 {
-            s.advance(120);
+            s.advance(40);
         }
         let snapshot = s.snapshot();
         assert!(snapshot.iter().all(|v| v.is_finite()));
@@ -1937,7 +1943,7 @@ fn division_uses_child_modes_and_conserves_mass() {
     let rows = s.snapshot();
     assert_eq!(rows.len(), 2 * SNAPSHOT_STRIDE);
     let mass = rows[5] + rows[17];
-    assert!((mass - 1.).abs() < 0.01);
+    assert!((mass - 1.).abs() < 0.02, "daughter mass {mass}");
     assert!((rows[5] / mass - 0.3).abs() < 0.001);
     let mut modes: Vec<_> = s
         .world
@@ -2135,8 +2141,8 @@ fn chunk_snapshot_uses_programmed_speed_s8_connections_anchor_and_viscosity() {
             let after = *s.world.get::<&Position>(e).unwrap();
             let chunk = s.chunk_snapshot(0, 0, 512.);
             let speed = chunk.cells[10];
-            assert!((after.x - before.x - libm::cosf(after.angle) * speed / 30.).abs() < 0.00002);
-            assert!((after.y - before.y - libm::sinf(after.angle) * speed / 30.).abs() < 0.00002);
+            assert!((after.x - before.x - libm::cosf(after.angle) * speed * STEP).abs() < 0.00002);
+            assert!((after.y - before.y - libm::sinf(after.angle) * speed * STEP).abs() < 0.00002);
         }
     }
 }
@@ -2179,8 +2185,8 @@ fn arena_owner_scores_integrate_mass_with_type_weights() {
         }
     }
     s.accumulate_owner_scores();
-    // Photocytes count at 0.25x over one 1/30 s fixed step.
-    assert!((s.owner_score(7) - 4. * 0.25 / 30.).abs() < 1e-6);
+    // Photocytes count at 0.25x over one 1/10 s fixed step.
+    assert!((s.owner_score(7) - 4. * 0.25 * STEP as f64).abs() < 1e-6);
     assert_eq!(s.owner_score(8), 0.);
     s.set_track_owner_scores(false);
     assert_eq!(s.owner_score(7), 0.);

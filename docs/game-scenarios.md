@@ -88,7 +88,7 @@
 
 `crates/protocol`/`crates/server`: авторитарный сервер, комнаты, `spawn/edit/
 inspect/reset` с `seq`+`ack`, бинарные чанки 6×6 по 512 единиц (клетки со
-stride 12, связи, тайлы) на 30 Гц, роли хоста, `Notice`, `PlayerCount`.
+stride 12, связи, тайлы) на 10 Гц, роли хоста, `Notice`, `PlayerCount`.
 Приписывания клеток игрокам пока нет; `docs/multiplayer.md`, на который ссылается
 протокол, ещё не написан.
 

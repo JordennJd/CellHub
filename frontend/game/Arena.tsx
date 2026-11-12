@@ -1,7 +1,7 @@
 import { useTouchControls } from "../input/useTouchControls";
 import { CellDetails } from "./CellDetails";
 import { useEffect, useRef, useState } from 'react';
-import { CELL_DETAILS_STRIDE, STRIDE, TYPES, defaultGenome, type Mode } from '../model';
+import { CELL_DETAILS_STRIDE, STRIDE, TICK_RATE, TYPES, defaultGenome, type Mode } from '../model';
 import { OnlinePanel } from '../OnlinePanel';
 import { WorldView, type ViewState } from '../WorldView';
 import { initialBackend, type BackendPreference } from '../backend';
@@ -271,7 +271,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
 
                     </div>
                     <div className="world-stats">
-                        <span>Время <strong>{((arena.sync?.lastTick ?? 0) / 30).toFixed(1)} с</strong></span>
+                        <span>Время <strong>{((arena.sync?.lastTick ?? 0) / TICK_RATE).toFixed(1)} с</strong></span>
                         <span>Клеток <strong>{count}</strong></span>
 
                     </div>

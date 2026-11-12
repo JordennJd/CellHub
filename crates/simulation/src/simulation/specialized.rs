@@ -411,14 +411,14 @@ mod tests {
                 vec![mode(0)],
             );
         }
-        sim.specialized_contacts(1. / 30.);
+        sim.specialized_contacts(crate::components::STEP);
         assert_eq!(sim.bond_degrees()[&source], 5);
         assert!(
             !sim.bonds
                 .contains(&(source.min(protected), source.max(protected)))
         );
         let wall = spawn(&mut sim, 12., 900., vec![mode(GLUEOCYTE)]);
-        sim.specialized_contacts(1. / 30.);
+        sim.specialized_contacts(crate::components::STEP);
         assert!(sim.world.get::<&Cell>(wall).unwrap().anchored);
         let original = *sim.world.get::<&Position>(wall).unwrap();
         sim.advance(30);
@@ -432,7 +432,7 @@ mod tests {
         for (x, y) in [(1482., 500.), (1518., 500.), (1500., 518.)] {
             spawn(&mut sim, x, y, vec![mode(0)]);
         }
-        sim.specialized_contacts(1. / 30.);
+        sim.specialized_contacts(crate::components::STEP);
         assert_eq!(sim.bond_degrees()[&source], 2);
     }
 
@@ -516,7 +516,7 @@ mod tests {
             let b = spawn(&mut sim, 512., 500., vec![gamete, mode(1)]);
             sim.world.get::<&mut Cell>(a).unwrap().age = 1.;
             sim.world.get::<&mut Cell>(b).unwrap().age = age_b;
-            sim.specialized_contacts(1. / 30.);
+            sim.specialized_contacts(crate::components::STEP);
             assert_eq!(
                 sim.world.len(),
                 population,

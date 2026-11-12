@@ -4,6 +4,12 @@
 pub const SIZE: f32 = 3072.;
 /// Hard population cap.
 pub const LIMIT: usize = 20_000;
+/// Fixed simulation cadence shared by biology, campaign timers and networking.
+/// Every rate expressed per second is multiplied by [`STEP`] exactly once per
+/// tick, so lowering the cadence speeds each tick up instead of slowing time.
+pub(crate) const TICK_RATE: u32 = 10;
+/// Seconds per fixed simulation step.
+pub(crate) const STEP: f32 = 1. / TICK_RATE as f32;
 pub(crate) const SNAPSHOT_STRIDE: usize = 12;
 /// Accelerated lifecycle: one original-game hour corresponds to one web second.
 pub(crate) const MIN_DIVISION_AGE: f32 = 0.5;

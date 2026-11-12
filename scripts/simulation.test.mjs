@@ -257,7 +257,7 @@ test("v3 daughter orientation, mirroring and RGB survive the real WASM save ABI"
     const id = sim.spawn(500, 500, 0, g);
     assert.deepEqual(sim.genome(id), model.flatten(model.inflate(g)));
     sim.boost(id);
-    sim.advance(14);
+    sim.advance(4);
     assert.equal(sim.stats()[1], 1);
     sim.advance(1);
     const frame = sim.snapshot();
@@ -283,11 +283,13 @@ test("worker acknowledges ordered resets and correlates failed restore commands"
   const workerSource = await readFile(new URL("../frontend/simulation.worker.ts", import.meta.url), "utf8");
   const wasm = await readFile(new URL("../frontend/wasm/simulation_bg.wasm", import.meta.url));
   const organismsUrl = `data:text/javascript;base64,${Buffer.from(organismsBundle.outputFiles[0].text).toString("base64")}`;
+  const modelUrl = `data:text/javascript;base64,${Buffer.from(modelJs).toString("base64")}`;
   const workerJs = ts.transpileModule(workerSource, {compilerOptions: {
     target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
   }}).outputText
     .replace('"./wasm/simulation.js"', JSON.stringify(new URL("../frontend/wasm/simulation.js", import.meta.url).href))
     .replace('"./organisms"', JSON.stringify(organismsUrl))
+    .replace('"./model"', JSON.stringify(modelUrl))
     .replace("await init();", `await init({module_or_path:new Uint8Array(${JSON.stringify(Array.from(wasm))})});`);
   const previousSelf = globalThis.self, previousInterval = globalThis.setInterval;
   const messages = [];
@@ -410,25 +412,26 @@ test("chaos WASM mixes curated organisms with mandatory single cells and checkpo
     assert(sim.links().length > 0, "initial soup has no multicellular organisms");
 
     sim.sterilize();
-    sim.advance(120);
     sim.advance(59);
     assert.equal(sim.stats()[1], 0);
     sim.advance(1);
     assert.equal(sim.stats()[1], 1);
     assert([0, 1, 2, 3, 5].includes(sim.snapshot()[4]), "first single is not a mandatory role");
     assert.equal(sim.genome(sim.snapshot()[0]).length, 2 + 102, "single should have one mode");
-    sim.advance(120);
-    sim.advance(60);
-    sim.advance(90);
+    // Remember the newest id just before the organism arrives: its cells are
+    // allocated contiguously from that point, while singles may divide on the
+    // same tick and append higher ids.
+    sim.advance(89);
+    const before = sim.snapshot();
+    const newest = Math.max(...Array.from({ length: before.length / model.STRIDE }, (_, i) => before[i * model.STRIDE]));
+    sim.advance(1);
     assert.equal(sim.chaos_info()[8], 1);
     const events = sim.chaos_events();
-    assert.deepEqual(Array.from(events.slice(-3, -1)), [450, 4]);
+    assert.deepEqual(Array.from(events.slice(-3, -1)), [150, 4]);
     const span = events.at(-1);
     assert(span >= 2 && span <= 5);
     const cells = sim.snapshot(), links = sim.links();
-    const ids = Array.from({ length: cells.length / model.STRIDE }, (_, i) => cells[i * model.STRIDE]);
-    const recent = ids.slice(-span);
-    assert.equal(recent.length, span);
+    const recent = Array.from({ length: span }, (_, i) => newest + 1 + i);
     const modes = (sim.genome(recent[0]).length - 2) / model.MODE_STRIDE;
     for (let i = 0; i < recent.length; i++)
       assert.equal(sim.cell_mode(recent[i]), Math.min(i, modes - 1));
@@ -491,7 +494,7 @@ test("real WASM preserves variable genomes and transfers integer bond endpoints"
     ]);
     const id = sim.spawn(300, 300, 0, g);
     assert.deepEqual(sim.genome(id), model.flatten(model.inflate(g)));
-    sim.advance(14);
+    sim.advance(4);
     assert.equal(sim.stats()[1], 1);
     sim.advance(1);
     assert.equal(sim.stats()[1], 2);
@@ -503,7 +506,7 @@ test("real WASM preserves variable genomes and transfers integer bond endpoints"
     assert.deepEqual(Array.from(transferred), [2, 3]);
     assert.equal(sim.cell_mode(2), 1);
     assert.equal(sim.cell_mode(3), 2);
-    for (let i = 0; i < 10; i++) sim.advance(30);
+    for (let i = 0; i < 10; i++) sim.advance(10);
     assert.equal(sim.stats()[1], 2);
     assert.deepEqual(Array.from(sim.links()), [2, 3]);
     const rows = sim.snapshot();

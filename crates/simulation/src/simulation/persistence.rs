@@ -3,7 +3,7 @@
 use super::Simulation;
 use super::boundary::Boundary;
 use super::environment::Environment;
-use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, MAX_RECOIL_MOMENTUM, Position};
+use crate::components::{Cell, INITIAL_NITROGEN, LIMIT, MAX_RECOIL_MOMENTUM, Position, STEP};
 use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, normalize_v4_signal};
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
@@ -294,7 +294,7 @@ impl Simulation {
             if rng == 0
                 || rate == 0
                 || next_spawn <= restored.tick
-                || next_spawn - restored.tick > 1800
+                || next_spawn - restored.tick > super::chaos::DAY_TICKS
             {
                 return Err("Invalid chaos scheduler".into());
             }
@@ -312,7 +312,7 @@ impl Simulation {
             let mut previous = -1.;
             for _ in 0..count {
                 let mut sample = [0.; 20];
-                sample[0] = input.float(0., restored.tick as f32 / 30.)?;
+                sample[0] = input.float(0., restored.tick as f32 * STEP)?;
                 if sample[0] <= previous {
                     return Err("Invalid chaos history".into());
                 }

@@ -57,13 +57,15 @@ fn main() {
     let mut last_census = 0.;
     let mut seen_events = 0usize;
     loop {
-        simulation.advance(30);
-        elapsed += 1.;
+        simulation.advance(10);
         if trace {
             seen_events = print_new_events(&simulation, seen_events);
         }
         let status: Value =
             serde_json::from_str(&simulation.level_status_json()).expect("invalid status");
+        // Elapsed time comes from the simulation itself, so a diagnostic run
+        // stays correct if the fixed cadence changes again.
+        elapsed = status["elapsed"].as_f64().unwrap_or(elapsed + 1.);
         if let Some(error) = status["demoError"].as_str() {
             eprintln!("{id}: DEMO ERROR: {error}");
             std::process::exit(1);

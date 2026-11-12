@@ -170,7 +170,7 @@ test("the first campaign manifest loads and its demo wins in the real WASM simul
     assert.equal(current.counts.user, opening.filter(action => action.op === "spawn").length);
 
     for (let second = 0; second < 120 && current.state === "running"; second++) {
-      sim.advance(30);
+      sim.advance(10);
       current = status();
     }
     assert.equal(current.state, "won", JSON.stringify(current));
@@ -196,7 +196,7 @@ test("every offered campaign solution wins in real WASM without exceeding player
       sim.load_level_json(text); sim.start_level_demo();
       let current = JSON.parse(sim.level_status());
       for (let second = 0; second < (level.test.maxSeconds ?? 600) && current.state === "running"; second++) {
-        sim.advance(30); current = JSON.parse(sim.level_status());
+        sim.advance(10); current = JSON.parse(sim.level_status());
         assert(!current.demoError, `${level.id}: ${current.demoError}`);
         assert(current.inserted <= level.budget, `${level.id}: placement budget`);
         if (level.removeMax !== null) assert(current.removed <= level.removeMax, `${level.id}: removal budget`);

@@ -121,7 +121,7 @@ impl Simulation {
             chaos.enabled = enabled;
             chaos.rate = rate;
             chaos.viable = viable;
-            chaos.next_spawn = 1800 / rate;
+            chaos.next_spawn = chaos::DAY_TICKS / rate;
             self.track_owner_scores = track_owner_scores;
             return;
         }
@@ -574,7 +574,7 @@ impl Simulation {
         if !self.track_owner_scores {
             return;
         }
-        let dt = step::STEP as f64;
+        let dt = crate::components::STEP as f64;
         for (_, (cell, genome)) in self.world.query::<(&Cell, &Genome)>().iter() {
             if cell.owner == 0 || !cell.mass.is_finite() {
                 continue;
