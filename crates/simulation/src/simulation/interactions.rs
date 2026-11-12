@@ -13,7 +13,6 @@ use hecs::Entity;
 #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-#[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const ATTACK_RANGE: f32 = 24.;
@@ -25,6 +24,13 @@ const LARGE_CONTACT_POPULATION: usize = 4096;
 const DENSE_PAIRS_PER_BODY: usize = 8;
 const DENSE_PAIR_VISITS: usize = 250_000;
 const CROWD_CONTACT_PASSES: usize = 2;
+/// Large contact islands are split into vertical stripes so a single dense
+/// bloom can use every core. The grid is fixed and independent of the thread
+/// count, which keeps replay deterministic. On the 3072-unit arena 192 gives
+/// 16 stripes, enough for 8–16 worker threads.
+const CHUNKED_CONTACT_POPULATION: usize = 4096;
+const STRIPE_WIDTH: f32 = 192.;
+const MAX_STRIPES: usize = 64;
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
 static THREAD_POOL_READY: AtomicBool = AtomicBool::new(false);
@@ -34,6 +40,7 @@ pub(super) fn enable_parallel() {
     THREAD_POOL_READY.store(true, Ordering::Relaxed);
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
 fn parallel_enabled() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -42,10 +49,6 @@ fn parallel_enabled() -> bool {
     #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
     {
         THREAD_POOL_READY.load(Ordering::Relaxed) && rayon::current_num_threads() > 1
-    }
-    #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
-    {
-        false
     }
 }
 
@@ -63,6 +66,110 @@ pub(super) fn for_each_island<T: Send>(
     #[cfg(all(target_arch = "wasm32", not(feature = "wasm-threads")))]
     let _ = active_bodies;
     islands.iter_mut().for_each(solve);
+}
+
+/// Run independent sub-jobs, either on the rayon pool or in a fixed order.
+/// The scheduling never changes the work order inside a job, so results do
+/// not depend on the number of threads.
+fn for_each_parallel<T: Send>(items: &mut [T], work: impl Fn(usize, &mut T) + Send + Sync) {
+    #[cfg(any(not(target_arch = "wasm32"), feature = "wasm-threads"))]
+    {
+        if parallel_enabled() {
+            items
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(index, item)| work(index, item));
+            return;
+        }
+    }
+    items
+        .iter_mut()
+        .enumerate()
+        .for_each(|(index, item)| work(index, item));
+}
+
+/// Borrow two distinct elements of one slice mutably.
+fn split_two_mut<T>(slice: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
+    debug_assert!(a != b);
+    if a < b {
+        let (left, right) = slice.split_at_mut(b);
+        (&mut left[a], &mut right[0])
+    } else {
+        let (left, right) = slice.split_at_mut(a);
+        (&mut right[0], &mut left[b])
+    }
+}
+
+/// Split a slice into disjoint chunks of the given lengths.
+fn split_by_lens<'a, T>(values: &'a mut [T], lens: &[usize]) -> Vec<&'a mut [T]> {
+    let mut rest = values;
+    let mut slices = Vec::with_capacity(lens.len());
+    for &len in lens {
+        let (head, tail) = rest.split_at_mut(len);
+        slices.push(head);
+        rest = tail;
+    }
+    debug_assert!(rest.is_empty());
+    slices
+}
+
+fn stripe_of(x: f32, stripe_count: usize) -> usize {
+    ((x.max(0.) / STRIPE_WIDTH) as usize).min(stripe_count.saturating_sub(1))
+}
+
+/// Groups cover all stripes in order. A group is either one stripe or two
+/// adjacent stripes, so groups in one phase never share a stripe.
+fn boundary_groups(stripe_count: usize, phase: usize) -> Vec<(usize, Option<usize>)> {
+    let mut groups = Vec::with_capacity(stripe_count.div_ceil(2) + 1);
+    let mut stripe = 0;
+    if phase == 1 {
+        groups.push((0, None));
+        stripe = 1;
+    }
+    while stripe + 1 < stripe_count {
+        groups.push((stripe, Some(stripe + 1)));
+        stripe += 2;
+    }
+    if stripe < stripe_count {
+        groups.push((stripe, None));
+    }
+    groups
+}
+
+/// Run a job for every two-stripe boundary group in one phase.
+fn for_each_boundary_mut<F>(
+    bodies: &mut [ContactBody],
+    lens: &[usize],
+    groups: &[(usize, Option<usize>)],
+    work: F,
+) where
+    F: Fn(usize, &mut [ContactBody], &mut [ContactBody]) + Send + Sync,
+{
+    let group_lens: Vec<usize> = groups
+        .iter()
+        .map(|(first, second)| lens[*first] + second.map_or(0, |second| lens[second]))
+        .collect();
+    let mut slices = split_by_lens(bodies, &group_lens);
+    for_each_parallel(&mut slices, |index, group: &mut &mut [ContactBody]| {
+        let (first, second) = groups[index];
+        let Some(second) = second else {
+            return;
+        };
+        debug_assert_eq!(second, first + 1);
+        let (left, right) = group.split_at_mut(lens[first]);
+        work(first, left, right);
+    });
+}
+
+/// Run a job for every stripe.
+fn for_each_stripe_mut<F>(bodies: &mut [ContactBody], lens: &[usize], work: F)
+where
+    F: Fn(usize, &mut [ContactBody]) + Send + Sync,
+{
+    let mut slices = split_by_lens(bodies, lens);
+    for_each_parallel(&mut slices, |index, stripe: &mut &mut [ContactBody]| {
+        work(index, stripe)
+    });
 }
 
 pub(super) struct Components {
@@ -183,8 +290,18 @@ impl ContactPair {
         first_pass: bool,
         boundary: Boundary,
     ) -> bool {
-        let (left, right) = bodies.split_at_mut(self.b as usize);
-        let (body, target) = (&mut left[self.a as usize], &mut right[0]);
+        let (body, target) = split_two_mut(bodies, self.a as usize, self.b as usize);
+        self.solve_between(body, target, step, first_pass, boundary)
+    }
+
+    fn solve_between(
+        self,
+        body: &mut ContactBody,
+        target: &mut ContactBody,
+        step: f32,
+        first_pass: bool,
+        boundary: Boundary,
+    ) -> bool {
         // The fusion pass consumes eligible contacts. Other gametes that
         // can fuse settle at their contact range while maturing.
         if self.gametes.is_some_and(|(scale, mature)| {
@@ -282,7 +399,7 @@ fn stage_contact_pairs(
     tick: u32,
 ) -> Option<Vec<[u32; 2]>> {
     const BLOCK: usize = 512;
-    if bodies.len() < LARGE_CONTACT_POPULATION || !parallel_enabled() {
+    if bodies.len() < LARGE_CONTACT_POPULATION {
         return None;
     }
     let mut blocks: Vec<_> = bodies.chunks(BLOCK).map(|block| (block, None)).collect();
@@ -379,6 +496,28 @@ fn solve_collisions(
     }
 }
 
+fn biology_between(body: &mut ContactBody, target: &mut ContactBody, predation: f32) {
+    let infects = body.kind == VIROCYTE
+        && body.cooldown <= 0.
+        && target.kind != VIROCYTE
+        && target.infected_by.is_none();
+    let eats = body.kind == DEVOROCYTE && target.kind != DEVOROCYTE;
+    if target.protected || !(infects || eats) {
+        return;
+    }
+    let in_range = (0..2).any(|segment| {
+        segment_distance_squared(&body.path, &target.path, segment) <= ATTACK_RANGE * ATTACK_RANGE
+    });
+    if in_range && infects {
+        target.infected_by = Some(body.entity);
+        body.cooldown = VIROCYTE_COOLDOWN;
+    } else if in_range && eats {
+        let taken = predation.min((target.mass - 0.1).max(0.));
+        target.mass -= taken;
+        body.mass += taken * 0.8;
+    }
+}
+
 fn solve_biology(
     bodies: &mut [ContactBody],
     slots: &[Option<Slot>],
@@ -394,32 +533,358 @@ fn solve_biology(
             let Some(slot) = slots[other].filter(|slot| slot.island == island) else {
                 continue;
             };
-            let (body, target) = if index < slot.index {
-                let (left, right) = bodies.split_at_mut(slot.index);
-                (&mut left[index], &mut right[0])
-            } else {
-                let (left, right) = bodies.split_at_mut(index);
-                (&mut right[0], &mut left[slot.index])
-            };
-            let infects = body.kind == VIROCYTE
-                && body.cooldown <= 0.
-                && target.kind != VIROCYTE
-                && target.infected_by.is_none();
-            let eats = body.kind == DEVOROCYTE && target.kind != DEVOROCYTE;
-            if target.protected || !(infects || eats) {
-                continue;
-            }
-            let in_range = (0..2).any(|segment| {
-                segment_distance_squared(&body.path, &target.path, segment)
-                    <= ATTACK_RANGE * ATTACK_RANGE
+            let (body, target) = split_two_mut(bodies, index, slot.index);
+            biology_between(body, target, predation);
+        }
+    }
+}
+
+/// Split one huge contact island into vertical stripes and solve it with a
+/// block Gauss-Seidel sweep. Stripes and boundaries are fixed by geometry,
+/// so the result is independent of the thread count.
+fn solve_chunked(
+    island: &mut ContactIsland,
+    island_index: usize,
+    slots: &[Option<Slot>],
+    spatial: &SpatialGrid,
+    boundary: Boundary,
+    step: f32,
+    active: usize,
+) {
+    let stripe_count = ((boundary.width() / STRIPE_WIDTH).ceil() as usize).clamp(1, MAX_STRIPES);
+    let has_tension = !island.tension.is_empty();
+    let pair_count = island.pairs.as_ref().map_or(0, Vec::len);
+    let mut pass_limit = if active >= LARGE_CONTACT_POPULATION && island.crowded {
+        CROWD_CONTACT_PASSES
+    } else {
+        CONTACT_PASSES
+    };
+
+    let mut pairs = island.pairs.take().unwrap_or_default();
+    let mut tension = std::mem::take(&mut island.tension);
+    let mut bodies = std::mem::take(&mut island.bodies);
+    let body_count = bodies.len();
+
+    // Stable geometric partition: original island index -> (stripe, local).
+    let mut placements = vec![(0u16, 0u32); body_count];
+    let mut counts = vec![0usize; stripe_count];
+    for body in &bodies {
+        counts[stripe_of(body.collision.position.x, stripe_count)] += 1;
+    }
+    let mut buckets: Vec<Vec<ContactBody>> = counts
+        .iter()
+        .map(|&count| Vec::with_capacity(count))
+        .collect();
+    for (original, body) in bodies.drain(..).enumerate() {
+        let stripe = stripe_of(body.collision.position.x, stripe_count);
+        placements[original] = (stripe as u16, buckets[stripe].len() as u32);
+        buckets[stripe].push(body);
+    }
+    let lens: Vec<usize> = buckets.iter().map(Vec::len).collect();
+    for bucket in buckets {
+        bodies.extend(bucket);
+    }
+    island.bodies = bodies;
+    let has_biology = island
+        .bodies
+        .iter()
+        .any(|body| matches!(body.kind, VIROCYTE | DEVOROCYTE));
+
+    // Pairs stay in their original order inside a stripe or boundary.
+    let mut stripe_pairs: Vec<Vec<ContactPair>> = (0..stripe_count).map(|_| Vec::new()).collect();
+    let mut boundary_pairs: Vec<Vec<ContactPair>> = (0..stripe_count.saturating_sub(1))
+        .map(|_| Vec::new())
+        .collect();
+    let mut far_pairs: Vec<(usize, usize, ContactPair)> = Vec::new();
+    for pair in pairs.drain(..) {
+        let (a_stripe, a_local) = placements[pair.a as usize];
+        let (b_stripe, b_local) = placements[pair.b as usize];
+        let a_stripe = a_stripe as usize;
+        let b_stripe = b_stripe as usize;
+        if a_stripe == b_stripe {
+            stripe_pairs[a_stripe].push(ContactPair {
+                a: a_local,
+                b: b_local,
+                gametes: pair.gametes,
             });
-            if in_range && infects {
-                target.infected_by = Some(body.entity);
-                body.cooldown = VIROCYTE_COOLDOWN;
-            } else if in_range && eats {
-                let taken = predation.min((target.mass - 0.1).max(0.));
-                target.mass -= taken;
-                body.mass += taken * 0.8;
+        } else if a_stripe.abs_diff(b_stripe) == 1 {
+            let boundary = a_stripe.min(b_stripe);
+            let (a, b) = if a_stripe < b_stripe {
+                (a_local, b_local)
+            } else {
+                (b_local, a_local)
+            };
+            boundary_pairs[boundary].push(ContactPair {
+                a,
+                b,
+                gametes: pair.gametes,
+            });
+        } else {
+            far_pairs.push((
+                a_stripe,
+                b_stripe,
+                ContactPair {
+                    a: a_local,
+                    b: b_local,
+                    gametes: pair.gametes,
+                },
+            ));
+        }
+    }
+
+    let mut stripe_tension: Vec<Vec<(usize, usize, f32)>> =
+        (0..stripe_count).map(|_| Vec::new()).collect();
+    let mut boundary_tension: Vec<Vec<(usize, usize, f32)>> = (0..stripe_count.saturating_sub(1))
+        .map(|_| Vec::new())
+        .collect();
+    let mut far_tension: Vec<(usize, usize, usize, usize, f32)> = Vec::new();
+    for (a, b, rest) in tension.drain(..) {
+        let (a_stripe, a_local) = placements[a];
+        let (b_stripe, b_local) = placements[b];
+        let a_stripe = a_stripe as usize;
+        let b_stripe = b_stripe as usize;
+        if a_stripe == b_stripe {
+            stripe_tension[a_stripe].push((a_local as usize, b_local as usize, rest));
+        } else if a_stripe.abs_diff(b_stripe) == 1 {
+            let boundary = a_stripe.min(b_stripe);
+            let (a, b) = if a_stripe < b_stripe {
+                (a_local as usize, b_local as usize)
+            } else {
+                (b_local as usize, a_local as usize)
+            };
+            boundary_tension[boundary].push((a, b, rest));
+        } else {
+            far_tension.push((a_stripe, a_local as usize, b_stripe, b_local as usize, rest));
+        }
+    }
+
+    let groups = [
+        boundary_groups(stripe_count, 0),
+        boundary_groups(stripe_count, 1),
+    ];
+
+    for pass in 0..CONTACT_PASSES {
+        let mut changed = false;
+        if pass > 0 {
+            let tension_changed = AtomicBool::new(false);
+            for_each_stripe_mut(&mut island.bodies, &lens, |stripe, bodies| {
+                let mut local = false;
+                for &(a, b, rest) in &stripe_tension[stripe] {
+                    let (body, target) = split_two_mut(bodies, a, b);
+                    local |= body
+                        .collision
+                        .relax_tension(&mut target.collision, rest, boundary);
+                }
+                if local {
+                    tension_changed.store(true, Ordering::Relaxed);
+                }
+            });
+            changed |= tension_changed.load(Ordering::Relaxed);
+            for phase in 0..2 {
+                let phase_changed = AtomicBool::new(false);
+                for_each_boundary_mut(
+                    &mut island.bodies,
+                    &lens,
+                    &groups[phase],
+                    |boundary_index, left, right| {
+                        let mut local = false;
+                        for &(a, b, rest) in &boundary_tension[boundary_index] {
+                            local |= left[a].collision.relax_tension(
+                                &mut right[b].collision,
+                                rest,
+                                boundary,
+                            );
+                        }
+                        if local {
+                            phase_changed.store(true, Ordering::Relaxed);
+                        }
+                    },
+                );
+                changed |= phase_changed.load(Ordering::Relaxed);
+            }
+            if !far_tension.is_empty() {
+                let mut stripes = split_by_lens(&mut island.bodies, &lens);
+                for &(a_stripe, a, b_stripe, b, rest) in &far_tension {
+                    let (left, right) = split_two_mut(&mut stripes, a_stripe, b_stripe);
+                    changed |=
+                        left[a]
+                            .collision
+                            .relax_tension(&mut right[b].collision, rest, boundary);
+                }
+            }
+        }
+
+        let pair_changed = AtomicBool::new(false);
+        for_each_stripe_mut(&mut island.bodies, &lens, |stripe, bodies| {
+            let mut local = false;
+            for pair in &stripe_pairs[stripe] {
+                local |= pair.solve(bodies, step, pass == 0, boundary);
+            }
+            if local {
+                pair_changed.store(true, Ordering::Relaxed);
+            }
+        });
+        changed |= pair_changed.load(Ordering::Relaxed);
+
+        for phase in 0..2 {
+            let phase_changed = AtomicBool::new(false);
+            for_each_boundary_mut(
+                &mut island.bodies,
+                &lens,
+                &groups[phase],
+                |boundary_index, left, right| {
+                    let mut local = false;
+                    for pair in &boundary_pairs[boundary_index] {
+                        local |= pair.solve_between(
+                            &mut left[pair.a as usize],
+                            &mut right[pair.b as usize],
+                            step,
+                            pass == 0,
+                            boundary,
+                        );
+                    }
+                    if local {
+                        phase_changed.store(true, Ordering::Relaxed);
+                    }
+                },
+            );
+            changed |= phase_changed.load(Ordering::Relaxed);
+        }
+
+        if !far_pairs.is_empty() {
+            let mut stripes = split_by_lens(&mut island.bodies, &lens);
+            for (a_stripe, b_stripe, pair) in &far_pairs {
+                let (left, right) = split_two_mut(&mut stripes, *a_stripe, *b_stripe);
+                changed |= pair.solve_between(
+                    &mut left[pair.a as usize],
+                    &mut right[pair.b as usize],
+                    step,
+                    pass == 0,
+                    boundary,
+                );
+            }
+        }
+
+        if pass == 0
+            && body_count >= LARGE_CONTACT_POPULATION
+            && pair_count >= body_count * DENSE_PAIRS_PER_BODY
+        {
+            // Dense contacts get fewer sweeps to keep the tick cheap. Always
+            // leave a tensile pass for bonds, and recover extra sweeps as the
+            // cells disperse.
+            let minimum = if has_tension { 2 } else { 1 };
+            pass_limit = pass_limit.min((DENSE_PAIR_VISITS / pair_count.max(1)).max(minimum));
+        }
+        if !changed || pass + 1 == pass_limit {
+            break;
+        }
+    }
+
+    if has_biology {
+        let predation = 0.08 * step;
+        // Biology inside one stripe.
+        for_each_stripe_mut(&mut island.bodies, &lens, |stripe, bodies| {
+            for index in 0..bodies.len() {
+                if !matches!(bodies[index].kind, VIROCYTE | DEVOROCYTE) {
+                    continue;
+                }
+                let global = bodies[index].index;
+                for other in spatial.candidates(global) {
+                    let Some(slot) = slots[other].filter(|slot| slot.island == island_index) else {
+                        continue;
+                    };
+                    let (target_stripe, target_local) = placements[slot.index];
+                    if target_stripe as usize != stripe {
+                        continue;
+                    }
+                    let (body, target) = split_two_mut(bodies, index, target_local as usize);
+                    biology_between(body, target, predation);
+                }
+            }
+        });
+
+        // Biology across adjacent stripes, in the same two boundary phases.
+        for phase in 0..2 {
+            for_each_boundary_mut(
+                &mut island.bodies,
+                &lens,
+                &groups[phase],
+                |first, left, right| {
+                    for source in 0..left.len() {
+                        if !matches!(left[source].kind, VIROCYTE | DEVOROCYTE) {
+                            continue;
+                        }
+                        let global = left[source].index;
+                        for other in spatial.candidates(global) {
+                            let Some(slot) =
+                                slots[other].filter(|slot| slot.island == island_index)
+                            else {
+                                continue;
+                            };
+                            let (target_stripe, target_local) = placements[slot.index];
+                            if target_stripe as usize != first + 1 {
+                                continue;
+                            }
+                            biology_between(
+                                &mut left[source],
+                                &mut right[target_local as usize],
+                                predation,
+                            );
+                        }
+                    }
+                    for source in 0..right.len() {
+                        if !matches!(right[source].kind, VIROCYTE | DEVOROCYTE) {
+                            continue;
+                        }
+                        let global = right[source].index;
+                        for other in spatial.candidates(global) {
+                            let Some(slot) =
+                                slots[other].filter(|slot| slot.island == island_index)
+                            else {
+                                continue;
+                            };
+                            let (target_stripe, target_local) = placements[slot.index];
+                            if target_stripe as usize != first {
+                                continue;
+                            }
+                            biology_between(
+                                &mut right[source],
+                                &mut left[target_local as usize],
+                                predation,
+                            );
+                        }
+                    }
+                },
+            );
+        }
+
+        // Rare contacts that jump a whole stripe. They only occur for very
+        // large cells or a very narrow stripe window, so a fixed serial pass
+        // is enough.
+        let mut stripes = split_by_lens(&mut island.bodies, &lens);
+        for source_stripe in 0..stripe_count {
+            for source in 0..stripes[source_stripe].len() {
+                if !matches!(stripes[source_stripe][source].kind, VIROCYTE | DEVOROCYTE) {
+                    continue;
+                }
+                let global = stripes[source_stripe][source].index;
+                for other in spatial.candidates(global) {
+                    let Some(slot) = slots[other].filter(|slot| slot.island == island_index) else {
+                        continue;
+                    };
+                    let (target_stripe, target_local) = placements[slot.index];
+                    let target_stripe = target_stripe as usize;
+                    if target_stripe == source_stripe || target_stripe.abs_diff(source_stripe) == 1
+                    {
+                        continue;
+                    }
+                    let (left, right) = split_two_mut(&mut stripes, source_stripe, target_stripe);
+                    biology_between(
+                        &mut left[source],
+                        &mut right[target_local as usize],
+                        predation,
+                    );
+                }
             }
         }
     }
@@ -484,12 +949,51 @@ impl Simulation {
             .iter()
             .map(|&(a, b)| (index(a), index(b)))
             .collect();
+        let has_biology = bodies
+            .iter()
+            .any(|body| matches!(body.kind, VIROCYTE | DEVOROCYTE));
+        let tick = self.tick;
+        if bodies.len() >= CHUNKED_CONTACT_POPULATION
+            && !has_biology
+            && self.boundary.width() > STRIPE_WIDTH
+            && let Some(staged) = stage_contact_pairs(&bodies, &self.spatial, &self.bonds, tick)
+        {
+            // A large non-predatory population needs no connected components:
+            // stripes cover every contact pair, so skip union-find entirely.
+            let mut pairs = Vec::with_capacity(staged.len());
+            for [a, b] in staged {
+                pairs.push(ContactPair::new(&bodies, a as usize, b as usize));
+            }
+            let mut tension = Vec::with_capacity(edges.len());
+            for &(a, b) in &edges {
+                let from = bodies[a].collision.position;
+                let to = bodies[b].collision.position;
+                tension.push((a, b, libm::hypotf(to.x - from.x, to.y - from.y)));
+            }
+            let mut island = ContactIsland {
+                bodies,
+                tension,
+                pairs: Some(pairs),
+                crowded: self.spatial.has_crowds(),
+            };
+            let active = island.bodies.len();
+            solve_chunked(
+                &mut island,
+                0,
+                &[],
+                &self.spatial,
+                self.boundary,
+                step,
+                active,
+            );
+            self.commit_contact_bodies(island.bodies, self.boundary);
+            return;
+        }
         let mut graph = Components::new(bodies.len());
         for &(a, b) in &edges {
             graph.join(a, b);
         }
         let crowds = self.spatial.connect_crowds(|a, b| graph.join(a, b));
-        let tick = self.tick;
         let mut pair_indices = stage_contact_pairs(&bodies, &self.spatial, &self.bonds, tick);
         if let Some(staged) = &pair_indices {
             for &[a, b] in staged {
@@ -555,22 +1059,51 @@ impl Simulation {
         let spatial = &self.spatial;
         let bonds = &self.bonds;
         let boundary = self.boundary;
+        let chunked = boundary.width() > STRIPE_WIDTH;
         for_each_island(&mut islands, active, |island| {
-            solve_collisions(
-                island,
-                &slots,
-                spatial,
-                bonds,
-                boundary,
-                step,
-                (tick, active),
-            );
-            solve_biology(&mut island.bodies, &slots, spatial, 0.08 * step);
+            if chunked
+                && island.bodies.len() >= CHUNKED_CONTACT_POPULATION
+                && island.pairs.is_some()
+            {
+                let island_index = slots[island.bodies[0].index].unwrap().island;
+                solve_chunked(
+                    island,
+                    island_index,
+                    &slots,
+                    spatial,
+                    boundary,
+                    step,
+                    active,
+                );
+            } else {
+                solve_collisions(
+                    island,
+                    &slots,
+                    spatial,
+                    bonds,
+                    boundary,
+                    step,
+                    (tick, active),
+                );
+                solve_biology(&mut island.bodies, &slots, spatial, 0.08 * step);
+            }
         });
 
         // No job mutates ECS storage. Commit in stable island and cell order.
+        self.commit_contact_bodies(
+            islands.into_iter().flat_map(|island| island.bodies),
+            boundary,
+        );
+    }
+
+    /// Write solved contact bodies back to the ECS in their deterministic order.
+    fn commit_contact_bodies(
+        &mut self,
+        bodies: impl IntoIterator<Item = ContactBody>,
+        boundary: Boundary,
+    ) {
         let mut events = Vec::new();
-        for body in islands.into_iter().flat_map(|island| island.bodies) {
+        for body in bodies {
             let infection = body.infected_by.map(|donor| {
                 let (source, genome) = self.world.query_one_mut::<(&Cell, &Genome)>(donor).unwrap();
                 let root = genome.mode(source.mode).virus_copy_from;
@@ -746,5 +1279,74 @@ mod tests {
         let initial = run(1, None);
         assert_eq!(initial, run(4, None));
         assert_eq!(run(1, Some(&initial)), run(4, Some(&initial)));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dense_single_island_replay_matches_between_one_and_four_threads() {
+        let run = |threads, checkpoint: Option<&[f64]>| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut s = Simulation::new(991);
+                    if let Some(state) = checkpoint {
+                        s.restore_checked(state).unwrap();
+                    } else {
+                        // 72 × 72 contacts form one island above the chunking
+                        // threshold, so this exercises the striped solver.
+                        for row in 0..72 {
+                            for column in 0..72 {
+                                s.spawn_checked(
+                                    600. + column as f32 * 16.,
+                                    600. + row as f32 * 16.,
+                                    0,
+                                    &genes(0),
+                                )
+                                .unwrap();
+                            }
+                        }
+                    }
+                    s.advance(4);
+                    s.encode_state()
+                })
+        };
+        let initial = run(1, None);
+        assert_eq!(initial, run(4, None));
+        assert_eq!(run(1, Some(&initial)), run(4, Some(&initial)));
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn dense_island_biology_replay_matches_between_one_and_four_threads() {
+        let run = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut s = Simulation::new(3301);
+                    for row in 0..72 {
+                        for column in 0..72 {
+                            s.spawn_checked(
+                                600. + column as f32 * 16.,
+                                600. + row as f32 * 16.,
+                                0,
+                                &genes(0),
+                            )
+                            .unwrap();
+                        }
+                    }
+                    for index in 0..8 {
+                        s.spawn_checked(700. + index as f32 * 140., 900., 0, &genes(3))
+                            .unwrap();
+                    }
+                    s.advance(6);
+                    assert!(s.infections > 0, "virocyte should infect a neighbour");
+                    s.encode_state()
+                })
+        };
+        assert_eq!(run(1), run(4));
     }
 }

@@ -311,6 +311,7 @@ fn steady_measure(population: usize, ticks: usize, layout: &str) -> (f64, f64, f
         sim.advance(1);
         samples.push(started.elapsed().as_secs_f64() * 1e3);
     }
+    samples.sort_by(f64::total_cmp);
     let p50 = percentile(&samples, 0.5);
     let p95 = percentile(&samples, 0.95);
     let frame = frame_bundle(&mut sim);

@@ -140,6 +140,15 @@ impl SpatialGrid {
         representatives
     }
 
+    /// Whether any bucket is overloaded enough to shorten the contact passes.
+    pub(super) fn has_crowds(&self) -> bool {
+        self.large.len() > CROWDED_BUCKET
+            || self
+                .occupied
+                .iter()
+                .any(|&key| self.buckets[key].len() > CROWDED_BUCKET)
+    }
+
     fn query(&self, index: usize, tick: Option<u32>) -> impl Iterator<Item = usize> + '_ {
         let bounds = self.bounds[index];
         let is_large = bounds.is_large();
