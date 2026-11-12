@@ -181,7 +181,7 @@ export const chaosGenome = (): Mode[] => TYPES.map((type, i) => ({
 }));
 
 /** Shortest float32-safe decimal for π: a daughter rotated by it keeps its heading. */
-export const HALF_TURN = 3.1415927;
+const HALF_TURN = 3.1415927;
 
 export const multicellularGenome = (): Mode[] => [
   { ...newMode(0), kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true, angle: 0, lifespan: 1000 },

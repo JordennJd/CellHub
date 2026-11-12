@@ -118,11 +118,10 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
         <button onClick={() => setConfirm("reset")}>Одна клетка</button>
         <button onClick={() => setConfirm("types")}>Все доступные типы</button>
         {catalog.length > 0 ? <>
-          <h4>Организмы по универсальности</h4>
+          <h4>Готовые организмы</h4>
           <div className="genome-demo-list">
             {catalog.map(organism => <button key={organism.id} className="genome-demo-organism" onClick={() => choose(organism.name, organism.genome(), organism.initialMode)}>
               <strong>{organism.name}</strong>
-              <span>{organism.origin === "substrate" ? "из субстрата" : "ручная сборка"} · универсальность {organism.universality}</span>
               <small>{organism.description}</small>
             </button>)}
           </div>

@@ -27,12 +27,13 @@ const genes = () =>
     Array.from({ length: 8 }, () => [0, 2.4, 0, 0, 0.5, 12, 0.8, 240]).flat(),
   );
 
-test("demo organism catalog is ordered, valid and filtered by allowed cell types", () => {
+test("demo organism catalog is valid and filtered by allowed cell types", () => {
   const list = organisms.DEMO_ORGANISMS;
-  assert(list.length >= 8);
+  assert(list.length >= 6);
   assert.equal(new Set(list.map(o => o.id)).size, list.length);
-  for (let i = 1; i < list.length; i++) assert(list[i - 1].universality >= list[i].universality);
+  assert(!list.some(o => o.id === "swimmer" || o.id === "photo-lipo"));
   for (const organism of list) {
+    assert(!("origin" in organism) && !("universality" in organism));
     const genome = organism.genome();
     assert(organism.span >= 1 && organism.span <= 8, `${organism.id} has an invalid span`);
     assert(organism.span >= 2 || genome.length >= 2, `${organism.id} is not multicellular`);
@@ -47,7 +48,7 @@ test("demo organism catalog is ordered, valid and filtered by allowed cell types
     assert.deepEqual(model.flatten(model.inflate(model.flatten(genome))), model.flatten(genome));
   }
   assert(organisms.demoOrganisms([0]).some(o => o.id === "filament"));
-  assert(organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "swimmer"));
+  assert(organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "tutorial"));
   assert(!organisms.demoOrganisms([0, 1, 2, 6]).some(o => o.id === "smart-phagocyte"));
 });
 
@@ -75,49 +76,6 @@ test("chaos seeds every curated organism as a bonded chain", () => {
     } finally {
       sim.free();
     }
-  }
-});
-
-test("swimmer lifecycle releases a fresh seed from the photocyte pair", () => {
-  const sim = new Simulation(42);
-  try {
-    sim.set_circular_dish(true);
-    // Bright light everywhere, so the test measures the lifecycle rather than terrain luck.
-    sim.configure(5, 1, 0, 1, false, false, true, 0, 0, 1);
-    sim.set_division_event_tracking(true);
-    const swimmer = organisms.DEMO_ORGANISMS.find(o => o.id === "swimmer");
-    assert.equal(swimmer.genome().length, 3);
-    assert.equal(swimmer.span, 3);
-    const founder = sim.spawn(1536, 1536, swimmer.initialMode, model.flatten(swimmer.genome()));
-    let flagellocyte = null, pairPhotocyte = null, seed = null, retained = null;
-    for (let batch = 0; batch < 200 && retained === null; batch++) {
-      sim.advance(15);
-      const events = sim.take_division_events();
-      for (let i = 0; i < events.length; i += 8) {
-        const parent = events[i + 1], a = events[i + 2], b = events[i + 3];
-        if (parent === founder && flagellocyte === null) {
-          flagellocyte = a;
-          pairPhotocyte = b;
-        } else if (parent === pairPhotocyte) {
-          seed = a;
-          retained = b;
-        }
-      }
-    }
-    assert(seed !== null, "the pair photocyte did not release a seed");
-    assert.equal(sim.cell_mode(seed), 0, "the released cell is not a fresh M1 seed");
-    assert.equal(sim.cell_mode(retained), 2, "the pair photocyte did not retain itself");
-    const links = sim.links(), bonds = new Set();
-    for (let i = 0; i < links.length; i += 2) {
-      bonds.add(`${links[i]}/${links[i + 1]}`);
-      bonds.add(`${links[i + 1]}/${links[i]}`);
-    }
-    assert(
-      bonds.has(`${flagellocyte}/${retained}`),
-      "the retained photocyte lost its bond to the flagellocyte",
-    );
-  } finally {
-    sim.free();
   }
 });
 

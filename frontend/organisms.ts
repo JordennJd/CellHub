@@ -1,18 +1,14 @@
-import { flatten, newMode, multicellularGenome, HALF_TURN, type Mode, type Program } from "./model";
+import { flatten, newMode, multicellularGenome, type Mode, type Program } from "./model";
 
 /**
  * Curated multicellular organisms shared by the genome editor's demonstration
  * mode and the chaos world's spontaneous immigration. `span` is the number of
  * cells seeded in a chain when the organism appears in chaos.
  */
-export type OrganismOrigin = "substrate" | "player";
-
 export type DemoOrganism = {
   id: string;
   name: string;
   description: string;
-  origin: OrganismOrigin;
-  universality: number;
   initialMode: number;
   span: number;
   genome: () => Mode[];
@@ -26,32 +22,12 @@ const rule = (target: number, input: number, scale: number, offset = 0): Program
   target, input, kind: 0, scale, offset, threshold: 0, below: 0,
 });
 
-/**
- * Photocyte seed + a bonded photocyte/flagellocyte pair. The seed builds the
- * pair; the pair's photocyte then keeps itself at the flagellum and releases a
- * fresh seed, closing the lifecycle.
- */
-const swimmer = (): Mode[] => [
-  mode(0, { name: "Фотоцит-семя", kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true }),
-  mode(1, { name: "Жгутикоцит", kind: 2, threshold: 2, speed: 42, canDivide: false, prioritizeWhenStarving: true }),
-  mode(2, {
-    name: "Фотоцит пары", kind: 0, threshold: 1.8,
-    childA: 0, childB: 2, childAngleB: HALF_TURN, keepAdhesionB: true,
-  }),
-];
-
 /** A photocyte that keeps both daughters attached, growing a feeding filament. */
 const filament = (): Mode[] => [
   mode(0, {
     name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 0,
     bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, maxConnections: 2,
   }),
-];
-
-/** Photocyte + lipocyte: stores surplus mass and shares it back when starved. */
-const photoLipo = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, bindChildren: true, maxConnections: 3 }),
-  mode(1, { name: "Липоцит", kind: 7, canDivide: false, prioritizeWhenStarving: true }),
 ];
 
 /** Phagocyte + sensocyte + myocyte + flagellocyte: turns towards food. */
@@ -122,44 +98,20 @@ const nanobot = (): Mode[] => [
   mode(2, { name: "Кератиноцит", kind: 4, canDivide: false, prioritizeWhenStarving: true }),
 ];
 
-/** Built-ins, deliberately sorted from the most universal to the most niche. */
+/** Built-ins in curated order. */
 export const DEMO_ORGANISMS: DemoOrganism[] = [
-  {
-    id: "swimmer",
-    name: "Пловец",
-    description: "Фотоцит-семя делится на жгутикоцит и фотоцит пары. Фотоцит пары оставляет себя у жгутика и отпочковывает новое семя. Самая универсальная подвижная связка: ей хватает света.",
-    origin: "player",
-    universality: 100,
-    initialMode: 0,
-    span: 3,
-    genome: swimmer,
-  },
   {
     id: "filament",
     name: "Фотоцитовая нить",
     description: "Один фотоцит с удержанием обеих дочерей вырастает в связанную нить. Быстро занимает освещённые участки.",
-    origin: "substrate",
-    universality: 96,
     initialMode: 0,
     span: 2,
     genome: filament,
   },
   {
-    id: "photo-lipo",
-    name: "Фотоцит и липоцит",
-    description: "Липоцит копит излишки массы и отдаёт их фотоциту в голодные периоды. Полезна в нестабильной среде.",
-    origin: "substrate",
-    universality: 90,
-    initialMode: 0,
-    span: 2,
-    genome: photoLipo,
-  },
-  {
     id: "tutorial",
     name: "Учебная тройка",
     description: "Классическая связка из обучения: фотоцит, жгутикоцит и фагоцит с наследованием связи.",
-    origin: "player",
-    universality: 88,
     initialMode: 0,
     span: 3,
     genome: multicellularGenome,
@@ -168,8 +120,6 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
     id: "smart-phagocyte",
     name: "Умный фагоцит",
     description: "Фагоцит, миоцит, сенсоцит и жгутикоцит. Сенсоцит чувствует пищу, миоцит направляет тело, жгутик тянет его к еде.",
-    origin: "substrate",
-    universality: 84,
     initialMode: 0,
     span: 4,
     genome: smartPhagocyte,
@@ -177,9 +127,7 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "moss",
     name: "Мох",
-    description: "Фотоцит и глюоцит образуют стелющуюся колонию. Вдохновлён «Оплодотворением мха».",
-    origin: "substrate",
-    universality: 76,
+    description: "Фотоцит и глюоцит образуют стелющуюся колонию.",
     initialMode: 0,
     span: 2,
     genome: moss,
@@ -188,8 +136,6 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
     id: "hunter",
     name: "Хищник",
     description: "Фагоцит с жгутиком ищет готовую пищу. Нуждается в пищевых пятнах, зато быстро занимает новые участки.",
-    origin: "substrate",
-    universality: 70,
     initialMode: 0,
     span: 2,
     genome: hunter,
@@ -197,9 +143,7 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "nanobot",
     name: "Нанобот",
-    description: "Фотоцит, глюоцит и кератиноцит создают защищённую колонию. Вдохновлён уровнем «Нанобот».",
-    origin: "substrate",
-    universality: 62,
+    description: "Фотоцит, глюоцит и кератиноцит создают защищённую колонию.",
     initialMode: 0,
     span: 3,
     genome: nanobot,
@@ -208,8 +152,6 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
     id: "smart-predator",
     name: "Умный хищник",
     description: "Девороцит, кератиновый щит, миоцит, сенсоцит и жгутикоцит. Ищет клетки, направляет тело и переваривает добычу, не задевая своих.",
-    origin: "substrate",
-    universality: 48,
     initialMode: 0,
     span: 5,
     genome: smartPredator,
@@ -218,19 +160,17 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
 
 export function demoOrganisms(allowedKinds?: number[]): DemoOrganism[] {
   const allowed = (kind: number) => !allowedKinds || allowedKinds.includes(kind);
-  return DEMO_ORGANISMS
-    .filter(organism => organism.genome().every(mode => allowed(mode.kind)))
-    .sort((a, b) => b.universality - a.universality || a.name.localeCompare(b.name, "ru"));
+  return DEMO_ORGANISMS.filter(organism => organism.genome().every(mode => allowed(mode.kind)));
 }
 
 /**
  * Catalog buffer for chaos: `[version, count, (span, weight, genome...)*]`.
- * More universal organisms receive a larger weight.
+ * Every curated organism has the same appearance weight.
  */
 export function chaosOrganismsBuffer(): Float32Array {
   const entries = DEMO_ORGANISMS.flatMap(organism => {
     const genome = flatten(organism.genome());
-    return [organism.span, Math.max(1, Math.round(organism.universality / 10)), ...genome];
+    return [organism.span, 1, ...genome];
   });
   return new Float32Array([1, DEMO_ORGANISMS.length, ...entries]);
 }
