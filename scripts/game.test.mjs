@@ -124,6 +124,20 @@ test("tutorial requirements use live mechanics and progress does not overwrite c
   assert.deepEqual(listCompletedTutorials(), ["genome"]);
 });
 
+test("microscope lesson ends with inspection and division ignores placement births", () => {
+  const microscope = TUTORIALS.find(t => t.id === "microscope");
+  assert.equal(microscope.steps.at(-1).requirement, "inspect");
+  assert(!microscope.steps.some(step => step.requirement === "save"));
+  const divide = microscope.steps.find(step => step.requirement === "divide");
+  const state = { genome: [newMode(0)], initialMode: 0, inserted: 0, birthsBefore: 1, running: true,
+    frame: makeFrame([[1,500,500,10,0,1,0,0,0,0]]), selected: false, savedGenome: false };
+  state.frame.stats[2] = 1;
+  assert(!evaluateTutorialStep(divide, state), "the placement itself is not a division");
+  state.inserted = 1;
+  state.frame.stats[2] = 2;
+  assert(evaluateTutorialStep(divide, state));
+});
+
 test("organism lesson waits for the requested movement and linked daughter roles", () => {
   const organism = TUTORIALS.find(t => t.id === "organism");
   const roles = organism.steps.find(s => s.requirement === "roles");

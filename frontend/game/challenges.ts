@@ -2,18 +2,17 @@ import { DEFAULT_ENVIRONMENT, newMode, STRIDE, type Mode, type Frame } from "../
 import type { PlateData } from "./storage";
 export type TutorialRequirement = "place" | "run" | "divide" | "inspect" | "save" | "modes" | "initial" | "branches" | "roles" | "adhesion" | "livingBond";
 export type TutorialStep = { id: string; title: string; description: string; requirement: TutorialRequirement };
-export type TutorialContext = { genome: Mode[]; initialMode: number; inserted: number; running: boolean; frame: Frame | null; selected: boolean; savedGenome: boolean };
+export type TutorialContext = { genome: Mode[]; initialMode: number; inserted: number; birthsBefore?: number; running: boolean; frame: Frame | null; selected: boolean; savedGenome: boolean };
 export type Tutorial = { id: string; title: string; description: string; steps: TutorialStep[]; genome: Mode[]; environment: PlateData["environment"] };
 export const TUTORIAL_STEPS: TutorialStep[] = [
     { id: "place", requirement: "place", title: "Поместите клетку", description: "Выберите слой «Свет». ЛКМ или касанием нажмите на жёлтую область в верхней левой части чашки." },
     { id: "run", requirement: "run", title: "Запустите время", description: "Снимите паузу, чтобы клетка начала расти." },
     { id: "divide", requirement: "divide", title: "Дождитесь деления", description: "Наблюдайте, как из одной клетки получаются две. При необходимости ускорьте время." },
     { id: "inspect", requirement: "inspect", title: "Изучите клетку", description: "Выберите диагностику и нажмите на клетку. Сравните её массу и возраст." },
-    { id: "save", requirement: "save", title: "Сохраните геном", description: "Откройте редактор генома и сохраните конструкцию под собственным именем." },
 ];
 // Three practical web lessons; original tutorial scripts are not claimed verbatim.
 export const TUTORIALS: Tutorial[] = [
-    { id: "microscope", title: "Микроскоп", description: "Помещение клетки, течение времени, деление, диагностика и сохранение.",
+    { id: "microscope", title: "Микроскоп", description: "Помещение клетки, течение времени, деление и диагностика.",
         steps: TUTORIAL_STEPS, genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }], environment: { ...DEFAULT_ENVIRONMENT, radiation: 0, light: 2 } },
     { id: "genome", title: "Редактор генома", description: "Несколько слотов, начальная клетка и разные дочерние роли.",
         genome: [{ ...newMode(0), speed: 0, threshold: 1.8, lifespan: 1000 }], environment: { ...DEFAULT_ENVIRONMENT, radiation: 0, light: 2, food: 3 },
@@ -40,7 +39,14 @@ export function evaluateTutorialStep(step: TutorialStep, state: TutorialContext)
     switch (step.requirement) {
         case "place": return state.inserted > 0;
         case "run": return state.running;
-        case "divide": return !!state.frame && (state.frame.stats[2] ?? 0) > state.inserted;
+        case "divide": {
+            if (!state.frame) return false;
+            // births includes placements. Require a birth beyond both the
+            // baseline captured when the step began and the latest placement,
+            // so a second placement cannot masquerade as a division.
+            const baseline = state.birthsBefore ?? state.inserted;
+            return (state.frame.stats[2] ?? 0) > Math.max(baseline, state.inserted);
+        }
         case "inspect": return state.selected;
         case "save": return state.savedGenome;
         case "modes": return state.genome.length >= 2;

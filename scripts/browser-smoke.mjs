@@ -80,7 +80,7 @@ try{
  await click('Начать заново');await confirm();await until('window.__cellhubFrame?.cells.length===0');
  const secondResetAt=await pauseRunning();
  await click('Геном',"document.querySelector('.tabs')");
- await select('.genome-cell-type select',13);
+ await select('.cell-type-picker select',13);
  await evaluate("(()=>{const label=[...document.querySelectorAll('.genome-cell-type')].find(el=>el.textContent.startsWith('Сигнальный канал'));const el=label.querySelector('select');el.value='7';el.dispatchEvent(new Event('change',{bubbles:true}));})()");
  await input('input[aria-label="Выходной сигнал"]',-0.75);
  await clickWorld(600,600);await until('window.__cellhubFrame?.cells.length===12');
