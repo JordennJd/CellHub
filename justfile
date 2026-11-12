@@ -70,7 +70,9 @@ test: _deps _wasm-bindgen
 test-server: _deps
     npm run test:server
 
-# Собрать деплой-артефакт: статический aarch64-сервер
+# Собрать деплой-артефакт: статический сервер
+# Целевая архитектура: CELLHUB_SERVER_TARGET (по умолчанию aarch64-unknown-linux-musl).
+# Для x86_64: CELLHUB_SERVER_TARGET=x86_64-unknown-linux-musl just server-build
 server-build:
     bash scripts/build-server.sh
 
@@ -107,9 +109,16 @@ bootstrap host port="2223" user="root" identity="" serve_port="8081" max_rooms="
       "bash -s -- '/var/lib/cellhub' '{{serve_port}}' '{{max_rooms}}' '{{max_players}}'" \
       < scripts/bootstrap-system-service.sh
 
-# Задеплоить production-сборку и статический aarch64-сервер на VM:
-# just deploy <host> [ssh-port] [user] [identity]
+# Задеплоить production-сборку и статический сервер на VM:
+# just deploy <host> [ssh-port] [user] [identity] [serve-port]
 # или: CELLHUB_SSH_KEY=~/.ssh/... just deploy <host>
+#
+# ARM-VM (по умолчанию собирает aarch64):
+#   CELLHUB_SSH_KEY=~/.ssh/cellhub-github-actions_ed25519 just deploy cellhub.obscurative.ru
+# x86_64-VM:
+#   CELLHUB_SERVER_TARGET=x86_64-unknown-linux-musl \
+#     CELLHUB_SSH_KEY=~/.ssh/cellhub-github-actions_ed25519 \
+#     just deploy 195.58.55.4 22 cellhub ~/.ssh/cellhub-github-actions_ed25519
 deploy host port="2223" user="cellhub" identity=env_var_or_default("CELLHUB_SSH_KEY", "") serve_port="8081":
     #!/usr/bin/env bash
     set -euo pipefail

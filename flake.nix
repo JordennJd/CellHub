@@ -19,7 +19,11 @@
         # Keep this date aligned with rust-toolchain.toml
         rustToolchain = pkgs.rust-bin.nightly."2026-11-09".default.override {
           extensions = [ "rust-src" "rust-analyzer" "rustfmt" "clippy" ];
-          targets = [ "wasm32-unknown-unknown" "aarch64-unknown-linux-musl" ];
+          targets = [
+            "wasm32-unknown-unknown"
+            "aarch64-unknown-linux-musl"
+            "x86_64-unknown-linux-musl"
+          ];
         };
       in
       {

@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Build the authoritative server as a static aarch64 Linux binary.
+# Build the authoritative server as a static Linux binary.
 #
-# The target std comes from the pinned toolchain: the Nix dev shell declares
-# aarch64-unknown-linux-musl in flake.nix / rust-toolchain.toml, and CI adds the
-# same target to rustup. Linking uses rust-lld from the host toolchain, so no
-# aarch64 gcc, glibc or expensive Nix cross build is involved.
+# The target defaults to aarch64-unknown-linux-musl (the original ARM VM) and
+# can be overridden with CELLHUB_SERVER_TARGET, e.g.:
+#
+#   CELLHUB_SERVER_TARGET=x86_64-unknown-linux-musl bash scripts/build-server.sh
+#
+# The target std comes from the pinned toolchain: the Nix dev shell declares the
+# supported targets in flake.nix / rust-toolchain.toml, and CI adds the same
+# targets to rustup. Linking uses rust-lld from the host toolchain, so no cross
+# gcc, glibc or expensive Nix cross build is involved.
 #
 # Output: target/deploy/cellhub-server
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-target=aarch64-unknown-linux-musl
+target=${CELLHUB_SERVER_TARGET:-aarch64-unknown-linux-musl}
 artifact=target/deploy/cellhub-server
 
 if ! command -v cargo >/dev/null && [ -x .tools/cargo/bin/cargo ]; then
@@ -42,9 +47,15 @@ cargo build --release --locked --target "$target" -p cellhub-server
 
 install -m 755 "target/$target/release/cellhub-server" "$artifact"
 
-if command -v readelf >/dev/null 2>&1; then
-  if ! readelf -h "$artifact" | grep -q 'AArch64'; then
-    echo "✗ $artifact is not an aarch64 ELF" >&2
+# Verify the architecture we asked for and that nothing needs a system loader.
+case "$target" in
+  aarch64*) elf_machine='AArch64' ;;
+  x86_64*) elf_machine='X86-64' ;;
+  *) elf_machine='' ;;
+esac
+if command -v readelf >/dev/null 2>&1 && [ -n "$elf_machine" ]; then
+  if ! readelf -h "$artifact" | grep -q "$elf_machine"; then
+    echo "✗ $artifact is not a $target ELF" >&2
     exit 1
   fi
   if readelf -l "$artifact" | grep -q 'INTERP'; then
@@ -53,4 +64,4 @@ if command -v readelf >/dev/null 2>&1; then
   fi
 fi
 
-echo "✓ static aarch64 server: $artifact ($(du -h "$artifact" | cut -f1))"
+echo "✓ static $target server: $artifact ($(du -h "$artifact" | cut -f1))"

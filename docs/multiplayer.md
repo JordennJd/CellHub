@@ -135,25 +135,31 @@ npm run build
 cargo run --release -p cellhub-server -- --bind 0.0.0.0:8082 --static dist
 ```
 
-Штатный деплой на VM:
+Штатный деплой на VM. Продовый хост — x86_64 (`195.58.55.4`, DNS
+`cellhub.obscurative.ru`), старая ARM-VM остаётся как резерв:
 
 ```sh
 # один раз: systemd-юнит и узкое sudo-правило (нужен root SSH)
-just bootstrap cellhub.obscurative.ru
+just bootstrap 195.58.55.4 22 root "~/.ssh/id_ed25519"
 
 # дальше — обычный деплой от пользователя cellhub
-just deploy cellhub.obscurative.ru
-# если SSH-ключ не выбирается автоматически:
-CELLHUB_SSH_KEY=~/.ssh/cellhub-github-actions_ed25519 just deploy cellhub.obscurative.ru
+CELLHUB_SERVER_TARGET=x86_64-unknown-linux-musl \
+  CELLHUB_SSH_KEY=~/.ssh/cellhub-github-actions_ed25519 \
+  just deploy 195.58.55.4 22 cellhub ~/.ssh/cellhub-github-actions_ed25519
+
+# ARM-VM: порт 2223 и цель по умолчанию (aarch64)
+CELLHUB_SSH_KEY=~/.ssh/cellhub-github-actions_ed25519 \
+  just deploy cellhub.obscurative.ru
 ```
 
-Рецепт собирает `dist/` и `target/deploy/cellhub-server` — статический
-`aarch64-unknown-linux-musl` бинарник. Целевой `rust-std` объявлен в `flake.nix`
-и `rust-toolchain.toml`, поэтому dev shell сразу содержит нужную стандартную
-библиотеку. На VM он копирует статику в `/var/lib/cellhub`, бинарник — в
-`/var/lib/cellhub/.local/bin/cellhub-server` и перезапускает system-сервис
-`cellhub.service` на `0.0.0.0:8081`. Nix-ld и glibc на VM не нужны; включённый
-`programs.nix-ld` не мешает, потому что бинарник статический.
+Рецепт собирает `dist/` и `target/deploy/cellhub-server`. Целевая архитектура
+задаётся `CELLHUB_SERVER_TARGET` (по умолчанию `aarch64-unknown-linux-musl`,
+для x86 — `x86_64-unknown-linux-musl`). Целевой `rust-std` объявлен в `flake.nix`
+и `rust-toolchain.toml`, поэтому dev shell сразу содержит стандартные
+библиотеки для обеих архитектур. На VM он копирует статику в `/var/lib/cellhub`,
+бинарник — в `/var/lib/cellhub/.local/bin/cellhub-server` и перезапускает
+system-сервис `cellhub.service` на `0.0.0.0:8081`. Nix-ld и glibc на VM не
+нужны; включённый `programs.nix-ld` не мешает, потому что бинарник статический.
 
 `cellhub.service` — обычный system-юнит, а не user-сервис, поэтому linger не
 нужен. `just bootstrap` один раз ставит юнит и правило sudo, которое разрешает
@@ -201,14 +207,19 @@ security.sudo.extraRules = [{
 networking.firewall.allowedTCPPorts = [ 8081 ];
 ```
 
-Основной Caddy терминирует TLS и проксирует весь домен на VM:
+Caddy терминирует TLS и проксирует весь домен на сервер. На x86-хосте Caddy
+стоит рядом с сервисом (`apt install caddy`, конфиг `/etc/caddy/Caddyfile`) и
+ходит на loopback; порты 80/443 должны быть открыты, 8081 — только локально:
 
 ```caddyfile
 cellhub.obscurative.ru {
     encode zstd gzip
-    reverse_proxy 10.200.0.7:8081
+    reverse_proxy 127.0.0.1:8081
 }
 ```
+
+На старой ARM-схеме внешний Caddy на основной машине проксирует на
+`10.200.0.7:8081`; конфиг отличается только адресом upstream.
 
 Caddy 2 сам пробрасывает WebSocket Upgrade, дополнительные заголовки не нужны.
 Не добавляйте `transport http { versions h2c }` и не удаляйте `Upgrade`/`Connection`
@@ -216,9 +227,14 @@ Caddy 2 сам пробрасывает WebSocket Upgrade, дополнител�
 основной машины.
 
 GitHub Actions использует secrets `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS` и
-variables `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`. `DEPLOY_USER` должен быть
-`cellhub`; CI перезапускает тот же system-сервис через узкое sudo-правило,
-поэтому `just bootstrap` должен быть выполнен на VM заранее.
+variables `DEPLOY_HOST`, `DEPLOY_PORT`, `DEPLOY_USER`, а также необязательную
+`DEPLOY_SERVER_TARGET` (по умолчанию `x86_64-unknown-linux-musl`; для старой
+ARM-VM — `aarch64-unknown-linux-musl`). `DEPLOY_USER` должен быть `cellhub`;
+на x86-хосте это порт 22, на ARM-VM — 2223. CI перезапускает тот же
+system-сервис через узкое sudo-правило, поэтому `just bootstrap` должен быть
+выполнен на VM заранее. Публичный ключ `cellhub-github-actions_ed25519` из
+`DEPLOY_SSH_KEY` должен лежать в `~cellhub/.ssh/authorized_keys`, а
+`DEPLOY_KNOWN_HOSTS` — содержать host key целевой VM.
 
 Параметры сервера: `--bind <addr>`, `--static <dir>`, `--max-rooms <n>` (по
 умолчанию 64), `--max-players <n>` (по умолчанию 40). Рецепт `just deploy`

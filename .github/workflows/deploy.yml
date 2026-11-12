@@ -25,7 +25,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-11-09
-          targets: wasm32-unknown-unknown,aarch64-unknown-linux-musl
+          targets: wasm32-unknown-unknown,aarch64-unknown-linux-musl,x86_64-unknown-linux-musl
           components: rust-src
 
       - name: Кэшировать Rust target и cargo registry
@@ -58,7 +58,11 @@ jobs:
       - name: Собрать production-сборку
         run: npm run build
 
-      - name: Собрать статический aarch64-сервер
+      - name: Собрать статический сервер
+        env:
+          # Продовый хост — x86_64; для старой ARM-VM задайте
+          # переменную репозитория DEPLOY_SERVER_TARGET=aarch64-unknown-linux-musl.
+          CELLHUB_SERVER_TARGET: ${{ vars.DEPLOY_SERVER_TARGET || 'x86_64-unknown-linux-musl' }}
         run: bash scripts/build-server.sh
 
       - name: Настроить SSH
