@@ -112,11 +112,12 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
   </>;
 
   return <div className="genome-editor">
-    <section className="genome-demo"><label className="genome-check"><input type="checkbox" role="switch" checked={demoMode} aria-controls={demoId} onChange={e => setDemoMode(e.target.checked)}/>Режим демонстрации</label>
+    <OrganismCarousel allowedKinds={allowedKinds} onChoose={(genome, initialMode, name) => choose(name, genome, initialMode)}/>
+    <section className="genome-demo">
+      <label className="genome-check"><input type="checkbox" role="switch" checked={demoMode} aria-controls={demoId} onChange={e => setDemoMode(e.target.checked)}/>Режим демонстрации</label>
       {demoMode && <div id={demoId} className="genome-demo-examples"><p>Пример заменит слоты редактора. Поле и живые клетки сохранятся.</p>
         <button onClick={() => setConfirm("reset")}>Одна клетка</button>
         <button onClick={() => setConfirm("types")}>Все доступные типы</button>
-        <OrganismCarousel allowedKinds={allowedKinds} onChoose={(genome, initialMode, name) => choose(name, genome, initialMode)}/>
         {savedGenomes.length > 0 && <>
           <h4>Мои сохранённые геномы</h4>
           <div className="genome-demo-list">

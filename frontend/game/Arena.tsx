@@ -6,7 +6,6 @@ import { OnlinePanel } from '../OnlinePanel';
 import { WorldView, type ViewState } from '../WorldView';
 import { initialBackend, type BackendPreference } from '../backend';
 import { demoOrganisms } from '../organisms';
-import { OrganismCarousel } from '../editor/OrganismCarousel';
 import { GenomeEditor } from '../editor/GenomeEditor';
 import { Library } from './Library';
 import { Modal } from './Modal';
@@ -55,7 +54,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
     const [lobbyOpen, setLobbyOpen] = useState(true);
     const [genome, setGenome] = useState<Mode[]>(() => demoOrganisms()[0]?.genome() ?? defaultGenome());
     const [initialMode, setInitialMode] = useState(() => demoOrganisms()[0]?.initialMode ?? 0);
-    const [tab, setTab] = useState('demo');
+    const [tab, setTab] = useState('genome');
     const [tool, setTool] = useState('place');
     const [layer, setLayer] = useState('biome');
     const [selected, setSelected] = useState<number | null>(null);
@@ -285,13 +284,12 @@ export function Arena({ onExit }: { onExit: () => void }) {
             </section>
             <aside className="lab-sidebar">
                 <nav className="tabs" aria-label="Панели арены">
-                    {([['demo', 'Организмы'], ['genome', 'Геном'], ['observe', 'Наблюдение']] as [string, string][])
+                    {([['genome', 'Геном'], ['observe', 'Наблюдение']] as [string, string][])
                         .concat((arenaMode ? [['rating', 'Рейтинг']] : []) as [string, string][])
                         .concat([['room', 'Комната']]).map(([value, label]) =>
                         <button key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => setTab(value)}>{label}</button>)}
                 </nav>
                 <div className="sidebar-content">
-                    {tab === 'demo' && <><p>Выберите готовый организм, затем нажмите на поле, чтобы заселить его клетку. Ростом и делением управляет сервер.</p><OrganismCarousel onChoose={(genome, mode, name) => { setGenome(genome); setInitialMode(mode); setTool('place'); arena.setNotice(`Выбран «${name}». Нажмите на поле, чтобы добавить клетку.`); }}/></>}
                     {tab === 'genome' && <GenomeEditor genome={genome} onChange={setGenome} initialMode={initialMode}
                         onInitialModeChange={setInitialMode} onSave={() => { setName(''); setSaveKind('genome'); }}
                         onLoad={() => setLibrary(true)}/>}

@@ -1,4 +1,4 @@
-import { flatten, newMode, multicellularGenome, type Mode, type Program } from "./model";
+import { flatten, newMode, multicellularGenome, HALF_TURN, type Mode, type Program } from "./model";
 
 /**
  * Curated multicellular organisms shared by the genome editor's demonstration
@@ -22,6 +22,12 @@ const rule = (target: number, input: number, scale: number, offset = 0): Program
   target, input, kind: 0, scale, offset, threshold: 0, below: 0,
 });
 
+/**
+ * A quarter turn between generations makes compact, self-avoiding colonies
+ * instead of a straight line that can leave a light or food patch.
+ */
+const QUARTER_TURN = HALF_TURN / 2;
+
 /** A photocyte that keeps both daughters attached, growing a feeding filament. */
 const filament = (): Mode[] => [
   mode(0, {
@@ -30,20 +36,29 @@ const filament = (): Mode[] => [
   }),
 ];
 
-/** Phagocyte + sensocyte + myocyte + flagellocyte: turns towards food. */
+/**
+ * Photocyte seed + phagocyte + sensocyte + myocyte + flagellocyte: turns
+ * towards food. The seed closes the energy loop, so a lone founder can grow
+ * the mobile hunter instead of starving before its flagellum appears.
+ */
 const smartPhagocyte = (): Mode[] => [
-  mode(0, { name: "Фагоцит", kind: 1, threshold: 2.2, childA: 0, childB: 1, bindChildren: true, maxConnections: 3 }),
-  mode(1, {
-    name: "Миоцит", kind: 12, threshold: 1.6, childA: 0, childB: 2,
-    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
-    programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
+  mode(0, {
+    name: "Фотоцит-семя", kind: 0, threshold: 1.8, childA: 1, childB: 0,
+    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN, angle: QUARTER_TURN,
+    maxConnections: 4,
   }),
+  mode(1, { name: "Фагоцит", kind: 1, threshold: 2.2, childA: 1, childB: 2, bindChildren: true, angle: QUARTER_TURN, maxConnections: 3 }),
   mode(2, {
-    name: "Сенсоцит", kind: 11, threshold: 1.4, childA: 0, childB: 3,
+    name: "Миоцит", kind: 12, threshold: 1.6, childA: 1, childB: 3,
     bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
-    sensor: 1, signalChannel: 0, sensorGain: 1,
+    angle: QUARTER_TURN, programs: [rule(10, 1, 0.3, 0.25), rule(11, 13, 0.3)],
   }),
   mode(3, {
+    name: "Сенсоцит", kind: 11, threshold: 1.4, childA: 1, childB: 4,
+    bindChildren: true, keepAdhesionA: true, keepAdhesionB: true, prioritizeWhenStarving: true,
+    angle: QUARTER_TURN, sensor: 1, signalChannel: 0, sensorGain: 1,
+  }),
+  mode(4, {
     name: "Жгутикоцит", kind: 2, canDivide: false, speed: 25, prioritizeWhenStarving: true,
     programs: [rule(8, 1, 28, 6)],
   }),
@@ -76,15 +91,29 @@ const smartPredator = (): Mode[] => [
   }),
 ];
 
-/** Photocyte + glueocyte: a stationary mat that spreads over a rich patch. */
+/**
+ * Photocyte + glueocyte: a stationary mat that spreads over a rich patch.
+ * The photocyte keeps itself at the old joint and lays glue towards the light.
+ */
 const moss = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, bindChildren: true, maxConnections: 4 }),
+  mode(0, {
+    name: "Фотоцит", kind: 0, threshold: 1.8, childA: 1, childB: 0,
+    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN, angle: QUARTER_TURN,
+    maxConnections: 4,
+  }),
   mode(1, { name: "Глюоцит", kind: 9, canDivide: false, maxConnections: 4, prioritizeWhenStarving: true }),
 ];
 
-/** Phagocyte + flagellocyte: a simple hunter for food patches. */
+/**
+ * Phagocyte + flagellocyte: a simple hunter for food patches. The phagocyte
+ * keeps itself at the rear and sends the new flagellum forward.
+ */
 const hunter = (): Mode[] => [
-  mode(0, { name: "Фагоцит", kind: 1, threshold: 2, childA: 0, childB: 1, bindChildren: true, maxConnections: 2 }),
+  mode(0, {
+    name: "Фагоцит", kind: 1, threshold: 2, childA: 1, childB: 0,
+    bindChildren: true, keepAdhesionB: true, childAngleB: HALF_TURN, angle: QUARTER_TURN,
+    maxConnections: 2,
+  }),
   mode(1, { name: "Жгутикоцит", kind: 2, canDivide: false, speed: 40, prioritizeWhenStarving: true }),
 ];
 
@@ -119,9 +148,9 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "smart-phagocyte",
     name: "Умный фагоцит",
-    description: "Фагоцит, миоцит, сенсоцит и жгутикоцит. Сенсоцит чувствует пищу, миоцит направляет тело, жгутик тянет его к еде.",
+    description: "Фотоцит-семя выращивает фагоцита, миоцита, сенсоцита и жгутикоцит. Сенсоцит чувствует пищу, миоцит направляет тело, жгутик тянет его к еде.",
     initialMode: 0,
-    span: 4,
+    span: 5,
     genome: smartPhagocyte,
   },
   {

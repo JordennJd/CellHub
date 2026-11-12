@@ -55,6 +55,19 @@ test("demo organism catalog is valid and filtered by allowed cell types", () => 
 const organismCatalog = (organism) =>
   new Float32Array([1, 1, organism.span, 1, ...model.flatten(organism.genome())]);
 
+test("catalog self-retaining B daughters preserve their heading", () => {
+  for (const organism of organisms.DEMO_ORGANISMS) {
+    const genome = organism.genome();
+    for (const [index, mode] of genome.entries()) {
+      if (!mode.keepAdhesionB || mode.childB !== index || mode.childA === index) continue;
+      assert(
+        Math.abs(Math.abs(mode.childAngleB) - Math.PI) < 1e-5,
+        `${organism.id} slot ${index} rotates its retained daughter away from the heading`,
+      );
+    }
+  }
+});
+
 test("chaos seeds every curated organism as a bonded chain", () => {
   for (const organism of organisms.DEMO_ORGANISMS) {
     const sim = new Simulation(42);
