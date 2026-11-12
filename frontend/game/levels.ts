@@ -88,6 +88,11 @@ export function loadLevels(): Promise<LevelManifest[]> {
     return cache;
 }
 
+/** Playable challenge levels. Manifest tutorials are replaced by the web lessons in `challenges.ts`. */
+export function loadChallengeLevels(): Promise<LevelManifest[]> {
+    return loadLevels().then(levels => levels.filter(level => !level.tutorial));
+}
+
 function levelDocument(value: unknown, source: string): LevelManifest {
     if (!value || typeof value !== "object" || Array.isArray(value))
         throw new Error(`Файл уровня ${source} повреждён.`);

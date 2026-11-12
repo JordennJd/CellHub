@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { TUTORIALS, listCompleted, listCompletedTutorials } from './challenges';
-import { loadLevels, type LevelManifest } from './levels';
+import { loadChallengeLevels, type LevelManifest } from './levels';
 import { Library } from './Library';
 import { Settings } from './Settings';
 import type { LibraryKind, PlateData } from './storage';
@@ -37,7 +37,7 @@ function ModeCard({ kind, title, description, onClick }: {
 }
 
 export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }) {
-    const [page, setPage] = useState<'home' | 'challenges' | 'tutorials'>('home');
+    const [page, setPage] = useState<'home' | 'challenges'>('home');
     const [library, setLibrary] = useState<LibraryKind | null>(null);
     const [settings, setSettings] = useState(false);
     const [levels, setLevels] = useState<LevelManifest[] | null>(null), [levelsError, setLevelsError] = useState('');
@@ -53,7 +53,7 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
 
     useEffect(() => {
         let active = true;
-        loadLevels().then(value => { if (active) setLevels(value); })
+        loadChallengeLevels().then(value => { if (active) setLevels(value); })
             .catch(error => { if (active) setLevelsError(String(error)); });
         return () => { active = false; };
     }, []);
@@ -74,42 +74,43 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
             {page === 'home' ? <>
                 <div className="home-heading"><h1 ref={heading} tabIndex={-1}>Выберите режим</h1></div>
                 <div className="home-mode-grid">
-                    <ModeCard kind="challenge" title="Испытания" description="Задачи с заданными условиями и целями." onClick={() => setPage('challenges')}/>
+                    <ModeCard kind="challenge" title="Испытания" description="Уроки обучения и задачи с заданными условиями." onClick={() => setPage('challenges')}/>
                     <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
                     <ModeCard kind="chaos" title="Хаос" description="Биомы, день и ночь, мутации и самозарождение." onClick={() => onStart({ kind: 'chaos' })}/>
                     <ModeCard kind="arena" title="Арена" description="Соревнования организмов с другими игроками." onClick={() => onStart({ kind: 'arena' })}/>
                 </div>
                 <div className="home-secondary-grid">
-                    <section className="home-panel" aria-labelledby="home-tutorials">
-                        <div><h2 id="home-tutorials">Обучение</h2><p>Микроскоп, геном и первые организмы — пошагово.</p></div>
-                        <div className="home-panel-actions"><button onClick={() => setPage('tutorials')}>Выбрать урок</button></div>
+                    <section className="home-panel" aria-labelledby="home-open">
+                        <div><h2 id="home-open">Открыть эксперимент</h2><p>Сохранённые чашки: продолжите или переиграйте опыт.</p></div>
+                        <div className="home-panel-actions"><button onClick={() => setLibrary('plate')}>Открыть эксперимент</button></div>
                     </section>
                     <section className="home-panel" aria-labelledby="home-saved">
-                        <div><h2 id="home-saved">Ваши работы</h2><p>Сохранённые эксперименты и геномы.</p></div>
-                        <div className="home-panel-actions">
-                            <button onClick={() => setLibrary('plate')}>Открыть эксперимент</button>
-                            <button onClick={() => setLibrary('genome')}>Банк геномов</button>
-                        </div>
+                        <div><h2 id="home-saved">Ваши работы</h2><p>Сохранённые геномы и организмы для новых опытов.</p></div>
+                        <div className="home-panel-actions"><button onClick={() => setLibrary('genome')}>Банк геномов</button></div>
                     </section>
                 </div>
             </> : <>
                 <div className="page-heading"><button onClick={() => setPage('home')}>← Режимы</button>
-                    <h1 ref={heading} tabIndex={-1}>{page === 'tutorials' ? 'Обучение' : 'Испытания'}</h1>
-                    <p>{page === 'tutorials' ? 'Уроки можно проходить в любом порядке.' : 'Все задачи доступны сразу — выбирайте любую.'}</p>
+                    <h1 ref={heading} tabIndex={-1}>Испытания</h1>
+                    <p>Начните с уроков обучения, затем выберите любую задачу.</p>
                 </div>
                 {progress.error && <p role="alert">{progress.error}</p>}
                 {levelsError && <p role="alert">Не удалось загрузить испытания: {levelsError}</p>}
                 <div className="challenge-list">
-                    {page === 'tutorials' ? TUTORIALS.map((lesson, i) => <article className="challenge-card" key={lesson.id}>
-                        <span className="challenge-number">{String(i + 1).padStart(2, '0')}</span>
-                        <div><h2>{lesson.title}</h2><p>{lesson.description}</p>
-                            {progress.tutorials.includes(lesson.id) && <p className="success">Пройдено</p>}
-                            <button className="primary" onClick={() => onStart({ kind: 'tutorial', tutorialId: lesson.id })}>Начать урок</button>
-                        </div>
-                    </article>) : levels === null ? (!levelsError && <p role="status">Загружаем испытания…</p>) : levels.map((level, i) => {
+                    {TUTORIALS.map((lesson, i) => {
+                        const done = progress.tutorials.includes(lesson.id);
+                        return <article className="challenge-card" key={`lesson-${lesson.id}`}>
+                            <span className="challenge-number">{String(i + 1).padStart(2, '0')}</span>
+                            <div><h2>{lesson.title}</h2><p>{lesson.description}</p>
+                                {done && <p className="success">Пройдено</p>}
+                                <button className="primary" onClick={() => onStart({ kind: 'tutorial', tutorialId: lesson.id })}>{done ? 'Повторить урок' : 'Начать урок'}</button>
+                            </div>
+                        </article>;
+                    })}
+                    {levels === null ? (!levelsError && <p role="status">Загружаем испытания…</p>) : levels.map((level, i) => {
                         const done = progress.completed.includes(level.id);
                         return <article className="challenge-card" key={level.id}>
-                            <span className="challenge-number">{String(i + 1).padStart(2, '0')}</span>
+                            <span className="challenge-number">{String(TUTORIALS.length + i + 1).padStart(2, '0')}</span>
                             <div><h2>{level.title}</h2><p>{level.description}</p>
                                 {done && <p className="success">Пройдено</p>}
                                 <button className="primary" onClick={() => onStart({ kind: 'challenge', level })}>{done ? 'Повторить' : 'Начать'}</button>
