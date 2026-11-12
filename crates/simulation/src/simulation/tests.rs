@@ -207,7 +207,7 @@ fn nitrogen_deficit_blocks_division_or_kills_and_daughters_split_reserve_evenly(
     assert_ne!(daughters[0].0, daughters[1].0);
     assert_eq!(daughters[0].1, daughters[1].1);
     assert!(
-        (daughters[0].1 - (0.8 - 0.025 * STEP) / 2.).abs() < 0.001,
+        (daughters[0].1 - (0.8 - 0.024 * STEP) / 2.).abs() < 0.000001,
         "daughter reserve {}",
         daughters[0].1
     );
@@ -293,7 +293,7 @@ fn bright_photocytes_compete_for_local_nitrates() {
     let control = run(&scattered, 1.);
     let baseline = control[0];
     assert!(baseline > 0 && control.iter().all(|&tick| tick == baseline));
-    for (x, y) in [(544., 544.), (512., 512.), (516., 550.)] {
+    for (x, y, minimum_divisions) in [(544., 544., 7), (512., 512., 5), (516., 550., 5)] {
         for count in 5..=7 {
             let crowded: Vec<_> = ring[..count]
                 .iter()
@@ -306,13 +306,17 @@ fn bright_photocytes_compete_for_local_nitrates() {
                 *by_tick.entry(tick).or_insert(0) += 1;
             }
             assert!(
-                by_tick.values().sum::<usize>() >= 5,
+                by_tick.values().sum::<usize>() >= count.min(minimum_divisions),
                 "ring {count} at {x},{y}: {ticks:?}"
             );
             assert!(
                 by_tick.values().all(|&count| count <= 2),
                 "ring {count} at {x},{y}: {ticks:?}"
             );
+            if count == ring.len() {
+                let (&first, _) = by_tick.first_key_value().unwrap();
+                assert!(first * 2 >= baseline * 3, "ring at {x},{y}: {ticks:?}");
+            }
         }
     }
     let crowded: Vec<_> = ring.iter().map(|&(x, y)| (544. + x, 544. + y)).collect();

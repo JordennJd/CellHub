@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, HashSet};
 
 const STARVING_MASS: f32 = 0.65;
 const STARVING_PRIORITY_MULTIPLIER: f64 = 4.;
-const NITROGEN_CONSUMPTION: f32 = 0.025;
+const NITROGEN_MAINTENANCE: f32 = 0.024;
+const CAMPAIGN_NITROGEN_MAINTENANCE: f32 = 0.025;
 const NITROGEN_FIXATION: f32 = 0.10;
 const NITROGEN_UPTAKE: f32 = 0.35;
 const NITROGEN_PER_BIOMASS: f32 = 0.65;
@@ -78,7 +79,7 @@ impl Tile {
     }
 
     pub(super) fn feed_campaign_nitrogen(&mut self, cell: &mut Cell, kind: u8) {
-        use_nitrogen(cell, kind);
+        use_nitrogen(cell, kind, CAMPAIGN_NITROGEN_MAINTENANCE);
         let demand = (STEP * NITROGEN_UPTAKE * self.nitrates).min(1. - cell.nitrogen);
         cell.nitrogen += self.withdraw_nitrate(demand, CAMPAIGN_NITRATE_PER_RESERVE);
     }
@@ -90,13 +91,13 @@ impl Tile {
     }
 }
 
-fn use_nitrogen(cell: &mut Cell, kind: u8) {
+fn use_nitrogen(cell: &mut Cell, kind: u8, maintenance: f32) {
     let fixation = if kind == NITROCYTE {
         NITROGEN_FIXATION
     } else {
         0.
     };
-    cell.nitrogen = (cell.nitrogen + STEP * (fixation - NITROGEN_CONSUMPTION)).clamp(0., 1.);
+    cell.nitrogen = (cell.nitrogen + STEP * (fixation - maintenance)).clamp(0., 1.);
 }
 
 /// The quadratic weights vary continuously with position and sum to one.
@@ -119,7 +120,7 @@ pub(super) fn feed_nitrogen(
     cell: &mut Cell,
     kind: u8,
 ) {
-    use_nitrogen(cell, kind);
+    use_nitrogen(cell, kind, NITROGEN_MAINTENANCE);
     let room = 1. - cell.nitrogen;
     if room <= 0. {
         return;
