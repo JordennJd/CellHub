@@ -1,22 +1,16 @@
-.genome-editor { display: grid; gap: 18px; min-width: 0; color: var(--text); }
-.genome-demo { border-bottom:1px solid var(--border); padding-bottom:10px; }
-.genome-demo .genome-check { margin:0; }
+.genome-editor { display: grid; gap: 14px; min-width: 0; color: var(--text); }
+.genome-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.genome-tools:has(> details[open]) { grid-template-columns: minmax(0, 1fr); }
+.genome-tools > .genome-file-actions, .genome-tools > .genome-confirm { grid-column: 1 / -1; }
 .genome-demo-examples { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .genome-demo-examples p { flex-basis:100%; }
 .genome-demo-examples h4 { flex-basis:100%; margin:8px 0 0; font-size:13px; }
-.genome-demo-list { flex-basis:100%; display:grid; gap:7px; }
-.genome-demo-organism { display:grid; gap:3px; text-align:left; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--panel-subtle); color:var(--text); font:inherit; cursor:pointer; }
+.genome-demo-list { flex-basis:100%; display:grid; grid-template-columns:minmax(0,1fr); gap:7px; min-width:0; }
+.genome-demo-list > .genome-demo-organism { display:grid; gap:3px; text-align:left; padding:9px 11px; border:1px solid var(--border); border-radius:8px; background:var(--panel-subtle); color:var(--text); font:inherit; overflow-wrap:anywhere; cursor:pointer; }
 .genome-demo-organism strong { font-size:13px; }
 .genome-demo-organism span { color:var(--accent); font-size:11px; }
 .genome-demo-organism small { color:var(--muted); font-size:12px; line-height:1.45; }
 .genome-demo-organism:disabled { opacity:.45; cursor:not-allowed; }
-.cell-type-picker { border:1px solid var(--border); border-radius:10px; overflow:hidden; background:var(--panel-subtle); }
-.cell-type-picker>label { padding:14px 14px 0; }
-.cell-type-preview { display:flex; align-items:center; gap:8px; padding:4px 14px; }
-.cell-type-preview canvas { width:100px; height:75px; flex-shrink:0; }
-.cell-type-preview strong,.cell-type-preview span { display:block; }
-.cell-type-preview span { margin-top:5px; color:var(--muted); font-size:12px; }
-.genome-editor .cell-type-picker details { border:0; border-top:1px solid var(--border); border-radius:0; padding:0 14px; }
 .mass-distribution label>span { display:flex; justify-content:space-between; gap:8px; }
 .mass-distribution label>.slider-control { display:block; }
 .mass-distribution output { color:var(--accent); font-variant-numeric:tabular-nums; }
@@ -29,15 +23,48 @@
 .genome-editor input[type=range] { width: 100%; accent-color: var(--accent); margin: 5px 0; }
 .genome-editor input[type=checkbox] { accent-color: var(--accent); flex: 0 0 auto; width: 16px; height: 16px; }
 .genome-editor .genome-check { display: flex; align-items: flex-start; gap: 8px; line-height: 1.4; }
-.genome-file-actions, .genome-mode-actions, .genome-modes, .genome-confirm > div { display: flex; gap: 7px; flex-wrap: wrap; }
+.genome-file-actions, .genome-mode-actions, .genome-confirm > div { display: flex; gap: 7px; flex-wrap: wrap; }
 .genome-file-actions > button { flex: 1; }
-.genome-modes { margin: 0 0 9px; }
-.genome-color-dot { display: inline-block; width: 10px; height: 10px; border: 1px solid var(--border-strong); border-radius: 50%; margin-right: 6px; }
+.genome-tools button, .genome-mode-actions button { padding: 6px 9px; min-height: 34px; font-size: 12px; }
+.genome-slot-controls, .genome-mode-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; align-items: start; }
+.genome-slot-controls:has(.slot-picker[open]) { grid-template-columns: minmax(0, 1fr); }
+.genome-slot-field { display: grid; gap: 7px; font-size: 13px; min-width: 0; }
+.genome-mode-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr); align-items: end; }
+.genome-mode-fields .slot-name input { min-height: 44px; }
+.genome-mode-actions { margin: 7px 0; }
+.genome-mode-actions button:first-child { color: var(--accent); }
+.genome-color-dot { flex: 0 0 auto; width: 10px; height: 10px; border: 1px solid var(--border-strong); border-radius: 50%; }
+.genome-editor .slot-picker { padding: 0; background: var(--input-bg); border-color: var(--border-strong); }
+.genome-editor .slot-picker summary { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 9px; border-radius: 7px; }
+.slot-picker summary::-webkit-details-marker { display: none; }
+.slot-picker summary::after { content: ""; width: 6px; height: 6px; flex: 0 0 auto; margin-left: auto; border-right: 1px solid; border-bottom: 1px solid; transform: translateY(-2px) rotate(45deg); }
+.slot-picker[open] summary::after { transform: translateY(2px) rotate(225deg); }
+.slot-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slot-start { color: var(--accent); font-size: 10px; }
+.slot-picker-content { border-top: 1px solid var(--border); padding: 4px; }
+.slot-picker-content input[type=search] { padding: 6px; font-size: 12px; }
+.slot-options, .division-graph-rows { list-style: none; margin: 0; padding: 0; }
+.slot-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(126px, 100%), 1fr)); gap: 3px; max-height: min(220px, 34vh); overflow: auto; padding: 4px; }
+.slot-options button, .division-graph-rows button { display: flex; width: 100%; align-items: center; gap: 5px; min-width: 0; min-height: 31px; padding: 4px 5px; font-size: 12px; text-align: left; }
+.genome-editor :is(.division-graph-disclosure, .genome-preview-disclosure, .genome-demo) { padding: 0 9px; }
+.genome-editor :is(.division-graph-disclosure, .genome-preview-disclosure, .genome-demo) > summary { padding: 7px 0; }
+.genome-editor :is(.division-graph-disclosure, .genome-preview-disclosure, .genome-demo)[open] { padding-bottom: 8px; }
+.genome-editor .division-graph-edit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 10px 0; }
+.division-graph-edit legend { margin-bottom: 5px; font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+.division-graph-edit label { min-width: 0; }
+.division-graph { max-height: min(260px, 38vh); overflow: auto; border-top: 1px solid var(--border); margin-top: 8px; padding: 5px; }
+.division-graph h4 { font-size: 12px; font-weight: 650; color: var(--muted); margin: 8px 0 5px; }
+.division-graph-rows { display: grid; gap: 5px; }
+.division-graph-rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto repeat(2, minmax(0, 1fr)); gap: 4px; align-items: center; }
+.division-graph-arrow, .slot-branch { color: var(--muted); }
+.slot-branch { font-size: 10px; }
+.genome-color-section { border-top: 1px solid var(--border); padding-top: 14px; }
+.genome-color-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+.genome-color-controls input[type=color] { width: 56px; height: 30px; padding: 3px; cursor: pointer; }
 .genome-color-picker { grid-template-columns: 1fr 64px; align-items: center; margin: 12px 0; }
 .genome-color-picker input { width: 64px; height: 34px; padding: 3px; border: 1px solid var(--border); background: var(--input-bg); border-radius: 6px; cursor: pointer; }
 .genome-color-channel > label { display: grid; grid-template-columns: minmax(0,1fr) 85px; align-items: center; gap: 8px; }
 .genome-children .genome-setting > label { grid-template-columns: 1fr; }
-.genome-editor .genome-modes button.active { background: var(--selected-bg); border-color: var(--border-strong); color: var(--selected-text); }
 .genome-editor details { border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; }
 .genome-editor summary { cursor: pointer; font-size: 13px; color: var(--text); line-height: 1.5; }
 .genome-setting { margin: 14px 0; }
@@ -53,20 +80,17 @@
 .genome-children { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
 .genome-children > section { min-width: 0; }
 .genome-children .genome-check { margin-top: 9px; }
-.genome-lineage { background: var(--accent-soft); border-radius: 8px; padding: 10px 12px; overflow-wrap: anywhere; }
-.genome-editor .genome-preview-disclosure { padding: 10px 12px; }
 .genome-preview { padding-top: 12px; }
 .genome-preview-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .genome-preview-heading h3 { margin: 0; }
 .genome-preview-heading span { font-size: 12px; color: var(--muted); }
 .genome-preview canvas { width: 100%; height: 180px; display: block; background: var(--canvas-bg); border-radius: 8px; margin: 10px 0; }
 .genome-editor .preview-age { display: block; }
-.genome-demo input[role=switch] { appearance: none; width: 36px; height: 22px; padding: 2px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--canvas-bg); cursor: pointer; }
-.genome-demo input[role=switch]::before { content: ""; display: block; width: 16px; height: 16px; border-radius: 50%; background: var(--muted); }
-.genome-demo input[role=switch]:checked { background: var(--accent-soft); border-color: var(--accent); }
-.genome-demo input[role=switch]:checked::before { transform: translateX(14px); background: var(--accent); }
 .genome-preview details { margin-top: 10px; }
-.genome-examples > button { margin: 10px 8px 0 0; }
 .genome-confirm { position: sticky; bottom: 0; border: 1px solid var(--accent); background: var(--panel-raised); padding: 12px; border-radius: 8px; box-shadow: 0 4px 24px var(--shadow); z-index: 2; }
 .genome-editor .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 @media (max-width: 400px) { .genome-children { grid-template-columns: 1fr; } }
+@media (max-width: 360px) { .genome-tools { grid-template-columns: minmax(0, 1fr); } }
+@media (pointer: coarse) {
+  .genome-mode-actions button, .genome-tools button, .slot-options button, .division-graph-rows button { min-height: 40px; }
+}
