@@ -40,6 +40,7 @@ impl Simulation {
             .map_err(|_| "Клетка больше не существует".to_string())?;
         self.entities.retain(|&(cell_id, _)| cell_id != id);
         self.bonds.retain(|&(a, b)| a != id && b != id);
+        self.bond_anchors.retain(|&(a, b), _| a != id && b != id);
         self.deaths += 1;
         if let Some(runtime) = &mut self.level {
             runtime.removed += 1;

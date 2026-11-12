@@ -8,8 +8,8 @@ use crate::genome::{Genome, V4Layout, decode_checked, decode_v4_checkpoint, norm
 use crate::terrain::{GRID, Tile, nitrate_capacity};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// v10 also stores pending heritable genomes for mutated cells.
-const VERSION: u32 = 10;
+/// v11 stores the local attachment angle at each end of a bond.
+const VERSION: u32 = 11;
 
 fn is_main_v4(values: &[f64]) -> bool {
     // The deployed v4 writes the tile count immediately after fluid density.
@@ -191,7 +191,8 @@ impl Simulation {
         }
         values.push(self.bonds.len() as f64);
         for &(a, b) in &self.bonds {
-            values.extend([a as f64, b as f64]);
+            let [angle_a, angle_b] = self.bond_attachment((a, b));
+            values.extend([a as f64, b as f64, f64::from(angle_a), f64::from(angle_b)]);
         }
         values
     }
@@ -205,6 +206,9 @@ impl Simulation {
         if values[0] < 4. || is_main_v4(values) {
             replacement
                 .set_circular_dish(matches!(self.boundary, Boundary::Circle | Boundary::Chaos));
+        }
+        if values[0] < 11. {
+            replacement.sync_bond_anchors();
         }
         replacement.set_division_event_tracking(self.division_events.is_some());
         *self = replacement;
@@ -533,6 +537,11 @@ impl Simulation {
             if a >= b || !ids.contains(&a) || !ids.contains(&b) || !restored.bonds.insert((a, b)) {
                 return Err("Некорректная связь клеток в сохранении".into());
             }
+            if version >= 11 {
+                let pi = std::f32::consts::PI;
+                let anchors = [input.float(-pi, pi)?, input.float(-pi, pi)?];
+                restored.bond_anchors.insert((a, b), anchors);
+            }
         }
         if input.offset != values.len() {
             return Err("Лишние данные в сохранении".into());
@@ -811,6 +820,60 @@ mod tests {
         restored.restore_checked(&rectangular_v9).unwrap();
         assert_eq!(restored.encode_state(), current);
         assert_eq!(restored.world_width(), 6144.);
+    }
+
+    #[test]
+    fn bond_attachments_round_trip_and_v10_bonds_gain_local_angles() {
+        let mut sim = Simulation::new(42);
+        let genes = Genome::from_modes(vec![Mode::default()]).values();
+        let a = sim.spawn_checked(500., 600., 0, &genes).unwrap();
+        let b = sim.spawn_checked(522., 600., 0, &genes).unwrap();
+        for (_, position) in sim.world.query_mut::<&mut Position>() {
+            position.angle = 0.;
+        }
+        let edge = (a, b);
+        let anchors = [0.7212345_f32, -1.2345679_f32];
+        sim.bonds.insert(edge);
+        sim.bond_anchors.insert(edge, anchors);
+        let saved = sim.encode_state();
+        assert_eq!(
+            saved[saved.len() - 5..],
+            [
+                1.,
+                a as f64,
+                b as f64,
+                f64::from(anchors[0]),
+                f64::from(anchors[1])
+            ]
+        );
+
+        let mut restored = Simulation::new(0);
+        restored.restore_checked(&saved).unwrap();
+        assert_eq!(
+            restored.bond_anchors[&edge].map(f32::to_bits),
+            anchors.map(f32::to_bits)
+        );
+        assert_eq!(restored.encode_state(), saved);
+        let checksum = restored.checksum();
+        for index in (saved.len() - 2)..saved.len() {
+            for invalid in [f64::NAN, f64::INFINITY, -4., 4.] {
+                let mut malformed = saved.clone();
+                malformed[index] = invalid;
+                assert!(restored.restore_checked(&malformed).is_err());
+                assert_eq!(restored.checksum(), checksum);
+            }
+        }
+        sim.advance(1);
+        restored.advance(1);
+        assert_eq!(restored.encode_state(), sim.encode_state());
+
+        let mut legacy = saved[..saved.len() - 2].to_vec();
+        legacy[0] = 10.;
+        restored.restore_checked(&legacy).unwrap();
+        assert_eq!(restored.bonds, BTreeSet::from([edge]));
+        let [angle_a, angle_b] = restored.bond_anchors[&edge];
+        assert!(angle_a.abs() < 0.000001);
+        assert!((angle_b.abs() - std::f32::consts::PI).abs() < 0.000001);
     }
 
     #[test]

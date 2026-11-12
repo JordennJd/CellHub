@@ -13,6 +13,7 @@ use crate::components::{Cell, MAX_RECOIL_MOMENTUM, MIN_DIVISION_AGE, Position, r
 use crate::genome::{Genome, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub(super) fn corpse_food(tile: &mut Tile, cell: &Cell, kind: u8) {
@@ -238,7 +239,10 @@ impl Simulation {
                 }
             }
         }
-        self.bonds.extend(added_bonds);
+        if !added_bonds.is_empty() || !fusions.is_empty() {
+            self.bonds.extend(added_bonds);
+            self.sync_bond_anchors();
+        }
         for entity in anchors {
             let mut cell = self.world.get::<&mut Cell>(entity).unwrap();
             cell.anchored = true;
@@ -294,15 +298,7 @@ impl Simulation {
                 self.world.despawn(bodies[index].entity).unwrap();
             }
             self.entities.retain(|(id, _)| !remapped.contains_key(id));
-            self.bonds = self
-                .bonds
-                .iter()
-                .filter_map(|&(a, b)| {
-                    let a = remapped.get(&a).copied().unwrap_or(a);
-                    let b = remapped.get(&b).copied().unwrap_or(b);
-                    (a != b).then_some((a.min(b), a.max(b)))
-                })
-                .collect();
+            self.remap_fusion_bonds(&remapped);
         }
         for (id, entity) in &self.entities {
             let Some(shift) = motion.get(id) else {
@@ -323,6 +319,36 @@ impl Simulation {
             );
             position.angle += shift[2].clamp(-0.5, 0.5);
         }
+    }
+
+    fn remap_fusion_bonds(&mut self, remapped: &BTreeMap<u32, u32>) {
+        let mut anchors = BTreeMap::new();
+        for &edge in &self.bonds {
+            let a = remapped.get(&edge.0).copied().unwrap_or(edge.0);
+            let b = remapped.get(&edge.1).copied().unwrap_or(edge.1);
+            if a == b {
+                continue;
+            }
+            let next = (a.min(b), a.max(b));
+            // Two original bonds may collapse into one. Keep the first in stable ID order.
+            let Entry::Vacant(slot) = anchors.entry(next) else {
+                continue;
+            };
+            let previous = self.bond_attachment(edge);
+            let mut attachment = previous;
+            if next != edge {
+                attachment = self.derive_bond_attachment(next);
+                if a == edge.0 {
+                    attachment[usize::from(a == next.1)] = previous[0];
+                }
+                if b == edge.1 {
+                    attachment[usize::from(b == next.1)] = previous[1];
+                }
+            }
+            slot.insert(attachment);
+        }
+        self.bonds = anchors.keys().copied().collect();
+        self.bond_anchors = anchors;
     }
 }
 
@@ -413,6 +439,10 @@ mod tests {
         }
         sim.specialized_contacts(crate::components::STEP);
         assert_eq!(sim.bond_degrees()[&source], 5);
+        assert_eq!(sim.bond_anchors.len(), sim.bonds.len());
+        for &edge in &sim.bonds {
+            assert_eq!(sim.bond_anchors[&edge], sim.derive_bond_attachment(edge));
+        }
         assert!(
             !sim.bonds
                 .contains(&(source.min(protected), source.max(protected)))
@@ -496,6 +526,38 @@ mod tests {
         assert_eq!(genome.mode(1).child_b, 3);
         assert!(cell.mass > 3.99);
         assert_eq!(cell.age, 0.);
+    }
+
+    #[test]
+    fn fusion_preserves_the_neighbor_anchor_when_ids_swap_and_edges_merge() {
+        let mut sim = world();
+        let gamete = mode(GAMETE);
+        let a = spawn(&mut sim, 500., 500., vec![gamete]);
+        let neighbor = spawn(&mut sim, 570., 550., vec![mode(0)]);
+        let b = spawn(&mut sim, 519., 500., vec![gamete]);
+        for gamete in [a, b] {
+            sim.world.get::<&mut Cell>(gamete).unwrap().age = 1.;
+        }
+        let id = |entity| sim.world.get::<&Cell>(entity).unwrap().id;
+        let (a, neighbor, b) = (id(a), id(neighbor), id(b));
+        let child = sim.next_id;
+        sim.bonds.extend([(a, neighbor), (a, b), (neighbor, b)]);
+        sim.bond_anchors.extend([
+            ((a, neighbor), [0.5, 1.25]),
+            ((a, b), [0., 0.]),
+            ((neighbor, b), [-0.75, -1.]),
+        ]);
+
+        sim.specialized_contacts(crate::components::STEP);
+
+        let edge = (neighbor, child);
+        assert_eq!(sim.world.len(), 2);
+        assert_eq!(sim.bonds, BTreeSet::from([edge]));
+        let child_anchor = sim.derive_bond_attachment(edge)[1];
+        assert_eq!(
+            sim.bond_anchors,
+            BTreeMap::from([(edge, [1.25, child_anchor])])
+        );
     }
 
     #[test]

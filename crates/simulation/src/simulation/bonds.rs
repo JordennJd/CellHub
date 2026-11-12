@@ -2,18 +2,32 @@
 
 use super::Simulation;
 use super::boundary::Boundary;
-use super::interactions::{Components, for_each_island};
+use super::interactions::{Components, ContactMotion, for_each_island};
 use super::program::{BENDING_TARGET, CONTRACTION_TARGET, LIFT_TARGET, controlled_value};
 use crate::cell_types::{BUOYOCYTE, MYOCYTE, is_motile};
 use crate::components::{Cell, MAX_RECOIL_MOMENTUM, Position, STEP, radius};
 use crate::genome::Genome;
 use hecs::Entity;
 use std::collections::{BTreeMap, BTreeSet};
+use std::f32::consts::{PI, TAU};
 
 pub(super) const ADHESION_GAP: f32 = 2.;
 
+fn wrap_angle(angle: f32) -> f32 {
+    (angle + PI).rem_euclid(TAU) - PI
+}
+
+fn local_bearings([a, b]: [Position; 2]) -> [f32; 2] {
+    let bearing = libm::atan2f(b.y - a.y, b.x - a.x);
+    [
+        wrap_angle(bearing - a.angle),
+        wrap_angle(bearing + PI - b.angle),
+    ]
+}
+
 pub(super) struct BondDivision {
     pub(super) parent: Position,
+    pub(super) parent_start: Position,
     pub(super) parent_radius: f32,
     pub(super) daughters: [u32; 2],
     pub(super) keep: [bool; 2],
@@ -113,7 +127,7 @@ impl BondContact {
 }
 
 struct BondTransfer {
-    previous: [u32; 2],
+    previous: [BondEnd; 2],
     contacts: [Option<BondContact>; 4],
 }
 
@@ -147,7 +161,7 @@ impl BondTransfer {
             })
         });
         Self {
-            previous: [old[0].id, old[1].id],
+            previous: old,
             contacts,
         }
     }
@@ -163,9 +177,9 @@ impl BondTransfer {
         })
     }
 
-    fn retain(&self, splits: [Option<&DividedBondEnds<'_>>; 2], bonds: &mut BTreeSet<(u32, u32)>) {
+    fn retain(&self, splits: [Option<&DividedBondEnds<'_>>; 2], mut keep: impl FnMut(BondContact)) {
         let preferred: [Option<u32>; 2] = std::array::from_fn(|side| {
-            splits[side].and_then(|split| split.preferred_daughter(self.previous[1 - side]))
+            splits[side].and_then(|split| split.preferred_daughter(self.previous[1 - side].id))
         });
         let preferred_contacts = self.contacts.map(|contact| {
             contact.filter(|contact| {
@@ -184,7 +198,7 @@ impl BondTransfer {
         };
 
         if splits.iter().any(Option::is_none) {
-            bonds.extend(contacts.into_iter().flatten().map(BondContact::edge));
+            contacts.into_iter().flatten().for_each(keep);
             return;
         }
         let mut closest_pair = None;
@@ -194,40 +208,79 @@ impl BondTransfer {
             if let (Some(a), Some(b)) = (contacts[i], contacts[j])
                 && !a.crosses(b)
             {
-                let candidate = (a.gap + b.gap, a.edge(), b.edge());
-                if closest_pair.is_none_or(|best| candidate < best) {
-                    closest_pair = Some(candidate);
+                let score = (a.gap + b.gap, a.edge(), b.edge());
+                if closest_pair.as_ref().is_none_or(|(best, _)| score < *best) {
+                    closest_pair = Some((score, [a, b]));
                 }
             }
         }
-        if let Some((_, a, b)) = closest_pair {
-            bonds.extend([a, b]);
+        if let Some((_, pair)) = closest_pair {
+            pair.into_iter().for_each(keep);
         } else if let Some(contact) = contacts.into_iter().flatten().min_by(|a, b| {
             a.gap
                 .total_cmp(&b.gap)
                 .then_with(|| a.edge().cmp(&b.edge()))
         }) {
-            bonds.insert(contact.edge());
+            keep(contact);
         }
     }
 }
 
 impl Simulation {
+    pub(super) fn derive_bond_attachment(&self, (a, b): (u32, u32)) -> [f32; 2] {
+        local_bearings([a, b].map(|id| {
+            let index = self
+                .entities
+                .binary_search_by_key(&id, |&(key, _)| key)
+                .unwrap();
+            *self.world.get::<&Position>(self.entities[index].1).unwrap()
+        }))
+    }
+
+    pub(super) fn bond_attachment(&self, edge: (u32, u32)) -> [f32; 2] {
+        self.bond_anchors
+            .get(&edge)
+            .copied()
+            .unwrap_or_else(|| self.derive_bond_attachment(edge))
+    }
+
+    pub(super) fn sync_bond_anchors(&mut self) {
+        self.bond_anchors
+            .retain(|edge, _| self.bonds.contains(edge));
+        for &edge in &self.bonds {
+            if !self.bond_anchors.contains_key(&edge) {
+                let anchors = self.derive_bond_attachment(edge);
+                self.bond_anchors.insert(edge, anchors);
+            }
+        }
+    }
+
     /// Rebuild the graph after deaths and divisions, then solve constraints.
     pub(super) fn replace_bonds(
         &mut self,
         divisions: &BTreeMap<u32, BondDivision>,
         degrees: &BTreeMap<u32, usize>,
+        motions: &[ContactMotion],
     ) {
         if self.bonds.is_empty() && divisions.is_empty() {
+            self.bond_anchors.clear();
             return;
         }
+        let entities = &self.entities;
         let entity_for = |id| {
-            self.entities
+            entities
                 .binary_search_by_key(&id, |&(key, _)| key)
                 .ok()
-                .map(|index| self.entities[index].1)
+                .map(|index| entities[index].1)
         };
+        if divisions.is_empty() {
+            self.bonds
+                .retain(|&(a, b)| entity_for(a).is_some() && entity_for(b).is_some());
+            self.bond_anchors
+                .retain(|edge, _| self.bonds.contains(edge));
+            self.solve_bonds(divisions, motions);
+            return;
+        }
         let end_for = |id| {
             let entity = entity_for(id)?;
             let mut query = self.world.query_one::<(&Position, &Cell)>(entity).unwrap();
@@ -248,10 +301,12 @@ impl Simulation {
         };
         let mut divided = BTreeMap::new();
         let mut bonds = BTreeSet::new();
+        let mut anchors = BTreeMap::new();
         for (&id, division) in divisions {
             if division.bind_children {
                 let [a, b] = division.daughters;
                 bonds.insert((a, b));
+                anchors.insert((a, b), self.derive_bond_attachment((a, b)));
             }
             if degrees.contains_key(&id) {
                 divided.insert(
@@ -272,6 +327,7 @@ impl Simulation {
             if splits.iter().all(Option::is_none) {
                 if entity_for(a).is_some() && entity_for(b).is_some() {
                     bonds.insert((a, b));
+                    anchors.insert((a, b), self.bond_attachment((a, b)));
                 }
                 continue;
             }
@@ -297,13 +353,88 @@ impl Simulation {
             transfers.push(transfer);
         }
         for transfer in transfers {
-            transfer.retain(transfer.previous.map(|id| divided.get(&id)), &mut bonds);
+            let previous = transfer.previous;
+            let [a, b] = previous.map(|end| end.id);
+            let former = self
+                .bond_anchors
+                .get(&(a, b))
+                .copied()
+                .unwrap_or_else(|| local_bearings(previous.map(|end| end.position)));
+            transfer.retain(previous.map(|end| divided.get(&end.id)), |contact| {
+                let mut local = std::array::from_fn(|side| {
+                    let old = previous[side];
+                    let new = contact.ends[side];
+                    if old.id == new.id {
+                        former[side]
+                    } else {
+                        // The old membrane direction is expressed in the daughter’s frame.
+                        wrap_angle(former[side] + old.position.angle - new.position.angle)
+                    }
+                });
+                if contact.ends[0].id > contact.ends[1].id {
+                    local.swap(0, 1);
+                }
+                let edge = contact.edge();
+                bonds.insert(edge);
+                anchors.entry(edge).or_insert(local);
+            });
         }
         self.bonds = bonds;
-        self.solve_bonds(divisions);
+        self.bond_anchors = anchors;
+        self.solve_bonds(divisions, motions);
     }
 
-    fn solve_bonds(&mut self, divisions: &BTreeMap<u32, BondDivision>) {
+    /// Fit each cell's heading to its membrane attachments after contacts have
+    /// moved the centers. One bond fixes the local bearing exactly. At a fork,
+    /// the circular mean shares the angular correction among the attachments.
+    pub(super) fn align_bond_headings(&mut self) {
+        if self.bonds.is_empty() {
+            return;
+        }
+        let mut headings = vec![[0.; 2]; self.entities.len()];
+        let index = |id| {
+            self.entities
+                .binary_search_by_key(&id, |&(key, _)| key)
+                .unwrap()
+        };
+        for &(a, b) in &self.bonds {
+            let indices = [index(a), index(b)];
+            let [pa, pb] =
+                indices.map(|i| *self.world.get::<&Position>(self.entities[i].1).unwrap());
+            let (dx, dy) = (pb.x - pa.x, pb.y - pa.y);
+            let length = libm::hypotf(dx, dy);
+            if length <= 0.0001 {
+                continue;
+            }
+            for (side, (i, local)) in indices
+                .into_iter()
+                .zip(self.bond_attachment((a, b)))
+                .enumerate()
+            {
+                let (sin, cos) = libm::sincosf(local);
+                let scale = if side == 0 {
+                    length.recip()
+                } else {
+                    -length.recip()
+                };
+                headings[i][0] += (dx * cos + dy * sin) * scale;
+                headings[i][1] += (dy * cos - dx * sin) * scale;
+            }
+        }
+        for (&(_, entity), [x, y]) in self.entities.iter().zip(headings) {
+            if x * x + y * y > 0.000001 {
+                let (position, cell) = self
+                    .world
+                    .query_one_mut::<(&mut Position, &Cell)>(entity)
+                    .unwrap();
+                if !cell.anchored {
+                    position.angle += wrap_angle(libm::atan2f(y, x) - position.angle);
+                }
+            }
+        }
+    }
+
+    fn solve_bonds(&mut self, divisions: &BTreeMap<u32, BondDivision>, motions: &[ContactMotion]) {
         if self.bonds.is_empty() {
             return;
         }
@@ -312,7 +443,7 @@ impl Simulation {
             .flat_map(|(&id, division)| {
                 division
                     .daughters
-                    .map(|daughter| (daughter, (id, division.parent)))
+                    .map(|daughter| (daughter, (id, division)))
             })
             .collect();
         let mut bonded_ids: Vec<_> = self.bonds.iter().flat_map(|&(a, b)| [a, b]).collect();
@@ -331,6 +462,7 @@ impl Simulation {
                     .world
                     .query_one_mut::<(&Position, &Cell, &Genome)>(entity)
                     .unwrap();
+                let parent = parents.get(id);
                 let mode = genome.mode(cell.mode);
                 let connections = degrees[id];
                 let muscle = if mode.kind == MYOCYTE {
@@ -352,7 +484,15 @@ impl Simulation {
                 BondBody {
                     entity,
                     position: p,
-                    parent: parents.get(id).copied(),
+                    start: parent.map_or_else(
+                        || {
+                            motions
+                                .get(index)
+                                .map_or(*position, |motion| motion.path[0])
+                        },
+                        |(_, division)| division.parent_start,
+                    ),
+                    parent: parent.map(|&(id, division)| (id, division.parent)),
                     mass: cell.mass,
                     recoil: cell.recoil,
                     anchored: cell.anchored,
@@ -366,10 +506,27 @@ impl Simulation {
         let edges: Vec<_> = self
             .bonds
             .iter()
-            .map(|&(a, b)| (index(a), index(b)))
+            .map(|&(a, b)| {
+                let [ai, bi] = [index(a), index(b)];
+                let from = &bodies[ai];
+                let to = &bodies[bi];
+                let [p, q] = if from.sisters(to) {
+                    [from.position, to.position]
+                } else {
+                    [from.start, to.start]
+                };
+                let (dx, dy) = (q.x - p.x, q.y - p.y);
+                let length = libm::hypotf(dx, dy);
+                let axis = if length > 0.0001 {
+                    [dx / length, dy / length]
+                } else {
+                    attachment_axis(from.position, to.position, self.bond_attachment((a, b)))
+                };
+                (ai, bi, axis)
+            })
             .collect();
         let mut graph = Components::new(bodies.len());
-        for &(a, b) in &edges {
+        for &(a, b, _) in &edges {
             graph.join(a, b);
         }
         let (bodies, slots) = graph.islands(bodies);
@@ -381,10 +538,14 @@ impl Simulation {
                 edges: Vec::new(),
             })
             .collect();
-        for (a, b) in edges {
+        for (a, b, axis) in edges {
             let a = slots[a].unwrap();
             let b = slots[b].unwrap();
-            islands[a.island].edges.push((a.index, b.index));
+            islands[a.island].edges.push(BondEdge {
+                a: a.index,
+                b: b.index,
+                axis,
+            });
         }
         let boundary = self.boundary;
         for_each_island(&mut islands, active, |island| {
@@ -402,14 +563,33 @@ impl Simulation {
     }
 }
 
+fn attachment_axis(a: Position, b: Position, local: [f32; 2]) -> [f32; 2] {
+    let (sa, ca) = libm::sincosf(a.angle + local[0]);
+    let (sb, cb) = libm::sincosf(b.angle + local[1]);
+    let (x, y) = (ca - cb, sa - sb);
+    let length = libm::hypotf(x, y);
+    if length > 0.0001 {
+        [x / length, y / length]
+    } else {
+        [ca, sa]
+    }
+}
+
+struct BondEdge {
+    a: usize,
+    b: usize,
+    axis: [f32; 2],
+}
+
 struct BondIsland {
     bodies: Vec<BondBody>,
-    edges: Vec<(usize, usize)>,
+    edges: Vec<BondEdge>,
 }
 
 struct BondBody {
     entity: Entity,
     position: Position,
+    start: Position,
     parent: Option<(u32, Position)>,
     mass: f32,
     recoil: [f32; 2],
@@ -419,6 +599,10 @@ struct BondBody {
 }
 
 impl BondBody {
+    fn sisters(&self, other: &Self) -> bool {
+        matches!((self.parent, other.parent), (Some((a, _)), Some((b, _))) if a == b)
+    }
+
     fn joint_direction(&self, other: &Self) -> (f64, f64) {
         // Sisters start on their new division axis. Inherited joints keep
         // their pre-division direction even when newborns initially overlap.
@@ -477,7 +661,7 @@ impl BondIsland {
         for pass in 0..BOND_PASSES + TENSION_PASSES {
             let tension_only = pass >= BOND_PASSES;
             let mut pulled = false;
-            for &(a, b) in &self.edges {
+            for &BondEdge { a, b, axis } in &self.edges {
                 let (left, right) = self.bodies.split_at_mut(b);
                 let a = &mut left[a];
                 let b = &mut right[0];
@@ -486,15 +670,21 @@ impl BondIsland {
                 let dx = pb.x - pa.x;
                 let dy = pb.y - pa.y;
                 let distance = libm::hypotf(dx, dy);
-                let (nx, ny) = if distance > 0.0001 {
-                    (dx / distance, dy / distance)
-                } else {
-                    (1., 0.)
-                };
                 let contraction = (a.muscle[0] + b.muscle[0]) * 0.5;
                 let rest = (radius(a.mass) + radius(b.mass) + ADHESION_GAP)
                     * (1. - contraction * 0.35).clamp(0.6, 1.4);
-                let error = distance - rest;
+                let [ax, ay] = axis;
+                let along = dx * ax + dy * ay;
+                let across = dx * ay - dy * ax;
+                // Compression can carry one center through the other in a
+                // single tick. Solve the signed gap along the membrane axis
+                // when the projected membranes overlap.
+                let (nx, ny, span) = if distance <= 0.0001 || (along < 0. && across.abs() < rest) {
+                    (ax, ay, along)
+                } else {
+                    (dx / distance, dy / distance, distance)
+                };
+                let error = span - rest;
                 if tension_only && error <= 0.001 {
                     continue;
                 }
@@ -554,7 +744,7 @@ impl BondIsland {
         }
 
         let mut neighbors = vec![[count; 2]; count];
-        for &(a, b) in &self.edges {
+        for &BondEdge { a, b, .. } in &self.edges {
             for (index, neighbor) in [(a, b), (b, a)] {
                 let Some(slot) = neighbors[index].iter_mut().find(|slot| **slot == count) else {
                     return false;
@@ -672,6 +862,21 @@ mod tests {
     }
 
     #[test]
+    fn a_pair_can_turn_without_its_attachments_sliding() {
+        let mut sim = muscle_world(0., 1., 0.);
+        sim.sync_bond_anchors();
+        let edge = (1, 2);
+        let initial = sim.bond_attachment(edge);
+        sim.advance(10);
+        assert!(geometry(&sim).1.abs() > 1.);
+        assert_eq!(sim.bond_attachment(edge), initial);
+        let actual = sim.derive_bond_attachment(edge);
+        for (actual, initial) in actual.into_iter().zip(initial) {
+            assert!(wrap_angle(actual - initial).abs() < 0.0001);
+        }
+    }
+
+    #[test]
     fn myocyte_signal_equation_controls_contraction_and_anchor_stays_fixed() {
         let mut low = muscle_world(0., 0., 0.);
         let mut high = muscle_world(0., 0., 0.);
@@ -699,7 +904,7 @@ mod tests {
         let anchor = anchored.entities[0].1;
         anchored.world.get::<&mut Cell>(anchor).unwrap().anchored = true;
         let before = *anchored.world.get::<&Position>(anchor).unwrap();
-        anchored.solve_bonds(&BTreeMap::new());
+        anchored.solve_bonds(&BTreeMap::new(), &[]);
         let after = *anchored.world.get::<&Position>(anchor).unwrap();
         assert_eq!([before.x, before.y], [after.x, after.y]);
     }

@@ -1960,6 +1960,106 @@ fn organism_keeps_flagellum_and_releases_photo_offspring() {
     assert_eq!(s.world.len(), 3);
     assert_eq!(s.deaths, 0);
 }
+
+#[test]
+fn flagellum_remains_a_pusher_when_its_bond_is_inherited() {
+    use crate::cell_types::{FLAGELLOCYTE, PHAGOCYTE, PHOTOCYTE};
+    use std::f32::consts::PI;
+
+    let mut sim = quiet_world();
+    sim.configure_environment(super::environment::Environment {
+        light: 2.,
+        food: 3.,
+        radiation: 0.,
+        viscosity: 0.4,
+        aging: false,
+        ..Default::default()
+    })
+    .unwrap();
+    sim.set_division_event_tracking(true);
+    let genes = Genome::from_modes(vec![
+        Mode {
+            kind: PHOTOCYTE,
+            speed: 0.,
+            threshold: 1.,
+            angle: 0.,
+            child_a: 1,
+            child_b: 2,
+            child_angle_a: PI,
+            bind_children: true,
+            ..Mode::default()
+        },
+        Mode {
+            kind: FLAGELLOCYTE,
+            speed: 60.,
+            can_divide: false,
+            ..Mode::default()
+        },
+        Mode {
+            kind: PHAGOCYTE,
+            speed: 0.,
+            threshold: 1.,
+            angle: 0.,
+            child_a: 0,
+            child_b: 2,
+            child_angle_b: PI,
+            keep_b: true,
+            ..Mode::default()
+        },
+    ])
+    .values();
+    let mut hull = sim.spawn(1550., 1550., 0, &genes).unwrap();
+    let mut motor = None;
+    let mut previous_bearing: Option<[f32; 2]> = None;
+    let mut retained_divisions = 0;
+    for _ in 0..80 {
+        sim.advance(1);
+        for event in sim.take_division_events().chunks_exact(8) {
+            if event[1] as u32 != hull {
+                continue;
+            }
+            let a = event[2] as u32;
+            let b = event[3] as u32;
+            if motor.is_none() {
+                assert_eq!(sim.cell_mode(a), 1);
+                motor = Some(a);
+            } else {
+                assert_eq!(sim.cell_mode(a), 0);
+                assert!(!sim.bonds.iter().any(|&(from, to)| from == a || to == a));
+                retained_divisions += 1;
+            }
+            assert_eq!(sim.cell_mode(b), 2);
+            hull = b;
+            sim.boost_cell(hull).unwrap();
+        }
+        if let Some(motor) = motor {
+            assert!(sim.bonds.contains(&(motor, hull)), "tick {}", sim.tick);
+            let motor = sim.world.get::<&Position>(entity(&sim, motor)).unwrap();
+            let hull = sim.world.get::<&Position>(entity(&sim, hull)).unwrap();
+            let (sin, cos) = libm::sincosf(motor.angle);
+            let bearing = [hull.x - motor.x, hull.y - motor.y];
+            let projection = bearing[0] * cos + bearing[1] * sin;
+            assert!(
+                projection > 0.,
+                "tick {}: pusher's partner crossed behind it ({projection})",
+                sim.tick
+            );
+            if let Some(previous) = previous_bearing {
+                assert!(
+                    bearing[0] * previous[0] + bearing[1] * previous[1] > 0.,
+                    "tick {}: the nearly collinear pair swapped sides",
+                    sim.tick
+                );
+            }
+            previous_bearing = Some(bearing);
+        }
+        if retained_divisions == 2 {
+            break;
+        }
+    }
+    assert_eq!(retained_divisions, 2);
+}
+
 #[test]
 fn flagellum_pulls_a_passive_cell_and_bonds_survive_growth() {
     let mut s = quiet_world();

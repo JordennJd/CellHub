@@ -28,7 +28,7 @@ use environment::Environment;
 use hecs::World;
 use program::{SPEED_TARGET, controlled_value};
 use spatial::SpatialGrid;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "wasm-threads"))]
@@ -56,6 +56,8 @@ pub struct Simulation {
     metabolism: metabolism::MetabolismScratch,
     // Undirected bonds use stable cell IDs, never recycled ECS entity indices.
     bonds: BTreeSet<(u32, u32)>,
+    // Local membrane bearings in the same order as the endpoint IDs.
+    bond_anchors: BTreeMap<(u32, u32), [f32; 2]>,
     settings: Environment,
     boundary: Boundary,
     level: Option<level::LevelRuntime>,
@@ -89,6 +91,7 @@ impl Simulation {
             spatial: SpatialGrid::new(),
             metabolism: metabolism::MetabolismScratch::default(),
             bonds: BTreeSet::new(),
+            bond_anchors: BTreeMap::new(),
             settings: Environment::default(),
             boundary: Boundary::default(),
             level: None,
@@ -219,6 +222,7 @@ impl Simulation {
         self.entities.clear();
         self.spatial.clear();
         self.bonds.clear();
+        self.bond_anchors.clear();
         self.frame.clear();
     }
 

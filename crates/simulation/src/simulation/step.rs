@@ -19,6 +19,9 @@ impl Simulation {
         self.dispatch_level_demo();
         self.tick += 1;
         self.update_chaos();
+        if self.bonds.len() != self.bond_anchors.len() {
+            self.sync_bond_anchors();
+        }
         self.cull_overpopulation();
         self.update_signals_and_secretions(STEP);
         let degrees = self.bond_degrees();
@@ -82,6 +85,7 @@ impl Simulation {
                     c.id,
                     BondDivision {
                         parent: *p,
+                        parent_start: item.motion.path[0],
                         parent_radius,
                         daughters: [a.id, b.id],
                         keep: [m.keep_a, m.keep_b],
@@ -210,12 +214,13 @@ impl Simulation {
             self.emit_level_event(event);
         }
         self.entities = entities;
-        self.replace_bonds(&divisions, &degrees);
+        self.replace_bonds(&divisions, &degrees, &paths);
         self.metabolism = scratch;
         // Constraint solving can move cells across buckets or into a different
         // colony. Build the contact graph only after those positions are known.
         self.resolve_contacts(paths, STEP);
         self.specialized_contacts(STEP);
+        self.align_bond_headings();
         self.update_level_status();
         self.accumulate_owner_scores();
         self.record_chaos_history();
