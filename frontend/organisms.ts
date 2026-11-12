@@ -1,4 +1,4 @@
-import { flatten, newMode, multicellularGenome, type Mode, type Program } from "./model";
+import { flatten, newMode, multicellularGenome, HALF_TURN, type Mode, type Program } from "./model";
 
 /**
  * Curated multicellular organisms shared by the genome editor's demonstration
@@ -26,10 +26,18 @@ const rule = (target: number, input: number, scale: number, offset = 0): Program
   target, input, kind: 0, scale, offset, threshold: 0, below: 0,
 });
 
-/** Photocyte + flagellocyte: the cheapest way to move towards light. */
+/**
+ * Photocyte seed + a bonded photocyte/flagellocyte pair. The seed builds the
+ * pair; the pair's photocyte then keeps itself at the flagellum and releases a
+ * fresh seed, closing the lifecycle.
+ */
 const swimmer = (): Mode[] => [
-  mode(0, { name: "Фотоцит", kind: 0, threshold: 1.8, childA: 0, childB: 1, bindChildren: true, maxConnections: 2 }),
+  mode(0, { name: "Фотоцит-семя", kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true }),
   mode(1, { name: "Жгутикоцит", kind: 2, threshold: 2, speed: 42, canDivide: false, prioritizeWhenStarving: true }),
+  mode(2, {
+    name: "Фотоцит пары", kind: 0, threshold: 1.8,
+    childA: 0, childB: 2, childAngleB: HALF_TURN, keepAdhesionB: true,
+  }),
 ];
 
 /** A photocyte that keeps both daughters attached, growing a feeding filament. */
@@ -119,11 +127,11 @@ export const DEMO_ORGANISMS: DemoOrganism[] = [
   {
     id: "swimmer",
     name: "Пловец",
-    description: "Фотоцит делится на такой же фотоцит и жгутикоцит. Самая универсальная подвижная связка: ей хватает света.",
+    description: "Фотоцит-семя делится на жгутикоцит и фотоцит пары. Фотоцит пары оставляет себя у жгутика и отпочковывает новое семя. Самая универсальная подвижная связка: ей хватает света.",
     origin: "player",
     universality: 100,
     initialMode: 0,
-    span: 2,
+    span: 3,
     genome: swimmer,
   },
   {

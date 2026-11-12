@@ -88,9 +88,11 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
   }
   const setting = (label: string, key: NumericModeKey, min: number, max: number, step: number, help: string, unit = "") =>
     <Setting label={label} value={m[key]} min={min} max={max} step={step} help={help} unit={unit} onChange={v => update(key, v)} />;
-  const orientation = (label: string, key: "angle" | "childAngleA" | "childAngleB", help: string) =>
-    <Setting label={label} value={Math.round(m[key] * 180 / Math.PI)} min={-180} max={180} step={1} unit="°" help={help}
-      onChange={v => update(key, Math.max(-3.14, Math.min(3.14, v * Math.PI / 180)))} />;
+  const orientation = (label: string, key: "angle" | "childAngleA" | "childAngleB", help: string) => {
+    const limit = key === "angle" ? 3.14 : Math.PI;
+    return <Setting label={label} value={Math.round(m[key] * 180 / Math.PI)} min={-180} max={180} step={1} unit="°" help={help}
+      onChange={v => update(key, Math.max(-limit, Math.min(limit, v * Math.PI / 180)))} />;
+  };
   function setColor(color: number | null) {
     const channels = color === null ? [-1, -1, -1] : [(color >> 16) & 255, (color >> 8) & 255, color & 255].map(v => Math.round(v / 255 * 1e6) / 1e6);
     onChange(genome.map((item, i) => i === mode ? { ...item, red: channels[0], green: channels[1], blue: channels[2] } : item));

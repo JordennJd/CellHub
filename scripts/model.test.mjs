@@ -13,6 +13,14 @@ test("archetype settings and all adhesion flags survive encoding and saving", ()
   assert.equal(modes[2].bindChildren, false);
 });
 
+test("the tutorial phagocyte keeps its heading when it retains itself", () => {
+  const genome = multicellularGenome();
+  const phagocyte = genome[2];
+  assert.equal(phagocyte.childB, 2);
+  assert.equal(phagocyte.keepAdhesionB, true);
+  assert(Math.abs(phagocyte.childAngleB - Math.PI) < 1e-6, "the retained daughter turns away from the colony");
+});
+
 test("legacy eight-mode saves migrate without adding bonds", () => {
   const legacy = Array.from({ length: 8 }, (_, i) => newMode(i)).map(({kind,threshold,childA,childB,ratio,speed,angle,lifespan}) => ({kind,threshold,childA,childB,ratio,speed,angle,lifespan}));
   const loaded = parseGenome(JSON.stringify(legacy));

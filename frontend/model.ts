@@ -180,10 +180,16 @@ export const chaosGenome = (): Mode[] => TYPES.map((type, i) => ({
   speed: i === 2 ? 28 : 0, keepAdhesionA: true,
 }));
 
+/** Shortest float32-safe decimal for π: a daughter rotated by it keeps its heading. */
+export const HALF_TURN = 3.1415927;
+
 export const multicellularGenome = (): Mode[] => [
   { ...newMode(0), kind: 0, threshold: 2, childA: 1, childB: 2, bindChildren: true, angle: 0, lifespan: 1000 },
   { ...newMode(1), kind: 2, canDivide: false, speed: 40, lifespan: 1000 },
-  { ...newMode(2), kind: 1, threshold: 2.4, childA: 0, childB: 2, keepAdhesionB: true, angle: 0, lifespan: 1000 },
+  // B is the phagocyte itself: rotate it by half a turn so it keeps facing away
+  // from the colony. Otherwise every next division would push the seed inward,
+  // break the inherited bond and tear the organism apart.
+  { ...newMode(2), kind: 1, threshold: 2.4, childA: 0, childB: 2, childAngleB: HALF_TURN, keepAdhesionB: true, angle: 0, lifespan: 1000 },
 ];
 
 // Header avoids ambiguity between old 12-number rows and extended rows.
@@ -384,7 +390,7 @@ function validateModes(modes: unknown, version: 1 | 2 | 3 | 4 | 5): Mode[] {
       || [m.childA, m.childB].some(v => !Number.isInteger(v) || v < 0 || v >= modes.length)
       || m.threshold < 1 || m.threshold > 8 || m.ratio < 0.2 || m.ratio > 0.8
       || m.speed < 0 || m.speed > 60 || Math.abs(m.angle) > 3.14 || m.lifespan < 20 || m.lifespan > 1000
-      || Math.abs(m.childAngleA) > 3.14 || Math.abs(m.childAngleB) > 3.14
+      || Math.abs(m.childAngleA) > Math.PI + 0.000001 || Math.abs(m.childAngleB) > Math.PI + 0.000001
       || !Number.isInteger(m.maxConnections) || m.maxConnections < -1 || m.maxConnections > POPULATION_LIMIT
       || !Number.isFinite(m.nutrientPriority) || m.nutrientPriority < 0.25 || m.nutrientPriority > 4
       || typeof m.prioritizeWhenStarving !== "boolean"

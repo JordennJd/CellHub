@@ -78,6 +78,94 @@ test("chaos seeds every curated organism as a bonded chain", () => {
   }
 });
 
+test("swimmer lifecycle releases a fresh seed from the photocyte pair", () => {
+  const sim = new Simulation(42);
+  try {
+    sim.set_circular_dish(true);
+    // Bright light everywhere, so the test measures the lifecycle rather than terrain luck.
+    sim.configure(5, 1, 0, 1, false, false, true, 0, 0, 1);
+    sim.set_division_event_tracking(true);
+    const swimmer = organisms.DEMO_ORGANISMS.find(o => o.id === "swimmer");
+    assert.equal(swimmer.genome().length, 3);
+    assert.equal(swimmer.span, 3);
+    const founder = sim.spawn(1536, 1536, swimmer.initialMode, model.flatten(swimmer.genome()));
+    let flagellocyte = null, pairPhotocyte = null, seed = null, retained = null;
+    for (let batch = 0; batch < 200 && retained === null; batch++) {
+      sim.advance(15);
+      const events = sim.take_division_events();
+      for (let i = 0; i < events.length; i += 8) {
+        const parent = events[i + 1], a = events[i + 2], b = events[i + 3];
+        if (parent === founder && flagellocyte === null) {
+          flagellocyte = a;
+          pairPhotocyte = b;
+        } else if (parent === pairPhotocyte) {
+          seed = a;
+          retained = b;
+        }
+      }
+    }
+    assert(seed !== null, "the pair photocyte did not release a seed");
+    assert.equal(sim.cell_mode(seed), 0, "the released cell is not a fresh M1 seed");
+    assert.equal(sim.cell_mode(retained), 2, "the pair photocyte did not retain itself");
+    const links = sim.links(), bonds = new Set();
+    for (let i = 0; i < links.length; i += 2) {
+      bonds.add(`${links[i]}/${links[i + 1]}`);
+      bonds.add(`${links[i + 1]}/${links[i]}`);
+    }
+    assert(
+      bonds.has(`${flagellocyte}/${retained}`),
+      "the retained photocyte lost its bond to the flagellocyte",
+    );
+  } finally {
+    sim.free();
+  }
+});
+
+test("tutorial phagocyte survives repeated self-division without losing its bond", () => {
+  const sim = new Simulation(42);
+  try {
+    sim.set_circular_dish(true);
+    // Full light and food, no radiation, drift or aging, so the pair divides predictably.
+    sim.configure(1, 1, 0, 1, false, false, true, 0, 0, 1);
+    sim.set_division_event_tracking(true);
+    const tutorial = organisms.DEMO_ORGANISMS.find(o => o.id === "tutorial");
+    const founder = sim.spawn(1536, 1536, 0, model.flatten(tutorial.genome()));
+    let flagellocyte = null, phagocyte = null, selfDivisions = 0;
+    for (let batch = 0; batch < 200 && selfDivisions < 2; batch++) {
+      sim.advance(15);
+      const events = sim.take_division_events();
+      for (let i = 0; i < events.length; i += 8) {
+        const parent = events[i + 1], a = events[i + 2], b = events[i + 3];
+        if (parent === founder && flagellocyte === null) {
+          flagellocyte = a;
+          phagocyte = b;
+        } else if (parent === phagocyte) {
+          phagocyte = b;
+          selfDivisions++;
+        }
+      }
+    }
+    assert.equal(selfDivisions, 2, "the phagocyte did not divide twice");
+    const snapshot = sim.snapshot();
+    const alive = new Set();
+    for (let i = 0; i < snapshot.length; i += model.STRIDE) alive.add(snapshot[i]);
+    assert(alive.has(flagellocyte), "the flagellocyte died");
+    assert(alive.has(phagocyte), "the retained phagocyte died");
+    assert.equal(sim.cell_mode(phagocyte), 2);
+    const links = sim.links(), bonds = new Set();
+    for (let i = 0; i < links.length; i += 2) {
+      bonds.add(`${links[i]}/${links[i + 1]}`);
+      bonds.add(`${links[i + 1]}/${links[i]}`);
+    }
+    assert(
+      bonds.has(`${flagellocyte}/${phagocyte}`),
+      "the retained phagocyte lost its bond to the flagellocyte",
+    );
+  } finally {
+    sim.free();
+  }
+});
+
 test("rectangular WASM worlds preserve wide coordinates and exact checkpoints", () => {
   const sim = new Simulation(42), restored = new Simulation(1);
   try {
