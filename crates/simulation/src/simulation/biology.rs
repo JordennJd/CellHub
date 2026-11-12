@@ -2,7 +2,7 @@
 
 use super::Simulation;
 use crate::cell_types::{GAMETE, NITROCYTE, protects_neighbours};
-use crate::components::{Cell, MIN_DIVISION_AGE};
+use crate::components::{Cell, MIN_DIVISION_AGE, Position, STEP};
 use crate::genome::{Genome, MAX_MODES, Mode};
 use crate::terrain::Tile;
 use hecs::Entity;
@@ -13,9 +13,11 @@ const STARVING_PRIORITY_MULTIPLIER: f64 = 4.;
 const NITROGEN_CONSUMPTION: f32 = 0.025;
 const NITROGEN_FIXATION: f32 = 0.10;
 const NITROGEN_UPTAKE: f32 = 0.35;
-// The environment stores a concentration, in units per tile. Cell stores are
-// normalized separately: one full reserve consumes this much concentration.
-const NITRATE_PER_RESERVE: f32 = 0.01;
+const NITROGEN_PER_BIOMASS: f32 = 0.65;
+pub(super) const NITROGEN_FOR_DAUGHTERS: f32 = 0.5;
+// Substrate concentration and a cell's fractional reserve use different units.
+const NITRATE_PER_RESERVE: f32 = 1.6;
+const CAMPAIGN_NITRATE_PER_RESERVE: f32 = 0.01;
 
 /// Gamete metadata shared by physical contacts and the subsequent fusion pass.
 #[derive(Clone, Copy)]
@@ -75,19 +77,89 @@ impl Tile {
             (self.nitrates + step * 0.08 * self.nitrate_capacity).min(self.nitrate_capacity);
     }
 
-    pub(super) fn feed_nitrogen(&mut self, cell: &mut Cell, kind: u8, step: f32) {
-        let fixation = if kind == NITROCYTE {
-            NITROGEN_FIXATION
-        } else {
-            0.
-        };
-        cell.nitrogen = (cell.nitrogen + step * (fixation - NITROGEN_CONSUMPTION)).clamp(0., 1.);
-        let uptake = (step * NITROGEN_UPTAKE * self.nitrates)
-            .min(self.nitrates / NITRATE_PER_RESERVE)
-            .min(1. - cell.nitrogen);
-        self.nitrates = (self.nitrates - uptake * NITRATE_PER_RESERVE).max(0.);
-        cell.nitrogen += uptake;
+    pub(super) fn feed_campaign_nitrogen(&mut self, cell: &mut Cell, kind: u8) {
+        use_nitrogen(cell, kind);
+        let demand = (STEP * NITROGEN_UPTAKE * self.nitrates).min(1. - cell.nitrogen);
+        cell.nitrogen += self.withdraw_nitrate(demand, CAMPAIGN_NITRATE_PER_RESERVE);
     }
+
+    fn withdraw_nitrate(&mut self, demand: f32, nitrate_per_reserve: f32) -> f32 {
+        let uptake = demand.min(self.nitrates / nitrate_per_reserve);
+        self.nitrates = (self.nitrates - uptake * nitrate_per_reserve).max(0.);
+        uptake
+    }
+}
+
+fn use_nitrogen(cell: &mut Cell, kind: u8) {
+    let fixation = if kind == NITROCYTE {
+        NITROGEN_FIXATION
+    } else {
+        0.
+    };
+    cell.nitrogen = (cell.nitrogen + STEP * (fixation - NITROGEN_CONSUMPTION)).clamp(0., 1.);
+}
+
+/// The quadratic weights vary continuously with position and sum to one.
+/// Nearby cells share the same stores even on opposite sides of a tile edge.
+fn uptake_axis(position: f32, length: usize) -> [(usize, f32); 3] {
+    let coordinate = position / 64.;
+    let center = (coordinate as usize).min(length - 1);
+    let offset = coordinate - center as f32 - 0.5;
+    [
+        (center.saturating_sub(1), 0.5 * (0.5 - offset).powi(2)),
+        (center, 0.75 - offset * offset),
+        ((center + 1).min(length - 1), 0.5 * (0.5 + offset).powi(2)),
+    ]
+}
+
+pub(super) fn feed_nitrogen(
+    tiles: &mut [Tile],
+    columns: usize,
+    position: Position,
+    cell: &mut Cell,
+    kind: u8,
+) {
+    use_nitrogen(cell, kind);
+    let room = 1. - cell.nitrogen;
+    if room <= 0. {
+        return;
+    }
+    let xs = uptake_axis(position.x, columns);
+    let ys = uptake_axis(position.y, tiles.len() / columns);
+    let mut requests = [(0, 0.); 9];
+    let mut total = 0.;
+    for ((row, row_weight), line) in ys.into_iter().zip(requests.chunks_exact_mut(3)) {
+        for ((column, column_weight), request) in xs.into_iter().zip(line) {
+            let index = row * columns + column;
+            let uptake =
+                (STEP * NITROGEN_UPTAKE) * row_weight * column_weight * tiles[index].nitrates;
+            *request = (index, uptake);
+            total += uptake;
+        }
+    }
+    if total > 0. {
+        let fraction = (room / total).min(1.);
+        let uptake = requests
+            .into_iter()
+            .map(|(index, uptake)| {
+                tiles[index].withdraw_nitrate(uptake * fraction, NITRATE_PER_RESERVE)
+            })
+            .sum::<f32>();
+        cell.nitrogen = (cell.nitrogen + uptake).min(1.);
+    }
+}
+
+/// Synthesis of new biomass draws on the cell's nitrogen reserve. The cell
+/// retains the share required to provision its daughters.
+pub(super) fn assimilate_growth(cell: &mut Cell, gain: f32, maintenance: f32) -> f32 {
+    let available = (cell.nitrogen - NITROGEN_FOR_DAUGHTERS).max(0.);
+    let growth = (gain - maintenance)
+        .max(0.)
+        .min(available / NITROGEN_PER_BIOMASS);
+    if growth > 0. {
+        cell.nitrogen = (cell.nitrogen - growth * NITROGEN_PER_BIOMASS).max(NITROGEN_FOR_DAUGHTERS);
+    }
+    gain.min(maintenance + growth)
 }
 
 impl Simulation {

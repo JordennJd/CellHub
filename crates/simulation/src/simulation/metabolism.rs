@@ -1,5 +1,6 @@
 //! Tile-owned metabolism jobs, independent of ECS mutation and division order.
 use super::Simulation;
+use super::biology::{NITROGEN_FOR_DAUGHTERS, assimilate_growth, feed_nitrogen};
 use super::interactions::ContactMotion;
 use super::program::{SPEED_TARGET, controlled_value};
 use super::specialized::{buoyant_drift, corpse_food, differentiate};
@@ -25,9 +26,15 @@ impl Simulation {
         degrees: &BTreeMap<u32, usize>,
     ) -> MetabolismScratch {
         let population = entities.len();
+        let campaign = self.level.is_some();
+        let division_reserve = if campaign {
+            NITROGEN_DIVISION
+        } else {
+            NITROGEN_FOR_DAUGHTERS
+        };
         // Campaign levels defer division at their authored cap. Everywhere else
         // the limit is soft: growth continues and the oldest cells are culled.
-        let can_grow = self.level.is_none() || population < self.population_limit;
+        let can_grow = !campaign || population < self.population_limit;
         let settings = self.settings;
         let boundary = self.boundary;
         let chaos = self.chaos.is_some();
@@ -58,9 +65,18 @@ impl Simulation {
             .into_iter()
             .map(|(entity, (p, c, g))| {
                 let order = scratch.indices[entity.id() as usize];
+                c.age += STEP;
+                c.cooldown = (c.cooldown - STEP).max(0.);
+                let degree = degrees.get(&c.id).copied().unwrap_or(0);
+                let differentiated = differentiate(c, g, degree);
+                let programmed_speed =
+                    controlled_value(c, g.mode(c.mode), SPEED_TARGET, degree).clamp(0., 60.);
                 Body {
                     order,
                     tile: boundary.tile(p.x, p.y),
+                    degree,
+                    differentiated,
+                    programmed_speed,
                     result: MetabolismResult {
                         motion: ContactMotion {
                             path: [*p; 2],
@@ -82,6 +98,15 @@ impl Simulation {
             .map(|body| (((body.tile as u64) << 32) | body.order as u64, body))
             .collect();
         ordered.sort_unstable_by_key(|(key, _)| *key);
+        // Nitrate footprints overlap tile boundaries. Commit their debits in
+        // stable tile/ID order before the independent metabolism jobs.
+        if !campaign {
+            let columns = boundary.columns();
+            for (_, body) in &mut ordered {
+                let kind = body.g.mode(body.c.mode).kind;
+                feed_nitrogen(&mut self.tiles, columns, *body.p, body.c, kind);
+            }
+        }
         let mut jobs = Vec::new();
         let mut remaining = ordered.as_mut_slice();
         for (index, tile) in self.tiles.iter_mut().enumerate() {
@@ -100,19 +125,17 @@ impl Simulation {
                 let g = &mut *item.g;
                 let [noise, mutation_roll, mutation_gene] = item.random;
                 let start = *p;
-                c.age += STEP;
-                c.cooldown = (c.cooldown - STEP).max(0.);
-                let degree = degrees.get(&c.id).copied().unwrap_or(0);
-                let differentiated = differentiate(c, g, degree);
+                let degree = item.degree;
                 let m = *g.mode(c.mode);
-                let programmed_speed = controlled_value(c, &m, SPEED_TARGET, degree).clamp(0., 60.);
-                t.feed_nitrogen(c, m.kind, STEP);
+                let programmed_speed = item.programmed_speed;
+                if campaign {
+                    t.feed_campaign_nitrogen(c, m.kind);
+                }
+                let available_food = (0.18 * STEP).min(t.food);
                 let gain = if m.kind == PHOTOCYTE {
                     t.light * 0.14 * STEP
                 } else if m.kind == PHAGOCYTE {
-                    let eaten = (0.18 * STEP).min(t.food);
-                    t.food -= eaten;
-                    eaten * 1.6
+                    available_food * 1.6
                 } else {
                     0.
                 };
@@ -121,7 +144,21 @@ impl Simulation {
                     KERATINOCYTE => 0.014 + programmed_speed * 0.0003,
                     _ => 0.025 + programmed_speed * 0.0003,
                 };
-                c.mass += gain - STEP * maintenance;
+                let maintenance = STEP * maintenance;
+                let supported_gain = if campaign {
+                    gain
+                } else {
+                    assimilate_growth(c, gain, maintenance)
+                };
+                if m.kind == PHAGOCYTE {
+                    let eaten = if supported_gain < gain {
+                        supported_gain / 1.6
+                    } else {
+                        available_food
+                    };
+                    t.food -= eaten;
+                }
+                c.mass += supported_gain - maintenance;
                 if mutation_roll < t.radiation * STEP * 0.035 {
                     let modes = g.inherited_modes_mut();
                     let index =
@@ -221,10 +258,10 @@ impl Simulation {
                     && !died
                     && m.can_divide
                     && m.kind != GAMETE
-                    && !differentiated
+                    && !item.differentiated
                     && c.age + 0.000001 >= MIN_DIVISION_AGE
                     && c.mass >= m.threshold
-                    && c.nitrogen >= NITROGEN_DIVISION
+                    && c.nitrogen >= division_reserve
                     && m.max_connections.is_none_or(|limit| degree < limit)
                 {
                     item.result.division = Some(Box::new(m));
@@ -257,6 +294,9 @@ impl Simulation {
 struct Body<'a> {
     order: usize,
     tile: usize,
+    degree: usize,
+    differentiated: bool,
+    programmed_speed: f32,
     p: &'a mut Position,
     c: &'a mut Cell,
     g: &'a mut Genome,

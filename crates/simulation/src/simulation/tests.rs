@@ -178,6 +178,7 @@ fn nitrogen_deficit_blocks_division_or_kills_and_daughters_split_reserve_evenly(
     let run = |reserve| {
         let mut s = quiet_world();
         s.configure_environment(super::environment::Environment {
+            light: 0.,
             radiation: 0.,
             nitrogen: 0.,
             ..Default::default()
@@ -187,7 +188,10 @@ fn nitrogen_deficit_blocks_division_or_kills_and_daughters_split_reserve_evenly(
         genes[1] = 1.;
         genes[4] = 0.25;
         let id = s.spawn(500., 500., 0, &genes).unwrap();
-        s.world.get::<&mut Cell>(entity(&s, id)).unwrap().nitrogen = reserve;
+        let mut cell = s.world.get::<&mut Cell>(entity(&s, id)).unwrap();
+        cell.mass = 1.1;
+        cell.nitrogen = reserve;
+        drop(cell);
         mature_all(&mut s);
         s.advance(1);
         s.world
@@ -207,6 +211,112 @@ fn nitrogen_deficit_blocks_division_or_kills_and_daughters_split_reserve_evenly(
         "daughter reserve {}",
         daughters[0].1
     );
+}
+
+#[test]
+fn every_archetype_draws_nitrates_and_the_substrate_recovers_gradually() {
+    for kind in 0..KIND_COUNT {
+        let mut sim = quiet_world();
+        let position = (544., 544.);
+        let index = tile_index(position.0, position.1);
+        let full = sim.tiles[index].nitrates;
+        let genes = Genome::from_modes(vec![Mode {
+            kind,
+            speed: 0.,
+            can_divide: false,
+            ..Mode::default()
+        }]);
+        let id = sim
+            .spawn_checked(position.0, position.1, 0, &genes.values())
+            .unwrap();
+        sim.world
+            .get::<&mut Cell>(entity(&sim, id))
+            .unwrap()
+            .nitrogen = 0.3;
+        sim.advance(1);
+        let depleted = sim.tiles[index].nitrates;
+        assert!(depleted < full, "kind={kind}");
+        assert!(sim.nitrogen_reserves()[0] > 0.3, "kind={kind}");
+        sim.remove_cell(id).unwrap();
+        sim.advance(1);
+        let recovering = sim.tiles[index].nitrates;
+        assert!(recovering > depleted && recovering < full, "kind={kind}");
+        sim.advance(120);
+        assert_eq!(sim.tiles[index].nitrates, full, "kind={kind}");
+    }
+}
+
+#[test]
+fn bright_photocytes_compete_for_local_nitrates() {
+    let run = |positions: &[(f32, f32)], nitrogen| {
+        let mut sim = quiet_world();
+        sim.configure_environment(super::environment::Environment {
+            light: 5.,
+            nitrogen,
+            radiation: 0.,
+            aging: false,
+            ..Default::default()
+        })
+        .unwrap();
+        sim.set_division_event_tracking(true);
+        let genes = Genome::from_modes(vec![Mode::default()]).values();
+        for &(x, y) in positions {
+            sim.spawn_checked(x, y, 0, &genes).unwrap();
+        }
+        let mut division_ticks = vec![0; positions.len()];
+        for tick in 1..=crate::components::TICK_RATE * 60 {
+            sim.advance(1);
+            for event in sim.take_division_events().chunks_exact(8) {
+                let parent = event[1] as usize;
+                if parent <= positions.len() {
+                    division_ticks[parent - 1] = tick;
+                }
+            }
+            if division_ticks.iter().all(|&tick| tick != 0) {
+                break;
+            }
+        }
+        division_ticks
+    };
+    let ring = [
+        (0., 0.),
+        (21., 0.),
+        (10.5, 18.2),
+        (-10.5, 18.2),
+        (-21., 0.),
+        (-10.5, -18.2),
+        (10.5, -18.2),
+    ];
+    let scattered: Vec<_> = (0..7)
+        .map(|i| (288. + (i % 4) as f32 * 128., 288. + (i / 4) as f32 * 128.))
+        .collect();
+    let control = run(&scattered, 1.);
+    let baseline = control[0];
+    assert!(baseline > 0 && control.iter().all(|&tick| tick == baseline));
+    for (x, y) in [(544., 544.), (512., 512.), (516., 550.)] {
+        for count in 5..=7 {
+            let crowded: Vec<_> = ring[..count]
+                .iter()
+                .map(|&(dx, dy)| (x + dx, y + dy))
+                .collect();
+            let ticks = run(&crowded, 1.);
+            let mut by_tick = BTreeMap::new();
+            for &tick in ticks.iter().filter(|&&tick| tick != 0) {
+                assert!(tick > baseline, "ring {count} at {x},{y}: {ticks:?}");
+                *by_tick.entry(tick).or_insert(0) += 1;
+            }
+            assert!(
+                by_tick.values().sum::<usize>() >= 5,
+                "ring {count} at {x},{y}: {ticks:?}"
+            );
+            assert!(
+                by_tick.values().all(|&count| count <= 2),
+                "ring {count} at {x},{y}: {ticks:?}"
+            );
+        }
+    }
+    let crowded: Vec<_> = ring.iter().map(|&(x, y)| (544. + x, 544. + y)).collect();
+    assert!(run(&crowded, 5.).iter().all(|&tick| tick == baseline));
 }
 
 #[test]
@@ -805,8 +915,14 @@ fn daughter_orientation_mirroring_and_rgb_survive_generations_and_save() {
 fn version_one_world_migrates_without_changing_living_cells() {
     let mut original = quiet_world();
     let genes = modern_genes(2);
-    original.spawn(500., 500., 1, &genes).unwrap();
+    let id = original.spawn(500., 500., 1, &genes).unwrap();
     original.advance(10);
+    // Version one has no fields for either nitrate depletion or cell reserves.
+    original
+        .world
+        .get::<&mut Cell>(entity(&original, id))
+        .unwrap()
+        .nitrogen = INITIAL_NITROGEN;
     for tile in &mut original.tiles {
         tile.nitrates = tile.nitrate_capacity;
     }
@@ -1577,11 +1693,12 @@ fn growing_path(angle: f32, mirror: bool) -> Simulation {
     s.set_circular_dish(true);
     s.configure_environment(super::environment::Environment {
         radiation: 0.,
+        nitrogen: 5.,
         ..Default::default()
     })
     .unwrap();
-    // The same founder and conditions as the preview. Each generation grows
-    // to division mass on its own, and the fourth generation stops dividing.
+    // A well-fed founder grows without intervention. The fourth generation
+    // stops dividing so the geometry can be checked at a fixed population.
     let modes = (0..=4)
         .map(|mode| Mode {
             threshold: 1.,
@@ -1769,6 +1886,9 @@ fn repeated_right_angle_division_forms_a_square_then_an_eight_cell_ring() {
     assert_four_cell_square(&s);
     assert!(center_clearance(&mut s) > 2., "square center is occupied");
 
+    for (_, cell) in s.world.query_mut::<&mut Cell>() {
+        cell.nitrogen = INITIAL_NITROGEN;
+    }
     mature_all(&mut s);
     s.advance(1);
     assert_eq!(s.world.len(), 8);
