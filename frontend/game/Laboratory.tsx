@@ -41,7 +41,10 @@ export function Laboratory({ session, onExit }: {
     const chaosMode = session.kind === 'chaos';
     const canvasHost = useRef<HTMLDivElement>(null);
     const chaosSeed = useRef(crypto.getRandomValues(new Uint32Array(1))[0]);
-    const sim = useSimulation(), level = session.level;
+    // Sandbox and Chaos are play-first modes. Lessons and challenges keep their
+    // deliberate pause so their steps can teach the transport controls.
+    const autoPlay = session.kind === 'sandbox' || session.kind === 'chaos';
+    const sim = useSimulation(autoPlay), level = session.level;
     const lesson = TUTORIALS.find(t => t.id === session.tutorialId) ?? TUTORIALS[0];
     const starter = level ? starterGenome(level) : null;
     const [genome, setGenome] = useState<Mode[]>(() => session.entry ? (session.entry.data as GenomeData).genome : structuredClone(starter?.genome ?? (session.kind === 'tutorial' ? lesson.genome : chaosMode ? chaosGenome() : defaultGenome())));

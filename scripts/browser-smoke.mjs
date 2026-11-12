@@ -20,9 +20,10 @@ const click=async(text,scope='document')=>{assert(await evaluate(`(()=>{const b=
 const input=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(String(value))});el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
 const select=async(selector,value)=>{await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)throw Error('Missing select');el.value=${JSON.stringify(String(value))};el.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);};
 const screenshot=async path=>{const r=await call('Page.captureScreenshot',{format:'png'});await writeFile(path,Buffer.from(r.data,'base64'));};
-const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("document.querySelector('#mode-sandbox-title').closest('button').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
+const openSandbox=async()=>{await until("document.querySelector('.home-shell')");await evaluate("document.querySelector('#mode-sandbox-title').closest('button').click()");await until("window.__cellhubFrame&&document.querySelector('.world canvas[data-renderer]')&&![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Пауза')?.disabled");await until('window.__cellhubFrame.stats[0] > 0');await click('Пауза');await until("![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");};
 const clickWorld=async(x,y,button='left')=>{const point=await evaluate(`(()=>{const r=document.querySelector('.world canvas').getBoundingClientRect();const f=window.__cellhubFrame,w=f.worldWidth??3072,h=f.worldSize??3072,z=Math.min(r.width/w,r.height/h);return{x:r.x+r.width/2+(${x}-w/2)*z,y:r.y+r.height/2+(${y}-h/2)*z};})()`);await call('Input.dispatchMouseEvent',{type:'mousePressed',button,clickCount:1,...point});await call('Input.dispatchMouseEvent',{type:'mouseReleased',button,clickCount:1,...point});};
 const confirm=async()=>{if(await evaluate("!!document.querySelector('[role=dialog]')"))await click('Подтвердить',"document.querySelector('[role=dialog]')");};
+const pauseRunning=async()=>{await until("![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Пауза')?.disabled");await click('Пауза');await until("![...document.querySelectorAll('.transport button')].find(b=>b.textContent==='Продолжить')?.disabled");return await evaluate('window.__cellhubFrame.stats[0]');};
 try{
  await call('Runtime.enable');await call('Page.enable');
  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1080,deviceScaleFactor:1,mobile:false});
@@ -42,7 +43,8 @@ try{
  const hasWebGPU=await evaluate("document.querySelector('.world canvas').dataset.renderer==='webgpu'");
  assert(await evaluate("!/(WASM|RUST|SEED|experimental|Большие возможности|Маленькая жизнь)/.test(document.body.innerText)"));
   await until("document.querySelector('.renderer-badge')?.dataset.backend===document.querySelector('.world canvas').dataset.renderer");
- assert.equal(await evaluate('window.__cellhubFrame.stats[0]'),0);
+ const pausedAt=await evaluate('window.__cellhubFrame.stats[0]');
+ assert(pausedAt>0,'sandbox starts playing by default');
  await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');
  // Inspection must leave an independently edited draft intact.
  await input('input[aria-label="Масса для деления"]',3.7);
@@ -55,15 +57,16 @@ try{
  await input('input[aria-label="Возраст предпросмотра"]',40);
  await until("document.querySelector('.genome-preview').getAttribute('aria-busy')==='false'");
  assert.deepEqual(await evaluate('({cells:Array.from(window.__cellhubFrame.cells),stats:Array.from(window.__cellhubFrame.stats)})'),frozen);
- await click('Один шаг');await until('window.__cellhubFrame.stats[0]===1');
- console.log('PASS: Home entry, paused placement, draft-safe inspection, isolated preview and single step');
+ await click('Один шаг');await until(`window.__cellhubFrame.stats[0]===${pausedAt+1}`);
+ console.log('PASS: Home entry, autoplay, paused placement, draft-safe inspection, isolated preview and single step');
  const suffix=Date.now(),genomeName=`Browser genome ${suffix}`,plateName=`Browser plate ${suffix}`;
  await click('Сохранить геном');await input('[role=dialog] input',genomeName);await click('Сохранить',"document.querySelector('[role=dialog]')");await until("!document.querySelector('[role=dialog]')");
  await click('Среда',"document.querySelector('.tabs')");await input('.panel-section input[type="range"]',2);
  await until('Math.abs(window.__cellhubFrame.terrain[0]-1.9)<.001');
  const saved=await evaluate('({cells:Array.from(window.__cellhubFrame.cells),stats:Array.from(window.__cellhubFrame.stats),terrain:Array.from(window.__cellhubFrame.terrain)})');
  await click('Сохранить эксперимент');await input('[role=dialog] input',plateName);await click('Сохранить',"document.querySelector('[role=dialog]')");await until("!document.querySelector('[role=dialog]')");
- await click('Начать заново');await confirm();await until('window.__cellhubFrame?.stats[0]===0&&window.__cellhubFrame.cells.length===0');
+ await click('Начать заново');await confirm();await until('window.__cellhubFrame?.cells.length===0');
+ await pauseRunning();
  assert(Math.abs(await evaluate('window.__cellhubFrame.terrain[0]')-1.9)<.001,'reset preserves chosen environment');
  await click('← Меню');await confirm();await until("document.querySelector('.home-shell')");
  await click('Открыть эксперимент');await until("document.querySelector('.library-list li')");
@@ -75,12 +78,13 @@ try{
  if(hasWebGPU){await verifyRenderFixtures({evaluate,delay});await verifyCellTypeFixtures(evaluate,'webgpu');}else console.log('SKIP: WebGPU pixel fixtures; browser uses WebGL fallback');
  // Exercise an eighth-channel neuron through the real editor, worker and save route.
  await click('Начать заново');await confirm();await until('window.__cellhubFrame?.cells.length===0');
+ const secondResetAt=await pauseRunning();
  await click('Геном',"document.querySelector('.tabs')");
  await select('.genome-cell-type select',13);
  await evaluate("(()=>{const label=[...document.querySelectorAll('.genome-cell-type')].find(el=>el.textContent.startsWith('Сигнальный канал'));const el=label.querySelector('select');el.value='7';el.dispatchEvent(new Event('change',{bubbles:true}));})()");
  await input('input[aria-label="Выходной сигнал"]',-0.75);
  await clickWorld(600,600);await until('window.__cellhubFrame?.cells.length===12');
- await click('Один шаг');await until('window.__cellhubFrame.stats[0]===1');
+ await click('Один шаг');await until(`window.__cellhubFrame.stats[0]===${secondResetAt+1}`);
  assert.equal(await evaluate('window.__cellhubFrame.details[7]'),-0.75);
  await clickWorld(600,600,'right');
  await until("document.querySelector('.cell-details') && document.body.innerText.includes('S8')");

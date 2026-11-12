@@ -34,8 +34,10 @@ function parseLevelStatus(raw: unknown): LevelStatus | null {
         return null;
     }
 }
-export function useSimulation() {
+export function useSimulation(autoPlay = false) {
     const worker = useRef<Worker | null>(null), available = useRef(false);
+    const autoPlayRef = useRef(autoPlay);
+    autoPlayRef.current = autoPlay;
     const [ready, setReady] = useState(false), [frame, setFrame] = useState<Frame | null>(null);
     const [levelStatus, setLevelStatus] = useState<LevelStatus | null>(null);
     const [resetting, setResetting] = useState(false);
@@ -53,6 +55,13 @@ export function useSimulation() {
             return;
         setSpeed(value);
         send({ type: 'speed', value });
+    }
+    /** Start a fresh world immediately in modes that do not wait for a lesson step. */
+    function resumeNewWorld() {
+        if (!autoPlayRef.current)
+            return;
+        setSpeed(1);
+        send({ type: 'speed', value: 1 });
     }
     function cancelInspect(reason: Error) {
         const pending = inspectRequest.current;
@@ -116,6 +125,10 @@ export function useSimulation() {
                 pendingSpawns.current = 0;
                 setInserted(current.inserted);
                 setResetting(false);
+                // A saved plate opens paused so its exact frame can be inspected
+                // and continued deliberately; fresh and restarted worlds play.
+                if (current.kind === 'reset')
+                    resumeNewWorld();
                 if (data.settings && (data.type === 'restored' || current.level))
                     setEnvironment(data.settings);
                 const pending = requests.current.get(data.requestId);
