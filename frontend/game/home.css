@@ -210,13 +210,3 @@
     transition:none;
   }
 }
-
-.home-heading p { max-width:650px; margin:16px auto 0; line-height:1.65; }
-.home-start { display:flex; align-items:center; justify-content:space-between; gap:32px; padding:32px; margin-bottom:36px; background:var(--accent-soft); border:1px solid var(--accent); border-radius:20px; }
-.home-start-label { color:var(--accent); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; }
-.home-start h2 { margin:10px 0; font-size:26px; }
-.home-start p { max-width:650px; margin:0; line-height:1.6; }
-.home-start ol { display:flex; flex-wrap:wrap; gap:12px 30px; padding-left:20px; margin:20px 0 0; font-size:13px; color:var(--text); }
-.home-start > button { flex-shrink:0; }
-.home-modes-heading { font-size:18px; margin-bottom:16px; }
-@media(max-width:760px) { .home-start { flex-direction:column; align-items:stretch; padding:24px; gap:24px; } .home-start h2 { font-size:23px; } }

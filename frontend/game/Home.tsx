@@ -72,19 +72,12 @@ export function Home({ onStart }: { onStart: (s: Omit<Session, 'key'>) => void }
         </header>
         <main className="home-content">
             {page === 'home' ? <>
-                <div className="home-heading"><h1 ref={heading} tabIndex={-1}>Маленькая клетка. Большая жизнь.</h1><p>Создайте организм и посмотрите, как он растёт.</p></div>
-                <section className="home-start" aria-labelledby="start-title">
-                    <div><span className="home-start-label">Начните здесь</span><h2 id="start-title">Первый эксперимент — с подсказками</h2>
-                    <p>Поместите клетку, запустите время и увидите первое деление. Обучение подскажет каждое действие.</p>
-                    </div>
-                    <button className="primary" onClick={() => onStart({ kind: 'tutorial', tutorialId: (TUTORIALS.find(lesson => !progress.tutorials.includes(lesson.id)) ?? TUTORIALS[0]).id })}>{progress.tutorials.length ? 'Продолжить обучение' : 'Начать обучение'} →</button>
-                </section>
-                <h2 className="home-modes-heading">Или выберите свой путь</h2>
+                <div className="home-heading"><h1 ref={heading} tabIndex={-1}>Выберите режим</h1></div>
                 <div className="home-mode-grid">
-                    <ModeCard kind="challenge" title="Испытания" description="Пошаговое обучение и задачи с конкретной целью." onClick={() => setPage('challenges')}/>
-                    <ModeCard kind="sandbox" title="Песочница" description="Создавайте клетки и меняйте среду без заданий и ограничений." onClick={() => onStart({ kind: 'sandbox' })}/>
-                    <ModeCard kind="chaos" title="Хаос" description="Наблюдайте за готовым живым миром с мутациями и сменой дня и ночи." onClick={() => onStart({ kind: 'chaos' })}/>
-                    <ModeCard kind="arena" title="Сетевая игра" description="Создайте комнату или присоединитесь к друзьям по коду." onClick={() => onStart({ kind: 'arena' })}/>
+                    <ModeCard kind="challenge" title="Испытания" description="Уроки обучения и задачи с заданными условиями." onClick={() => setPage('challenges')}/>
+                    <ModeCard kind="sandbox" title="Песочница" description="Своя среда и свободные эксперименты." onClick={() => onStart({ kind: 'sandbox' })}/>
+                    <ModeCard kind="chaos" title="Хаос" description="Биомы, день и ночь, мутации и самозарождение." onClick={() => onStart({ kind: 'chaos' })}/>
+                    <ModeCard kind="arena" title="Сетевая игра" description="Совместные комнаты: песочница или арена на основе «Хаоса»." onClick={() => onStart({ kind: 'arena' })}/>
                 </div>
                 <div className="home-secondary-grid">
                     <section className="home-panel" aria-labelledby="home-open">

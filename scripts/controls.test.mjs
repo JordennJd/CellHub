@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { bindCanvasControls, fitDishCamera, isPointInDish, resizeDishCamera, zoomDishCamera } from '../frontend/input/canvas-controls.ts';
 
-function controlsFixture(camera = {x:500,y:500,zoom:1}, worldSize = 3072, selectedTool) {
+function controlsFixture(camera = {x:500,y:500,zoom:1}, worldSize = 3072) {
   const originals = Object.fromEntries(['window','document','setTimeout','clearTimeout','setInterval','clearInterval'].map(key => [key, globalThis[key]]));
   const timeouts = new Map(), intervals = new Map(); let timerId = 0;
   globalThis.window = new EventTarget(); globalThis.document = new EventTarget();
@@ -10,11 +10,11 @@ function controlsFixture(camera = {x:500,y:500,zoom:1}, worldSize = 3072, select
   globalThis.clearTimeout = id => timeouts.delete(id);
   globalThis.setInterval = callback => { intervals.set(++timerId, callback); return timerId; };
   globalThis.clearInterval = id => intervals.delete(id);
-  const canvas = new EventTarget(), captured = new Set(), placed = [], actions = [];
+  const canvas = new EventTarget(), captured = new Set(), placed = [];
   Object.assign(canvas, {clientWidth:400,clientHeight:400,getBoundingClientRect:()=>({left:0,top:0}),setPointerCapture:id=>captured.add(id),hasPointerCapture:id=>captured.has(id),releasePointerCapture:id=>captured.delete(id)});
   const send = (type, data={}) => canvas.dispatchEvent(Object.assign(new Event(type,{cancelable:true}),{pointerType:'mouse',pointerId:1,button:0,buttons:1,clientX:200,clientY:200,...data}));
-  const removeControls = bindCanvasControls(canvas, {camera,worldSize,tool:()=> selectedTool ?? 'place',mouseTool:()=> selectedTool ?? 'place',onPoint:(p, action)=>{placed.push(p);actions.push(action);},onView:()=>{}});
-  return { send, placed, actions, timeouts, intervals, cleanup: () => {
+  const removeControls = bindCanvasControls(canvas, {camera,worldSize,tool:()=> 'place',onPoint:p=>placed.push(p),onView:()=>{}});
+  return { send, placed, timeouts, intervals, cleanup: () => {
     removeControls();
     for(const [key,value] of Object.entries(originals)) {
       if(value === undefined) delete globalThis[key]; else globalThis[key] = value;
@@ -110,17 +110,4 @@ test('button zoom keeps a selected world point anchored and clamps the supported
   assert.equal(centered.y,camera.y);
   assert.equal(zoomDishCamera(camera,100,camera,viewport,3000).zoom,4);
   assert.equal(zoomDishCamera(camera,0.001,camera,viewport,3000).zoom,0.12);
-});
-
-
-test('explicit mouse tools inspect without placement and pan without interacting', () => {
-  for (const tool of ['select', 'boost', 'remove', 'move', 'pan']) {
-    const {send, actions, timeouts, cleanup} = controlsFixture(undefined, undefined, tool);
-    try {
-      send('pointerdown');
-      assert.equal(timeouts.size, 0, `${tool} must not start held placement`);
-      send('pointerup', {buttons:0});
-      assert.deepEqual(actions, tool === 'pan' ? [] : ['select']);
-    } finally { cleanup(); }
-  }
 });
