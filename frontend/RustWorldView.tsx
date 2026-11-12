@@ -225,6 +225,8 @@ export function RustWorldView(props: RustWorldViewProps) {
         });
         const backend = instance.backend();
         canvas.dataset.renderer = backend;
+        if (backend === "webgpu" || backend === "webgl")
+          live.current.onBackend?.(backend);
         if (backend === "webgpu") {
           // Keep this Promise handler in JS: wgpu 24's WebGPU lost callback
           // drops its wasm-bindgen Closure before device.lost settles.

@@ -46,7 +46,7 @@ npm run check       # проверка TypeScript (после сборки WASM)
 npm run preview     # production-версия после npm run build
 ```
 
-`dist/` можно раздавать статическим сервером с MIME `application/wasm`. Для многопоточной симуляции нужны HTTPS или loopback и заголовки `Cross-Origin-Opener-Policy: same-origin` и `Cross-Origin-Embedder-Policy: require-corp`. Vite и `cellhub-server` выставляют их автоматически. В остальных контекстах лаборатория загружает однопоточную сборку. Canvas рисуется через Rust/wgpu с автоматическим переходом с WebGPU на WebGL2 при ошибке. Для диагностики доступен `?renderer=webgl`, а активный бэкенд виден в атрибуте `data-renderer` канваса.
+`dist/` можно раздавать статическим сервером с MIME `application/wasm`. Для многопоточной симуляции нужны HTTPS или loopback и заголовки `Cross-Origin-Opener-Policy: same-origin` и `Cross-Origin-Embedder-Policy: require-corp`. Vite и `cellhub-server` выставляют их автоматически. В остальных контекстах лаборатория загружает однопоточную сборку. Canvas рисуется через Rust/wgpu с автоматическим переходом с WebGPU на WebGL2 при ошибке. Активный бэкенд показан в панели над чашкой значком «Графика: WebGPU/WebGL2» и продублирован в атрибуте `data-renderer` канваса. Для диагностики доступен `?renderer=webgl`.
 
 Код сервера, протокола и сетевого клиента получен из main. Теперь он подключён к меню через карточку **«Арена»**: она открывает список публичных комнат, создаёт или подключает к общей сцене, а клиентский рендерер получает серверные чанки и предсказывает движение между ними. Редактор генома на арене остаётся локальным для каждого игрока. Сервер можно проверить отдельно через `npm run test:server`.
 
@@ -94,7 +94,7 @@ npm run preview     # production-версия после npm run build
 - `frontend/simulation.worker.ts`: локальный режим — очередь команд, загрузка WASM, часы и перенос снимков на главный поток.
 - `frontend/net/`: WebSocket-клиент, бинарный протокол и предсказанная сцена для сетевого режима; `OnlinePanel.tsx` — лобби и публичные комнаты.
 - `frontend/model.ts`: контракт команд и представление генома в UI.
-- `frontend/WorldView.tsx`: выбор бэкенда, повторный монтаж при сбое и принудительный переход на WebGL. `frontend/backend.ts`: начальный выбор WebGPU и тип бэкенда. `frontend/RendererToggle.tsx`: прежний технический переключатель, больше не подключён к игровому интерфейсу. `RustWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
+- `frontend/WorldView.tsx`: выбор бэкенда, повторный монтаж при сбое и принудительный переход на WebGL. `frontend/backend.ts`: начальный выбор WebGPU и тип бэкенда. `frontend/RendererBadge.tsx`: видимый индикатор фактически выбранного бэкенда. `frontend/RendererToggle.tsx`: прежний технический переключатель, больше не подключён к игровому интерфейсу. `RustWorldView.tsx`: камера, hit testing и отрисовка; биология остаётся в Worker.
 - `crates/frontend/src/web/`: прямой wgpu-рендерер (`backend.rs`, `labels.rs`, `gpu.rs`, `renderer.rs`, `repaint.rs`, `mod.rs`), GPU-буферы, resize и освобождение ресурсов. `scene_data.rs`: подготовка инстансов связей и native-тесты.
 - `crates/frontend/src/scene.wgsl`: инстансинг клеток и связей, SDF-оформление, карта и подписи. egui/eframe не используются.
 - `frontend/main.tsx`: переключение стартового экрана и лаборатории.

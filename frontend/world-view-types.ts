@@ -1,3 +1,4 @@
+import type { BackendPreference } from "./backend";
 import type { Frame } from "./model";
 export type ViewState = { zoom: number; x: number; y: number };
 export type WorldViewProps = {
@@ -8,6 +9,7 @@ export type WorldViewProps = {
   onPoint: (x: number, y: number, id: number | null, action: "place" | "select") => void;
   onView: (v: ViewState) => void;
   onError: (message: string) => void;
+  onBackend?: (backend: BackendPreference) => void;
   recenter: number;
   zoomStep?: number;
 };

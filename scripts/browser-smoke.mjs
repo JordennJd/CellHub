@@ -40,7 +40,8 @@ try{
  await screenshot('work/cellhub-home.png');await openSandbox();
  assert.equal(await evaluate('window.__mainWorker.threaded'),await evaluate('crossOriginIsolated && navigator.hardwareConcurrency > 1'),'worker selects the matching WASM variant');
  const hasWebGPU=await evaluate("document.querySelector('.world canvas').dataset.renderer==='webgpu'");
- assert(await evaluate("!/(WASM|RUST|WebGPU|WebGL|SEED|experimental|Большие возможности|Маленькая жизнь)/.test(document.body.innerText)"));
+ assert(await evaluate("!/(WASM|RUST|SEED|experimental|Большие возможности|Маленькая жизнь)/.test(document.body.innerText)"));
+  await until("document.querySelector('.renderer-badge')?.dataset.backend===document.querySelector('.world canvas').dataset.renderer");
  assert.equal(await evaluate('window.__cellhubFrame.stats[0]'),0);
  await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');
  // Inspection must leave an independently edited draft intact.
@@ -95,6 +96,6 @@ try{
  await click('← Меню');await confirm();
  await verifyTouchControls({call,evaluate,until,delay,screenshot,url,openSandbox,click});
  if(await evaluate("!!document.createElement('canvas').getContext('webgl2')")){
- await call('Page.navigate',{url:`${url}/?renderer=webgl`});await openSandbox();await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl'");await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');await screenshot('work/cellhub-webgl-laboratory.png');await verifyCellTypeFixtures(evaluate,'webgl');console.log('PASS: WebGL fallback through Home and laboratory');}
+ await call('Page.navigate',{url:`${url}/?renderer=webgl`});await openSandbox();await until("document.querySelector('.world canvas')?.dataset.renderer==='webgl'");await until("document.querySelector('.renderer-badge')?.dataset.backend==='webgl'");await clickWorld(600,600);await until('window.__cellhubFrame.cells.length===12');await screenshot('work/cellhub-webgl-laboratory.png');await verifyCellTypeFixtures(evaluate,'webgl');console.log('PASS: WebGL fallback through Home and laboratory');}
  assert.deepEqual(errors,[]);
 }catch(error){console.error(JSON.stringify({errors,body:await evaluate('document.body.innerText')}));await screenshot('work/cellhub-integration-failure.png');throw error;}finally{ws.close();}

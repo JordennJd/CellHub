@@ -8,6 +8,7 @@ import { initialBackend, type BackendPreference } from '../backend';
 import { GenomeEditor } from '../editor/GenomeEditor';
 import { Library } from './Library';
 import { Modal } from './Modal';
+import { RendererBadge } from '../RendererBadge';
 import { SimulationHeader } from './SimulationHeader';
 import { saveEntry, type GenomeData, type LibraryEntry } from './storage';
 import { useArena, type ArenaInspectResult } from './useArena';
@@ -58,6 +59,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
     const [selected, setSelected] = useState<number | null>(null);
     const [diagnostic, setDiagnostic] = useState<ArenaInspectResult | null>(null);
     const [backend, setBackend] = useState<BackendPreference>(initialBackend);
+    const [renderer, setRenderer] = useState<BackendPreference | null>(null);
     const [recenter, setRecenter] = useState(0);
     const [zoomStep, setZoomStep] = useState(0);
     const [view, setView] = useState<ViewState>({ x: 0, y: 0, zoom: 1 });
@@ -221,15 +223,18 @@ export function Arena({ onExit }: { onExit: () => void }) {
                             <option value="radiation">Радиация</option>
                         </select>
                     </label>
+                    <RendererBadge backend={renderer}/>
                     <span className="arena-zoom" aria-label="Текущий масштаб">{Math.round(view.zoom * 100)}%</span>
                 </div>
                 <div className="canvas-wrap">
                     <WorldView frame={arena.frame} tool={tool} layer={layer} selected={selected}
-                        backend={backend} onPoint={point} onView={setView} recenter={recenter} zoomStep={zoomStep}
+                        backend={backend} onPoint={point} onView={setView} onBackend={setRenderer} recenter={recenter} zoomStep={zoomStep}
                         onError={() => arena.setError('Не удалось показать общую сцену. Попробуйте перезагрузить страницу.')}
                         onBackendFailure={failed => {
-                            if (failed === 'webgpu')
+                            if (failed === 'webgpu') {
+                                setRenderer(null);
                                 setBackend('webgl');
+                            }
                             else
                                 arena.setError('В этом браузере не удалось открыть изображение арены.');
                         }}/>

@@ -15,6 +15,7 @@ import { challengeBudget, starterGenome, type LevelManifest } from './levels';
 import { ObjectivePanel } from './ObjectivePanel';
 import { Library } from './Library';
 import { SimulationHeader } from './SimulationHeader';
+import { RendererBadge } from '../RendererBadge';
 import { saveEntry, type LibraryEntry, type GenomeData, type PlateData } from './storage';
 import { readSettings } from './Settings';
 export type Session = {
@@ -49,7 +50,7 @@ export function Laboratory({ session, onExit }: {
     const [tab, setTab] = useState(level || session.kind === 'tutorial' ? 'objective' : 'genome');
     const tools = levelTools(level);
     const [tool, setTool] = useState(tools[0]?.[0] ?? 'place'), [selected, setSelected] = useState<number | null>(null), [layer, setLayer] = useState('biome');
-    const [backend, setBackend] = useState<BackendPreference>(initialBackend), [recenter, setRecenter] = useState(0), [zoomStep, setZoomStep] = useState(0), [view, setView] = useState<ViewState>({ x: 0, y: 0, zoom: 1 });
+    const [backend, setBackend] = useState<BackendPreference>(initialBackend), [renderer, setRenderer] = useState<BackendPreference | null>(null), [recenter, setRecenter] = useState(0), [zoomStep, setZoomStep] = useState(0), [view, setView] = useState<ViewState>({ x: 0, y: 0, zoom: 1 });
     const [library, setLibrary] = useState(false), [saveKind, setSaveKind] = useState<'genome' | 'plate' | null>(null), [name, setName] = useState(''), [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
     const [completed, setCompleted] = useState(false), [help, setHelp] = useState<'hint' | 'spoiler' | null>(null), [tutorial, setTutorial] = useState(0), [tutorialDone, setTutorialDone] = useState(false);
     const [savedGenome, setSavedGenome] = useState(false);
@@ -263,8 +264,10 @@ export function Laboratory({ session, onExit }: {
                 setName(title === 'Новый эксперимент' ? '' : title);
             },
         }}/>
- <main className="lab-layout"><section className="microscope" aria-label="Микроскоп"><div className="canvas-actions"><div className="canvas-view-controls" role="group" aria-label="Масштаб поля"><button aria-label="Уменьшить масштаб" onClick={() => setZoomStep(v => v - 1)}>−</button><button aria-label="Увеличить масштаб" onClick={() => setZoomStep(v => v + 1)}>+</button><button onClick={() => setRecenter(v => v + 1)}>Всё поле</button></div><label><span className="sr-only">Показать слой</span><select value={layer} onChange={e => setLayer(e.target.value)}><option value="biome">Среда</option><option value="light">Свет</option><option value="food">Пища</option><option value="covered">Покрытая пища</option><option value="nitrates">Нитраты</option><option value="radiation">Радиация</option></select></label></div><div className="canvas-wrap" ref={canvasHost}><WorldView frame={sim.frame} tool={tool} layer={layer} selected={selected} backend={backend} onPoint={point} onView={setView} onError={() => failure('Не удалось показать чашку. Попробуйте перезагрузить страницу.')} recenter={recenter} zoomStep={zoomStep} onBackendFailure={(failed) => { if (failed === 'webgpu')
+ <main className="lab-layout"><section className="microscope" aria-label="Микроскоп"><div className="canvas-actions"><div className="canvas-view-controls" role="group" aria-label="Масштаб поля"><button aria-label="Уменьшить масштаб" onClick={() => setZoomStep(v => v - 1)}>−</button><button aria-label="Увеличить масштаб" onClick={() => setZoomStep(v => v + 1)}>+</button><button onClick={() => setRecenter(v => v + 1)}>Всё поле</button></div><div className="canvas-action-meta"><RendererBadge backend={renderer}/><label><span className="sr-only">Показать слой</span><select value={layer} onChange={e => setLayer(e.target.value)}><option value="biome">Среда</option><option value="light">Свет</option><option value="food">Пища</option><option value="covered">Покрытая пища</option><option value="nitrates">Нитраты</option><option value="radiation">Радиация</option></select></label></div></div><div className="canvas-wrap" ref={canvasHost}><WorldView frame={sim.frame} tool={tool} layer={layer} selected={selected} backend={backend} onPoint={point} onView={setView} onBackend={setRenderer} onError={() => failure('Не удалось показать чашку. Попробуйте перезагрузить страницу.')} recenter={recenter} zoomStep={zoomStep} onBackendFailure={(failed) => { if (failed === 'webgpu') {
+        setRenderer(null);
         setBackend('webgl');
+    }
     else
         failure('В этом браузере не удалось открыть изображение чашки.'); }}/>
  {chaosMode && <ChaosStatus frame={sim.frame}/>}
