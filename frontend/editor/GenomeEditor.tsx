@@ -3,7 +3,7 @@ import { SlotName } from "./SlotName";
 import { CellTypePicker } from "./CellTypePicker";
 import { useEffect, useId, useState } from "react";
 import { defaultGenome, modeColor, newMode, removeMode, MAX_MODES, POPULATION_LIMIT, TYPES, type Mode, type NumericModeKey } from "../model";
-import { demoOrganisms } from "../organisms";
+import { OrganismCarousel, CellAppearance } from "./OrganismCarousel";
 import { listEntries } from "../game/storage";
 import { GenomePreview } from "./GenomePreview";
 import { CellSettings, Setting } from "./CellSettings";
@@ -21,7 +21,7 @@ export type GenomeEditorProps = {
 
 export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChange, onSave, onLoad, allowedKinds }: GenomeEditorProps) {
   const demoId = useId();
-  const [demoMode, setDemoMode] = useState(false);
+  const [demoMode, setDemoMode] = useState(true);
   const [editing, setEditing] = useState(0);
   const [confirm, setConfirm] = useState<"reset" | "types" | "remove" | "choice" | null>(null);
   const [choice, setChoice] = useState<{ name: string; genome: Mode[]; initialMode: number } | null>(null);
@@ -45,7 +45,6 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
   const m = genome[mode];
   if (!m) return null;
   const allowed = (kind: number) => !allowedKinds || allowedKinds.includes(kind);
-  const catalog = demoOrganisms(allowedKinds);
   function update<K extends keyof Mode>(key: K, value: Mode[K]) {
     onChange(genome.map((item, i) => i === mode ? { ...item, [key]: value } : item));
   }
@@ -117,15 +116,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
       {demoMode && <div id={demoId} className="genome-demo-examples"><p>Пример заменит слоты редактора. Поле и живые клетки сохранятся.</p>
         <button onClick={() => setConfirm("reset")}>Одна клетка</button>
         <button onClick={() => setConfirm("types")}>Все доступные типы</button>
-        {catalog.length > 0 ? <>
-          <h4>Готовые организмы</h4>
-          <div className="genome-demo-list">
-            {catalog.map(organism => <button key={organism.id} className="genome-demo-organism" onClick={() => choose(organism.name, organism.genome(), organism.initialMode)}>
-              <strong>{organism.name}</strong>
-              <small>{organism.description}</small>
-            </button>)}
-          </div>
-        </> : <p>Среди доступных типов клеток нет готовых многоклеточных организмов.</p>}
+        <OrganismCarousel allowedKinds={allowedKinds} onChoose={(genome, initialMode, name) => choose(name, genome, initialMode)}/>
         {savedGenomes.length > 0 && <>
           <h4>Мои сохранённые геномы</h4>
           <div className="genome-demo-list">
@@ -134,7 +125,7 @@ export function GenomeEditor({ genome, onChange, initialMode, onInitialModeChang
               return <button key={`${entry.name}-${index}`} className="genome-demo-organism" disabled={!compatible}
                 title={compatible ? undefined : "Содержит типы клеток, недоступные в этом испытании."}
                 onClick={() => choose(entry.name, entry.genome, entry.initialMode)}>
-                <strong>{entry.name}</strong>
+                <CellAppearance mode={entry.genome[entry.initialMode] ?? entry.genome[0]}/><strong>{entry.name}</strong>
                 <span>{entry.genome.length} слотов{compatible ? "" : " · недоступен"}</span>
               </button>;
             })}

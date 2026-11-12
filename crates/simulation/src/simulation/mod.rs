@@ -610,6 +610,11 @@ impl Simulation {
         draw_random(&mut self.rng)
     }
 
+    /// Bound shared-room populations without changing original level limits.
+    pub fn set_population_limit(&mut self, limit: usize) {
+        self.population_limit = limit.clamp(1, LIMIT);
+    }
+
     /// Native-only region export used by the authoritative server.
     ///
     /// Cells are emitted with stride 29, including the effective world speed

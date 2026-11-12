@@ -5,6 +5,7 @@ import type { Command, Frame } from "../model";
 import { PredictionWorld, type SyncState } from "./prediction";
 import {
   PROTOCOL_VERSION,
+  CHUNKS_PER_AXIS,
   decodeChunk,
   type ChaosPreset,
   type LeaderboardEntry,
@@ -36,6 +37,9 @@ export class MultiplayerClient {
   private socket: WebSocket | null = null;
   private world: PredictionWorld | null = null;
   private sequence = 0;
+  // At most one pending snapshot per region. A slow display never replays
+  // every intermediate scene packet before it can show the latest authority.
+  private pendingChunks = new Map<number, { buffer: ArrayBuffer; tick: number; receivedAt: number }>();
   private loop: number | null = null;
   private lastFrame = 0;
   private lastPing = 0;
@@ -81,6 +85,7 @@ export class MultiplayerClient {
       if (this.socket !== socket) return;
       this.socket = null;
       this.world = null;
+      this.pendingChunks.clear();
       this.stopLoop();
       this.setPhase("disconnected");
       if (!this.intentionalClose) this.callbacks.onDisconnected();
@@ -98,6 +103,7 @@ export class MultiplayerClient {
   leaveRoom() {
     this.send({ type: "leave" });
     this.world = null;
+    this.pendingChunks.clear();
     this.setPhase("lobby");
     this.send({ type: "list" });
   }
@@ -149,6 +155,7 @@ export class MultiplayerClient {
     const socket = this.socket;
     this.socket = null;
     this.world = null;
+    this.pendingChunks.clear();
     socket?.close();
     if (this.phase !== "disconnected") this.setPhase("disconnected");
   }
@@ -185,6 +192,7 @@ export class MultiplayerClient {
           this.close();
           return;
         }
+        this.pendingChunks.clear();
         this.world = new PredictionWorld();
         this.playerId = message.player?.id ?? 0;
         this.lastFrame = performance.now();
@@ -211,6 +219,7 @@ export class MultiplayerClient {
         this.callbacks.onLeaderboard(message.entries);
         break;
       case "world_reset":
+        this.pendingChunks.clear();
         this.world?.applyReset();
         this.callbacks.onWorldReset();
         break;
@@ -218,6 +227,7 @@ export class MultiplayerClient {
         break;
       case "room_closed":
         this.world = null;
+        this.pendingChunks.clear();
         this.callbacks.onNotice(message.reason);
         this.setPhase("lobby");
         this.send({ type: "list" });
@@ -226,14 +236,29 @@ export class MultiplayerClient {
   }
 
   private chunk(buffer: ArrayBuffer) {
-    const chunk = decodeChunk(buffer);
-    if (!chunk) {
-      this.callbacks.onError("Повреждённый чанк сцены.");
-      return;
+    if (!this.world) return;
+    if (buffer.byteLength < 31) { this.callbacks.onError("Повреждённый чанк сцены."); return; }
+    const view = new DataView(buffer);
+    const x = view.getUint8(21), y = view.getUint8(22);
+    if (view.getUint8(0) !== 2 || x >= CHUNKS_PER_AXIS || y >= CHUNKS_PER_AXIS) {
+      this.callbacks.onError("Повреждённый чанк сцены."); return;
     }
+    const key = y * CHUNKS_PER_AXIS + x, tick = view.getUint32(1, true);
+    this.profiler.chunk(buffer.byteLength, 0);
+    if (tick >= (this.pendingChunks.get(key)?.tick ?? -1))
+      this.pendingChunks.set(key, { buffer, tick, receivedAt: performance.now() });
+  }
+
+  private applyPendingChunks(world: PredictionWorld) {
+    const pending = [...this.pendingChunks.values()].sort((a, b) => a.tick - b.tick);
+    this.pendingChunks.clear();
     const started = performance.now();
-    this.world?.applyChunk(chunk);
-    this.profiler.chunk(buffer.byteLength, performance.now() - started);
+    for (const entry of pending) {
+      const chunk = decodeChunk(entry.buffer);
+      if (chunk) world.applyChunk(chunk, entry.receivedAt);
+      else this.callbacks.onError("Повреждённый чанк сцены.");
+    }
+    this.profiler.apply(performance.now() - started);
   }
 
   private startLoop() {
@@ -245,7 +270,9 @@ export class MultiplayerClient {
       const world = this.world;
       if (world) {
         const started = performance.now();
-        world.tick((now - this.lastFrame) / 1000, now);
+        this.applyPendingChunks(world);
+        const predictionNow = performance.now();
+        world.tick((predictionNow - this.lastFrame) / 1000, predictionNow);
         this.callbacks.onFrame(world.frame(), world.syncState());
         this.profiler.frame(performance.now() - started, world.cellCount);
       }

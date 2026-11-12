@@ -6,11 +6,14 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const WORLD_SIZE: f32 = 3072.;
 pub const CHUNK_SIZE: f32 = 512.;
 pub const CHUNKS_PER_AXIS: u32 = 6;
 pub const CHUNK_COUNT: usize = (CHUNKS_PER_AXIS * CHUNKS_PER_AXIS) as usize;
+/// Six regions per 10 Hz tick: full refresh in 600 ms.
+pub const CHUNKS_PER_TICK: usize = 6;
+pub const NETWORK_POPULATION_LIMIT: usize = 7_000;
 pub const TERRAIN_GRID: usize = 48;
 pub const TERRAIN_TILES_PER_CHUNK: usize = TERRAIN_GRID / CHUNKS_PER_AXIS as usize;
 /// Cell row: `[..28 classic fields.., owner]`.

@@ -5,6 +5,8 @@ import { CELL_DETAILS_STRIDE, STRIDE, TICK_RATE, TYPES, defaultGenome, type Mode
 import { OnlinePanel } from '../OnlinePanel';
 import { WorldView, type ViewState } from '../WorldView';
 import { initialBackend, type BackendPreference } from '../backend';
+import { demoOrganisms } from '../organisms';
+import { OrganismCarousel } from '../editor/OrganismCarousel';
 import { GenomeEditor } from '../editor/GenomeEditor';
 import { Library } from './Library';
 import { Modal } from './Modal';
@@ -51,9 +53,9 @@ export function Arena({ onExit }: { onExit: () => void }) {
     const [serverUrl] = useState(defaultServerUrl);
     const [playerName] = useState(storedPlayer);
     const [lobbyOpen, setLobbyOpen] = useState(true);
-    const [genome, setGenome] = useState<Mode[]>(defaultGenome);
-    const [initialMode, setInitialMode] = useState(0);
-    const [tab, setTab] = useState('genome');
+    const [genome, setGenome] = useState<Mode[]>(() => demoOrganisms()[0]?.genome() ?? defaultGenome());
+    const [initialMode, setInitialMode] = useState(() => demoOrganisms()[0]?.initialMode ?? 0);
+    const [tab, setTab] = useState('demo');
     const [tool, setTool] = useState('place');
     const [layer, setLayer] = useState('biome');
     const [selected, setSelected] = useState<number | null>(null);
@@ -259,11 +261,11 @@ export function Arena({ onExit }: { onExit: () => void }) {
                     {!online && <div className="canvas-note" role="status">Подключение к серверу арены…</div>}
                     {online && !count && <div className="canvas-note">Поле свободно. Поместите первую клетку.</div>}
                 </div>
-                {touchControls && <div className="tool-bar" role="toolbar" aria-label="Инструменты арены">
+                <div className="tool-bar" role="toolbar" aria-label="Инструменты арены">
                     {[['place', 'Поместить'], ['select', 'Диагностика'], ['pan', 'Обзор']].map(([value, label]) =>
                         <button key={value} aria-pressed={tool === value} onClick={() => setTool(value)}>{label}</button>)}
-                </div>}
-                <p className="control-hint">{touchControls ? 'Касание — действие · Перетаскивание — обзор · Щипок — масштаб' : 'ЛКМ — поместить · ПКМ — выбрать · Зажатое колёсико — обзор · Колесо — масштаб'}</p>
+                </div>
+                <p className="control-hint">{touchControls ? 'Касание — действие · Перетаскивание — обзор · Щипок — масштаб' : tool === 'select' ? 'Нажмите на клетку, чтобы изучить её.' : tool === 'pan' ? 'Перетаскивайте поле для обзора.' : 'Нажмите на поле, чтобы поместить выбранный организм. Колесо — масштаб.'}</p>
                 <div className="transport">
                     <div className={`arena-status ${online ? 'online' : ''}`} role="status">
                         <span className="arena-status-dot" aria-hidden="true"/>
@@ -283,12 +285,13 @@ export function Arena({ onExit }: { onExit: () => void }) {
             </section>
             <aside className="lab-sidebar">
                 <nav className="tabs" aria-label="Панели арены">
-                    {([['genome', 'Геном'], ['observe', 'Наблюдение']] as [string, string][])
+                    {([['demo', 'Организмы'], ['genome', 'Геном'], ['observe', 'Наблюдение']] as [string, string][])
                         .concat((arenaMode ? [['rating', 'Рейтинг']] : []) as [string, string][])
                         .concat([['room', 'Комната']]).map(([value, label]) =>
                         <button key={value} aria-current={tab === value ? 'page' : undefined} onClick={() => setTab(value)}>{label}</button>)}
                 </nav>
                 <div className="sidebar-content">
+                    {tab === 'demo' && <><p>Выберите готовый организм, затем нажмите на поле, чтобы заселить его клетку. Ростом и делением управляет сервер.</p><OrganismCarousel onChoose={(genome, mode, name) => { setGenome(genome); setInitialMode(mode); setTool('place'); arena.setNotice(`Выбран «${name}». Нажмите на поле, чтобы добавить клетку.`); }}/></>}
                     {tab === 'genome' && <GenomeEditor genome={genome} onChange={setGenome} initialMode={initialMode}
                         onInitialModeChange={setInitialMode} onSave={() => { setName(''); setSaveKind('genome'); }}
                         onLoad={() => setLibrary(true)}/>}
@@ -341,7 +344,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                                 <div><dt>Тик сервера</dt><dd>{arena.sync?.lastTick ?? room.tick}</dd></div>
                                 <div><dt>Чанков получено</dt><dd>{arena.sync?.seen ?? 0} / {arena.sync?.total ?? 36}</dd></div>
                             </dl>
-                            <p className="arena-note">Мир 3072 × 3072 принадлежит серверу. Клиент получает по одному чанку за тик и предсказывает движение между обновлениями.{arenaMode ? ' На арене новая клетка доступна раз в 2 секунды.' : ''}</p>
+                            <p className="arena-note">Мир 3072 × 3072 принадлежит серверу. Карта обновляется каждые 0,6 секунды. Клиент предсказывает движение и столкновения; рост и деление рассчитывает сервер.{arenaMode ? ' На арене новая клетка доступна раз в 2 секунды.' : ''}</p>
                             <div className="button-row">
                                 <button onClick={() => { arena.leaveRoom(); setLobbyOpen(true); }}>Выйти в список комнат</button>
                                 <button className="quiet" onClick={() => { arena.disconnect(); setLobbyOpen(true); }}>Отключиться</button>

@@ -155,7 +155,7 @@ try {
     () => first.messages.find((m) => m.type === "welcome"),
     "welcome",
   );
-  assert.equal(welcome.protocol, 5);
+  assert.equal(welcome.protocol, 6);
   assert.equal(welcome.host, true);
   assert.equal(welcome.room.mode, "sandbox");
   const room = welcome.room.id;
@@ -173,6 +173,9 @@ try {
   await waitFor(() => first.chunks.length >= 40, "chunk stream", 15_000);
   const seen = new Set(first.chunks.map((chunk) => chunk.chunkY * 6 + chunk.chunkX));
   assert.equal(seen.size, 36, "a full sequential chunk cycle is delivered");
+  const byTick = new Map();
+  for (const chunk of first.chunks) byTick.set(chunk.tick, (byTick.get(chunk.tick) ?? 0) + 1);
+  assert([...byTick.values()].some(count => count === 6), "six regions share one authoritative tick");
   const withCell = first.chunks.find((chunk) => cellRow(chunk, cellId));
   assert(withCell, "the authoritative cell appears in its chunk");
   assert(withCell.population >= 1);

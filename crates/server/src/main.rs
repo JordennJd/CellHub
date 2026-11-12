@@ -2,7 +2,7 @@
 //!
 //! It serves the built frontend (when `dist/` exists), a health endpoint and a
 //! WebSocket lobby at `/ws`. Browsers create or join public rooms; each room
-//! owns one fixed-step simulation and streams one map chunk per tick.
+//! owns one fixed-step simulation and streams six map chunks per tick.
 
 mod room;
 mod state;

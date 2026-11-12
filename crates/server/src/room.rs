@@ -1,8 +1,9 @@
 //! One authoritative public room: a fixed-step simulation and its chunk stream.
 
 use cellhub_protocol::{
-    CHUNK_COUNT, CHUNK_SIZE, CHUNKS_PER_AXIS, ChaosPreset, Chunk, ClientMessage, LeaderboardEntry,
-    PLAYER_COLORS, PlayerInfo, RoomInfo, RoomMode, ServerMessage, player_color,
+    CHUNK_COUNT, CHUNK_SIZE, CHUNKS_PER_AXIS, CHUNKS_PER_TICK, ChaosPreset, Chunk, ClientMessage,
+    LeaderboardEntry, NETWORK_POPULATION_LIMIT, PLAYER_COLORS, PlayerInfo, RoomInfo, RoomMode,
+    ServerMessage, player_color,
 };
 use cellhub_simulation::Simulation;
 use std::collections::{HashMap, HashSet};
@@ -181,6 +182,7 @@ fn run_room(
             simulation.start_chaos_defaults(seed);
         }
     }
+    simulation.set_population_limit(NETWORK_POPULATION_LIMIT);
     simulation.set_track_owner_scores(room.mode == RoomMode::Arena);
     let mut cursor = 0usize;
     let mut tick_count = 0u32;
@@ -229,32 +231,34 @@ fn run_room(
             .store(step_started.elapsed().as_micros() as u64, Ordering::Relaxed);
         let stream_started = Instant::now();
         let stats = simulation.stats();
-        let chunk_x = (cursor % CHUNKS_PER_AXIS as usize) as u32;
-        let chunk_y = (cursor / CHUNKS_PER_AXIS as usize) as u32;
-        let snapshot = simulation.chunk_snapshot(chunk_x, chunk_y, CHUNK_SIZE);
-        let chunk = Chunk {
-            tick: simulation.tick_number(),
-            population: stats[1] as u32,
-            births: stats[2] as u32,
-            deaths: stats[3] as u32,
-            infections: stats[4] as u32,
-            chunk_x: chunk_x as u8,
-            chunk_y: chunk_y as u8,
-            cells: snapshot.cells,
-            links: snapshot.links,
-            terrain: snapshot.terrain,
-        };
-        match chunk.encode() {
-            Ok(bytes) => {
-                room.bytes
-                    .fetch_add(bytes.len() as u64 * players as u64, Ordering::Relaxed);
-                room.tick.store(chunk.tick, Ordering::Relaxed);
-                room.population.store(chunk.population, Ordering::Relaxed);
-                room.broadcast(RoomEvent::Binary(bytes.into()));
+        for _ in 0..CHUNKS_PER_TICK {
+            let chunk_x = (cursor % CHUNKS_PER_AXIS as usize) as u32;
+            let chunk_y = (cursor / CHUNKS_PER_AXIS as usize) as u32;
+            let snapshot = simulation.chunk_snapshot(chunk_x, chunk_y, CHUNK_SIZE);
+            let chunk = Chunk {
+                tick: simulation.tick_number(),
+                population: stats[1] as u32,
+                births: stats[2] as u32,
+                deaths: stats[3] as u32,
+                infections: stats[4] as u32,
+                chunk_x: chunk_x as u8,
+                chunk_y: chunk_y as u8,
+                cells: snapshot.cells,
+                links: snapshot.links,
+                terrain: snapshot.terrain,
+            };
+            match chunk.encode() {
+                Ok(bytes) => {
+                    room.bytes
+                        .fetch_add(bytes.len() as u64 * players as u64, Ordering::Relaxed);
+                    room.tick.store(chunk.tick, Ordering::Relaxed);
+                    room.population.store(chunk.population, Ordering::Relaxed);
+                    room.broadcast(RoomEvent::Binary(bytes.into()));
+                }
+                Err(error) => warn!(%error, "cannot encode room chunk"),
             }
-            Err(error) => warn!(%error, "cannot encode room chunk"),
+            cursor = (cursor + 1) % CHUNK_COUNT;
         }
-        cursor = (cursor + 1) % CHUNK_COUNT;
         tick_count = tick_count.wrapping_add(1);
         if room.mode == RoomMode::Arena && tick_count % LEADERBOARD_EVERY_TICKS == 0 {
             broadcast_leaderboard(&room, &simulation);
@@ -372,6 +376,7 @@ fn apply_command(
             spawn_times.clear();
             *cursor = 0;
             room.population.store(0, Ordering::Relaxed);
+            simulation.set_population_limit(NETWORK_POPULATION_LIMIT);
             room.tick.store(0, Ordering::Relaxed);
             room.broadcast(RoomEvent::json(&ServerMessage::WorldReset { tick: 0 }));
             let _ = command.reply.send(RoomEvent::json(&ServerMessage::Ack {

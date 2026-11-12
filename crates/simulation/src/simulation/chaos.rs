@@ -2,7 +2,9 @@
 
 use super::Simulation;
 use super::boundary::Boundary;
-use crate::components::{Cell, LIMIT, Position, STEP, TICK_RATE, radius};
+#[cfg(test)]
+use crate::components::LIMIT;
+use crate::components::{Cell, Position, STEP, TICK_RATE, radius};
 use crate::genome::{Genome, MAX_MODES, MODE_STRIDE, Mode, decode_checked};
 #[cfg(test)]
 use crate::terrain::{CHAOS_GRID, index};
@@ -512,7 +514,7 @@ impl Simulation {
 
     fn seed_arrival(&mut self, genome: Genome, span: usize, complex: bool, immigration: bool) {
         let span = span.clamp(1, MAX_ORGANISM_SPAN);
-        if self.world.len() as usize + span > LIMIT {
+        if self.world.len() as usize + span > self.population_limit {
             return;
         }
         let viable = self.chaos.as_ref().unwrap().viable;
@@ -1104,6 +1106,20 @@ mod tests {
         assert_eq!(sim.world_size(), 3072.);
         assert!(sim.chaos.is_none());
         assert_eq!(sim.encode_state(), sandbox.encode_state());
+    }
+
+    #[test]
+    fn immigration_respects_room_population_limit() {
+        let mut sim = world(61);
+        let count = sim.world.len();
+        sim.set_population_limit(count as usize + 1);
+        let genome = sim.chaos.as_ref().unwrap().pool.clone();
+        sim.seed_arrival(genome.clone(), 2, true, true);
+        assert_eq!(sim.world.len(), count, "a whole organism must fit the cap");
+        sim.seed_arrival(genome.clone(), 1, false, true);
+        assert_eq!(sim.world.len(), count + 1);
+        sim.seed_arrival(genome, 1, false, true);
+        assert_eq!(sim.world.len(), count + 1);
     }
 
     #[test]

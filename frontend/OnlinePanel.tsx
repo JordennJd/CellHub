@@ -53,7 +53,7 @@ export function OnlinePanel(props: Props) {
         </header>
         <p className="online-note">
           Редактор генома остаётся вашим. Сервер разделяет только общую сцену,
-          тикает её 10 раз в секунду и присылает по одному чанку карты за раз.
+          обновляет её 10 раз в секунду. Полная карта приходит каждые 0,6 секунды.
         </p>
         <label className="online-field">
           Адрес WebSocket

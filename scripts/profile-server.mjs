@@ -63,10 +63,16 @@ try {
     await until(() => joined === i + 1, `join ${i}`);
   }
   const genome = Array.from({ length: 8 }, () => [0, 8, 0, 0, .5, 0, 0, 240]).flat();
+  const spawnStarted = performance.now();
   for (let i = 0; i < population; i++) {
     sockets[i % players].send(JSON.stringify({ type: "spawn", seq: i + 1,
       ...position(i), mode: 0, genome }));
-    if (i % 80 === 79) await until(() => acks >= i + 1, "spawn acknowledgements");
+    if (i % 80 === 79) {
+      await until(() => acks >= i + 1, "spawn acknowledgements");
+      // Stay below the real per-player command limit, even with few clients.
+      const wait = (i + 1) / (players * 180) * 1000 - (performance.now() - spawnStarted);
+      if (wait > 0) await sleep(wait);
+    }
   }
   await until(() => acks === population, "all spawns");
   const samples = [];

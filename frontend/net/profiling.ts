@@ -15,6 +15,8 @@ export class NetworkProfiler {
     this.chunks++;
   }
 
+  apply(ms: number) { if (this.enabled) this.applyMs += ms; }
+
   frame(ms: number, cells: number) {
     if (!this.enabled) return;
     this.frames.push(ms);

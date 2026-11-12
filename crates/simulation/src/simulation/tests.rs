@@ -2196,3 +2196,19 @@ fn arena_owner_scores_integrate_mass_with_type_weights() {
     s.set_track_owner_scores(false);
     assert_eq!(s.owner_score(7), 0.);
 }
+
+#[test]
+fn room_population_limit_remains_soft() {
+    let mut s = quiet_world();
+    s.settings.aging = false;
+    s.set_population_limit(2);
+    let mut g = modern_genes(1);
+    g[8] = 0.;
+    for i in 0..3 {
+        s.spawn_owned(100. + i as f32 * 40., 100., 0, &g, 1)
+            .unwrap();
+    }
+    assert_eq!(s.world.len(), 3);
+    s.advance(1);
+    assert_eq!(s.world.len(), 2);
+}

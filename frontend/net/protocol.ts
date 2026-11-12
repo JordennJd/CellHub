@@ -1,9 +1,12 @@
 //! Wire constants and binary chunk decoding for the optional server mode.
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 export const CHUNK_SIZE = 512;
 export const CHUNKS_PER_AXIS = 6;
 export const CHUNK_COUNT = CHUNKS_PER_AXIS * CHUNKS_PER_AXIS;
+/** Six regions per 10 Hz authority tick: a full scene every 600 ms. */
+export const CHUNKS_PER_TICK = 6;
+export const SYNC_CYCLE_TICKS = Math.ceil(CHUNK_COUNT / CHUNKS_PER_TICK);
 export const TERRAIN_SIZE = 48;
 export const TERRAIN_TILES_PER_CHUNK = TERRAIN_SIZE / CHUNKS_PER_AXIS;
 export const CELL_STRIDE = 29;

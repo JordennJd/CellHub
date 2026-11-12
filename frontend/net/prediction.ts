@@ -1,20 +1,19 @@
 //! Client-side predictive scene.
 //!
-//! The server owns biology, genomes, spawning and the tick counter. The client
-//! never invents server-side cells, divisions or other spawns: it only predicts
-//! how already known cells move between authoritative chunks. Adhesion
-//! constraints are solved locally, and every chunk update overwrites the
-//! affected cells unconditionally.
+//! The server owns biology, genomes and the tick counter. This layer only
+//! predicts the shared scene between authoritative chunks: cells coast along
+//! their last known heading; contacts and adhesion are solved locally. Newer
+//! authority replaces prediction immediately. Biology never runs here.
 //!
-//! The one exception is an explicit placement command from the local player:
-//! it is shown immediately as a temporary negative-ID ghost, provided the
-//! server-side placement cooldown allows the command. When the server accepts
-//! the spawn, the ghost disappears as soon as the real cell arrives in a chunk
-//! (or as soon as the acknowledgement arrives, if the cell is already known).
+//! Local spawns are shown immediately as temporary negative-ID ghosts. When
+//! the server acknowledges a spawn, the ghost is removed. Only authority may
+//! then introduce the real cell or its descendants.
 
-import { CELL_DETAILS_STRIDE, MODE_STRIDE, type Frame } from "../model";
+import { clampBody, solveContacts } from "./contacts";
+import { CELL_DETAILS_STRIDE, MODE_STRIDE, TICK_RATE, type Frame } from "../model";
 import {
   CHUNK_COUNT,
+  SYNC_CYCLE_TICKS,
   CHUNK_SIZE,
   CHUNKS_PER_AXIS,
   CELL_STRIDE,
@@ -26,12 +25,7 @@ import {
   type ChunkFrame,
 } from "./protocol";
 
-const WORLD = 3072;
-const SIZE_MARGIN = 12;
-// The server streams one chunk per 10 Hz tick, so a given chunk returns about
-// every 3.6 s. The horizon must outlive one full cycle, otherwise cells freeze
-// between authoritative updates; stale cells still stop once retired by a chunk.
-const PREDICTION_HORIZON_MS = 4000;
+const PREDICTION_HORIZON_MS = (SYNC_CYCLE_TICKS + 1) * 1000 / TICK_RATE;
 const SOLVER_PASSES = 12;
 const CONSTRAINT_BUDGET = 12_000;
 
@@ -54,6 +48,7 @@ type SceneCell = {
   owner: number;
   details: Float32Array;
   syncedAt: number;
+  predictedAt: number;
 };
 
 type GhostCell = SceneCell & { seq: number };
@@ -69,11 +64,12 @@ export class PredictionWorld {
   private cells = new Map<number, SceneCell>();
   private ghosts = new Map<number, GhostCell>();
   private links = new Map<string, [number, number]>();
+  private linkOwners = new Map<string, { chunk: number; tick: number }>();
   private linksByChunk = new Map<number, Set<string>>();
   private lastSeen = new Map<number, number>();
   private seenChunks = new Set<number>();
+  private chunkTicks = new Map<number, number>();
   private pendingBySeq = new Map<number, number>();
-  private realToGhost = new Map<number, number>();
   private nextGhostId = -1;
   private lastTick = 0;
   private population = 0;
@@ -90,21 +86,20 @@ export class PredictionWorld {
     const cells = chunk.cells;
     if (cells.length % CELL_STRIDE !== 0) return;
     const key = chunkKey(chunk.chunkX, chunk.chunkY);
+    if (chunk.tick <= (this.chunkTicks.get(key) ?? -1)) return;
+    this.chunkTicks.set(key, chunk.tick);
     this.seenChunks.add(key);
     this.lastTick = Math.max(this.lastTick, chunk.tick);
-    this.population = chunk.population;
-    this.births = chunk.births;
-    this.deaths = chunk.deaths;
-    this.infections = chunk.infections;
-    this.stats[0] = chunk.tick;
-    this.stats[1] = chunk.population;
-    this.stats[2] = chunk.births;
-    this.stats[3] = chunk.deaths;
-    this.stats[4] = chunk.infections;
+    if (chunk.tick === this.lastTick) this.population = chunk.population;
+    if (chunk.tick === this.lastTick) {
+      this.births = chunk.births; this.deaths = chunk.deaths; this.infections = chunk.infections;
+      this.stats.set([chunk.tick, chunk.population, chunk.births, chunk.deaths, chunk.infections]);
+    }
     this.copyTerrain(chunk);
     for (let i = 0; i < cells.length; i += CELL_STRIDE) {
       const id = Math.trunc(cells[i]);
       if (!(id > 0)) continue;
+      if (chunk.tick < (this.lastSeen.get(id) ?? -1)) continue;
       let cell = this.cells.get(id);
       if (!cell) {
         cell = {
@@ -126,6 +121,7 @@ export class PredictionWorld {
           owner: cells[i + 28],
           details: cells.slice(i + 15, i + 28),
           syncedAt: now,
+          predictedAt: now,
         };
         this.cells.set(id, cell);
       } else {
@@ -146,12 +142,11 @@ export class PredictionWorld {
         cell.owner = cells[i + 28];
         cell.details.set(cells.subarray(i + 15, i + 28));
         cell.syncedAt = now;
+        cell.predictedAt = now;
       }
       this.lastSeen.set(id, chunk.tick);
-      const ghostId = this.realToGhost.get(id);
-      if (ghostId !== undefined) this.removeGhost(ghostId);
     }
-    this.replaceChunkLinks(key, chunk.links);
+    this.replaceChunkLinks(key, chunk.links, chunk.tick);
     if (chunk.chunkX === 0 && chunk.chunkY === 0)
       this.prune(chunk.tick, now);
   }
@@ -183,10 +178,14 @@ export class PredictionWorld {
     if (changed) this.terrainRevision++;
   }
 
-  private replaceChunkLinks(key: number, endpoints: Uint32Array) {
+  private replaceChunkLinks(key: number, endpoints: Uint32Array, tick: number) {
     const previous = this.linksByChunk.get(key);
     if (previous) {
-      for (const link of previous) this.links.delete(link);
+      for (const link of previous) {
+        if (this.linkOwners.get(link)?.chunk === key) {
+          this.links.delete(link); this.linkOwners.delete(link);
+        }
+      }
     }
     const next = new Set<string>();
     for (let i = 0; i + 1 < endpoints.length; i += 2) {
@@ -194,7 +193,9 @@ export class PredictionWorld {
       const b = endpoints[i + 1];
       if (a === b) continue;
       const keyText = a < b ? `${a}:${b}` : `${b}:${a}`;
+      if ((this.linkOwners.get(keyText)?.tick ?? -1) > tick) continue;
       next.add(keyText);
+      this.linkOwners.set(keyText, { chunk: key, tick });
       this.links.set(keyText, a < b ? [a, b] : [b, a]);
     }
     this.linksByChunk.set(key, next);
@@ -204,7 +205,7 @@ export class PredictionWorld {
    * full cycle. This tolerates entities crossing chunk borders and keeps dead
    * cells visible for at most one extra cycle. */
   private prune(tick: number, now: number) {
-    const threshold = tick - CHUNK_COUNT;
+    const threshold = tick - SYNC_CYCLE_TICKS;
     for (const [id, seen] of this.lastSeen) {
       if (seen < threshold) {
         this.cells.delete(id);
@@ -212,7 +213,7 @@ export class PredictionWorld {
       }
     }
     for (const [link, [a, b]] of this.links) {
-      if (!this.cells.has(a) || !this.cells.has(b)) this.links.delete(link);
+      if (!this.cells.has(a) || !this.cells.has(b)) { this.links.delete(link); this.linkOwners.delete(link); }
     }
     // Ghosts whose command was never acknowledged must not live forever.
     for (const ghost of this.ghosts.values()) {
@@ -259,6 +260,7 @@ export class PredictionWorld {
       owner,
       details: new Float32Array([0,0,0,0,0,0,0,0,0,0,-1,mode,0]),
       syncedAt: now,
+      predictedAt: now,
     });
   }
 
@@ -269,9 +271,9 @@ export class PredictionWorld {
       this.removeGhost(ghostId);
       return;
     }
-    this.pendingBySeq.delete(seq);
-    this.realToGhost.set(cellId, ghostId);
-    if (this.cells.has(cellId)) this.removeGhost(ghostId);
+    // The accepted cell may already have divided before a slow client sees
+    // its region. Never keep a second temporary parent waiting for that ID.
+    this.removeGhost(ghostId);
   }
 
   private removeGhost(id: number) {
@@ -279,30 +281,28 @@ export class PredictionWorld {
     if (!ghost) return;
     this.ghosts.delete(id);
     this.pendingBySeq.delete(ghost.seq);
-    for (const [real, temporary] of this.realToGhost) {
-      if (temporary === id) this.realToGhost.delete(real);
-    }
   }
 
   /** Advance the local prediction by a short wall-clock delta. */
   tick(dt: number, now = performance.now()) {
-    const step = Math.min(0.1, Math.max(0, dt));
-    if (step === 0) return;
-    const horizon = now - PREDICTION_HORIZON_MS;
+    if (!(dt > 0)) return;
+    for (const ghost of this.ghosts.values()) if (now - ghost.syncedAt > 15_000) this.removeGhost(ghost.id);
+    const bodies = [...this.cells.values(), ...this.ghosts.values()];
+    const starts = bodies.map(cell => ({ x: cell.x, y: cell.y }));
     // Large colonies stay at authoritative positions when the constraint solver
     // cannot fit even one full pass. Biology always remains on the server.
     const passes = Math.min(SOLVER_PASSES, Math.floor(CONSTRAINT_BUDGET / Math.max(1, this.links.size)));
-    for (const cell of this.cells.values()) {
-      if (cell.syncedAt < horizon || cell.speed === 0 || (cell.linked && passes === 0)) continue;
-      cell.x = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, cell.x + Math.cos(cell.angle) * cell.speed * step));
-      cell.y = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, cell.y + Math.sin(cell.angle) * cell.speed * step));
+    for (const cell of bodies) {
+      // Use each cell's receipt clock, not render-frame count. No fixed-step
+      // catch-up queue: new snapshots replace local poses immediately.
+      const end = Math.min(now, cell.syncedAt + PREDICTION_HORIZON_MS);
+      const step = Math.max(0, (end - cell.predictedAt) / 1000);
+      cell.predictedAt = now;
+      if (!step || cell.details[12] || (cell.linked && passes === 0)) continue;
+      cell.x += Math.cos(cell.angle) * cell.speed * step;
+      cell.y += Math.sin(cell.angle) * cell.speed * step;
+      clampBody(cell);
     }
-    for (const ghost of this.ghosts.values()) {
-      if (ghost.speed === 0) continue;
-      ghost.x = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, ghost.x + Math.cos(ghost.angle) * ghost.speed * step));
-      ghost.y = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, ghost.y + Math.sin(ghost.angle) * ghost.speed * step));
-    }
-    if (!this.links.size) return;
     for (let pass = 0; pass < passes; pass++) {
       for (const [aId, bId] of this.links.values()) {
         const a = this.cells.get(aId);
@@ -319,12 +319,12 @@ export class PredictionWorld {
         const error = distance - (a.radius + b.radius + 2);
         const shareA = anchoredA ? 0 : anchoredB ? 1 : b.mass / (a.mass + b.mass);
         const shareB = 1 - shareA;
-        a.x = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, a.x + nx * error * shareA));
-        a.y = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, a.y + ny * error * shareA));
-        b.x = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, b.x - nx * error * shareB));
-        b.y = Math.min(WORLD - SIZE_MARGIN, Math.max(SIZE_MARGIN, b.y - ny * error * shareB));
+        a.x += nx * error * shareA; a.y += ny * error * shareA;
+        b.x -= nx * error * shareB; b.y -= ny * error * shareB;
+        clampBody(a); clampBody(b);
       }
     }
+    solveContacts(bodies, starts);
   }
 
   frame(): Frame {
@@ -378,11 +378,12 @@ export class PredictionWorld {
     this.cells.clear();
     this.ghosts.clear();
     this.links.clear();
+    this.linkOwners.clear();
     this.linksByChunk.clear();
     this.lastSeen.clear();
     this.seenChunks.clear();
+    this.chunkTicks.clear();
     this.pendingBySeq.clear();
-    this.realToGhost.clear();
     this.lastTick = 0;
     this.population = 0;
     this.births = 0;
