@@ -28,6 +28,8 @@ export type RoomInfo = {
   name: string;
   population: number;
   players: number;
+  /** Player capacity; absent when an older server does not report it. */
+  max_players?: number;
   tick: number;
   host: string;
   mode: RoomMode;

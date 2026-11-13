@@ -68,6 +68,7 @@ impl AppState {
             host_player,
             host_name.to_owned(),
             seed,
+            self.max_players as u32,
         );
         rooms.insert(id, Arc::clone(&room));
         Ok(room)

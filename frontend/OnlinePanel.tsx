@@ -100,25 +100,33 @@ export function OnlinePanel(props: Props) {
                   в ней симуляцию.
                 </p>
               )}
-              {props.rooms.map((room) => (
-                <button
-                  className="online-room-row"
-                  key={room.id}
-                  onClick={() => props.onJoin(room.id, player)}
-                >
-                  <span>
-                    <b>{room.name}</b>
-                    <small>
-                      {MODE_LABELS[room.mode]} · {room.id} · создатель {room.host}
-                    </small>
-                  </span>
-                  <span>
-                    <b>{room.population.toLocaleString("ru-RU")}</b>
-                    <small>{room.players} игроков</small>
-                  </span>
-                  <i>Войти ↗</i>
-                </button>
-              ))}
+              {props.rooms.map((room) => {
+                const max = room.max_players ?? 0;
+                const full = max > 0 && room.players >= max;
+                return (
+                  <button
+                    className={full ? "online-room-row full" : "online-room-row"}
+                    key={room.id}
+                    disabled={full}
+                    title={full ? `В комнате нет мест: ${room.players} из ${max}.` : undefined}
+                    onClick={() => props.onJoin(room.id, player)}
+                  >
+                    <span>
+                      <b>{room.name}</b>
+                      <small>
+                        {MODE_LABELS[room.mode]} · {room.id} · создатель {room.host}
+                      </small>
+                    </span>
+                    <span>
+                      <b>{room.population.toLocaleString("ru-RU")}</b>
+                      <small className="online-capacity">
+                        {room.players} / {max > 0 ? max : "—"} игроков
+                      </small>
+                    </span>
+                    <i>{full ? "Заполнена" : "Войти ↗"}</i>
+                  </button>
+                );
+              })}
             </div>
             <div className="online-create">
               <div className="online-create-head">
@@ -196,7 +204,9 @@ export function OnlinePanel(props: Props) {
             <div className="online-metrics">
               <div>
                 <span>Игроков</span>
-                <b>{props.room.players}</b>
+                <b>
+                  {props.room.players} / {props.room.max_players ?? "—"}
+                </b>
               </div>
               <div>
                 <span>Клеток</span>

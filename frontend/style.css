@@ -903,12 +903,16 @@ progress {
   cursor: pointer;
   transition: border-color 0.16s, background 0.16s, box-shadow 0.16s;
 }
-.online-room-row:hover,
+.online-room-row:hover:not(:disabled),
 .online-room-row:focus-visible {
   border-color: var(--accent);
   background: var(--accent-soft);
   box-shadow: 0 0 0 1px var(--accent);
   outline: none;
+}
+.online-room-row:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
 }
 .online-room-row > span {
   display: flex;
@@ -925,6 +929,14 @@ progress {
 }
 .online-room-row small {
   font-size: 10px;
+  color: var(--muted);
+}
+.online-capacity {
+  font-variant-numeric: tabular-nums;
+}
+.online-room-row.full i {
+  border-color: var(--border-strong);
+  background: transparent;
   color: var(--muted);
 }
 .online-room-row i {

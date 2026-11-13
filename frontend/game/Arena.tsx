@@ -341,7 +341,7 @@ export function Arena({ onExit }: { onExit: () => void }) {
                                 <div><dt>Режим</dt><dd>{arenaMode ? 'Арена' : 'Песочница'}</dd></div>
                                 <div><dt>Код</dt><dd><code>{room.id}</code></dd></div>
                                 <div><dt>Создатель</dt><dd>{room.host}{arena.host ? ' (вы)' : ''}</dd></div>
-                                <div><dt>Игроков</dt><dd>{room.players}</dd></div>
+                                <div><dt>Игроков</dt><dd>{room.players} / {room.max_players ?? '—'}</dd></div>
                                 <div><dt>Тик сервера</dt><dd>{arena.sync?.lastTick ?? room.tick}</dd></div>
                                 <div><dt>Чанков получено</dt><dd>{arena.sync?.seen ?? 0} / {arena.sync?.total ?? 36}</dd></div>
                             </dl>

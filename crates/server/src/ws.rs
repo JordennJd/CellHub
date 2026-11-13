@@ -154,7 +154,7 @@ async fn connection(mut socket: WebSocket, state: Arc<AppState>) {
                             .await
                         {
                             Ok(room) => {
-                                match join_room(&state, Arc::clone(&room), &player, &out_tx) {
+                                match join_room(Arc::clone(&room), &player, &out_tx) {
                                     Ok((slot, receiver)) => {
                                         joined = Some(slot);
                                         events = receiver;
@@ -191,7 +191,7 @@ async fn connection(mut socket: WebSocket, state: Arc<AppState>) {
                         let target = state.rooms.read().await.get(&room).cloned();
                         match target {
                             Some(room) => {
-                                match join_room(&state, Arc::clone(&room), &player, &out_tx) {
+                                match join_room(Arc::clone(&room), &player, &out_tx) {
                                     Ok((slot, receiver)) => {
                                         joined = Some(slot);
                                         events = receiver;
@@ -276,17 +276,16 @@ fn send_busy(out_tx: &mpsc::UnboundedSender<RoomEvent>) {
 }
 
 fn join_room(
-    state: &Arc<AppState>,
     room: Arc<RoomHandle>,
     player: &PlayerInfo,
     out_tx: &mpsc::UnboundedSender<RoomEvent>,
 ) -> Result<(PlayerSlot, tokio::sync::broadcast::Receiver<RoomEvent>), String> {
     let mut current = room.player_count.load(Ordering::Relaxed);
     loop {
-        if current as usize >= state.max_players {
+        if current >= room.max_players {
             return Err(format!(
                 "В комнате нет мест (максимум {}).",
-                state.max_players
+                room.max_players
             ));
         }
         match room.player_count.compare_exchange_weak(

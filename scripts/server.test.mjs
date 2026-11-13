@@ -158,6 +158,7 @@ try {
   assert.equal(welcome.protocol, 6);
   assert.equal(welcome.host, true);
   assert.equal(welcome.room.mode, "sandbox");
+  assert.equal(welcome.room.max_players, 40, "the room reports its player capacity");
   const room = welcome.room.id;
 
   const genome = Array.from({ length: 1 }, () => [
@@ -183,6 +184,16 @@ try {
 
   second = new Client(url);
   await second.connect();
+  second.send({ type: "list" });
+  const lobby = await waitFor(
+    () => second.messages.find((m) => m.type === "rooms"),
+    "room list with the created room",
+  );
+  assert.equal(
+    lobby.rooms.find((entry) => entry.id === room)?.max_players,
+    40,
+    "the lobby advertises the room capacity",
+  );
   second.send({ type: "join", room, player: "Второй" });
   const welcome2 = await waitFor(
     () => second.messages.find((m) => m.type === "welcome"),

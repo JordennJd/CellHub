@@ -55,6 +55,7 @@ pub struct RoomHandle {
     pub host: u32,
     pub host_name: String,
     pub player_count: AtomicU32,
+    pub max_players: u32,
     pub players: RwLock<HashMap<u32, RoomPlayer>>,
     pub tick: AtomicU32,
     pub population: AtomicU32,
@@ -75,6 +76,7 @@ impl RoomHandle {
             name: self.name.clone(),
             population: self.population.load(Ordering::Relaxed),
             players: self.player_count.load(Ordering::Relaxed),
+            max_players: self.max_players,
             tick: self.tick.load(Ordering::Relaxed),
             host: self.host_name.clone(),
             mode: self.mode,
@@ -126,6 +128,7 @@ pub fn spawn_room(
     host: u32,
     host_name: String,
     seed: u32,
+    max_players: u32,
 ) -> Arc<RoomHandle> {
     let (tx, rx) = mpsc::channel(1024);
     let (events, _) = broadcast::channel(96);
@@ -136,6 +139,7 @@ pub fn spawn_room(
         host,
         host_name,
         player_count: AtomicU32::new(0),
+        max_players,
         players: RwLock::new(HashMap::new()),
         tick: AtomicU32::new(0),
         population: AtomicU32::new(0),

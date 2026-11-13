@@ -73,6 +73,9 @@ pub struct RoomInfo {
     pub name: String,
     pub population: u32,
     pub players: u32,
+    /// Player capacity of the room, so the lobby can show `players / max_players`.
+    #[serde(default)]
+    pub max_players: u32,
     pub tick: u32,
     pub host: String,
     #[serde(default)]
